@@ -1,26 +1,10 @@
 /**
- * 运维管理 API 客户端（对接后端 /api/v2/admin/*）。
- * 鉴权：请求头 X-Admin-Token，token 保存在 localStorage。
+ * 管理面 API 客户端（对接后端 /api/v2/admin/*）。
+ * 鉴权：HttpOnly 会话 Cookie（同源自动携带），前端不接触令牌；
+ * X-Admin-Token 后门仅供服务端脚本/回归使用，前端一律不发送。
+ * 全部变更请求带 X-Requested-With 头（后端 CSRF 防线）。
  */
-
-const TOKEN_KEY = 'hjradar-admin-token';
-
-export function getAdminToken(): string {
-  try {
-    return localStorage.getItem(TOKEN_KEY) ?? '';
-  } catch {
-    return '';
-  }
-}
-
-export function saveAdminToken(token: string): void {
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    /* localStorage 不可用时忽略（无痕模式等） */
-  }
-}
+import { setAnon } from '../auth';
 
 const API_BASE: string = (import.meta as any).env?.VITE_API_BASE ?? '';
 
@@ -36,9 +20,10 @@ async function request<T = any>(path: string, init?: RequestInit): Promise<T> {
     resp = await fetch(`${API_BASE}/api/v2/admin${path}`, {
       ...init,
       cache: 'no-store',
+      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
-        'X-Admin-Token': getAdminToken(),
+        'X-Requested-With': 'XMLHttpRequest',
         ...(init?.headers ?? {}),
       },
     });
@@ -46,6 +31,8 @@ async function request<T = any>(path: string, init?: RequestInit): Promise<T> {
     throw httpError(0, '网络错误 · 后端服务不可达');
   }
   if (!resp.ok) {
+    // 会话失效：全局反映到登录态（RequireAuth 跳登录页），同时保留原错误语义
+    if (resp.status === 401) setAnon();
     let message = `HTTP ${resp.status}`;
     try {
       const text = await resp.text();
@@ -268,11 +255,11 @@ export const upsertUsagePrice = (item: {
     body: JSON.stringify(item),
   });
 
-/** 导出流水 CSV：鉴权走 X-Admin-Token 请求头，用 fetch + blob 触发浏览器下载 */
+/** 导出流水 CSV：会话 Cookie 同源自动携带，fetch + blob 触发浏览器下载 */
 export async function exportUsageCsv(): Promise<void> {
   const resp = await fetch(`${API_BASE}/api/v2/admin/usage/export`, {
     cache: 'no-store',
-    headers: { 'X-Admin-Token': getAdminToken() },
+    credentials: 'same-origin',
   });
   if (!resp.ok) {
     // 尽量透出后端 detail，而不是干巴巴的 HTTP 状态码
@@ -297,3 +284,122 @@ export async function exportUsageCsv(): Promise<void> {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+// ———————————————————— 租户与用户管理 ————————————————————
+
+export interface TenantItem {
+  id: number;
+  name: string;
+  status: string;
+  remark: string;
+  user_count: number;
+  created_at: string | null;
+}
+
+export const getTenants = () => request<{ items: TenantItem[] }>('/tenants');
+
+export const createTenant = (data: { name: string; remark?: string }) =>
+  request<{ ok: boolean; item: TenantItem }>('/tenants', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+
+export const updateTenant = (id: number, data: { name?: string; remark?: string; status?: string }) =>
+  request<{ ok: boolean }>(`/tenants/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+
+export interface ManagedUser {
+  id: number;
+  email: string;
+  display_name: string;
+  role: 'super_admin' | 'tenant_admin' | 'member';
+  status: string;
+  tenant_id: number;
+  tenant_name: string | null;
+  must_change_password: boolean;
+  last_login_at: string | null;
+  created_by: string;
+  created_at: string | null;
+}
+
+export interface UsersPage {
+  items: ManagedUser[];
+  total: number;
+}
+
+export const getUsers = (params: {
+  tenant_id?: number;
+  status?: string;
+  q?: string;
+  page?: number;
+  page_size?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params.tenant_id != null) qs.set('tenant_id', String(params.tenant_id));
+  if (params.status) qs.set('status', params.status);
+  if (params.q) qs.set('q', params.q);
+  qs.set('page', String(params.page ?? 1));
+  qs.set('page_size', String(params.page_size ?? 50));
+  return request<UsersPage>(`/users?${qs.toString()}`);
+};
+
+export const createUser = (data: {
+  email: string;
+  password: string;
+  display_name?: string;
+  role: string;
+  tenant_id?: number;
+}) =>
+  request<{ ok: boolean; item: ManagedUser }>('/users', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+
+export const updateUser = (
+  id: number,
+  data: { display_name?: string; status?: string; role?: string; tenant_id?: number }
+) =>
+  request<{ ok: boolean; item: ManagedUser }>(`/users/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+
+export const resetUserPassword = (id: number, password: string) =>
+  request<{ ok: boolean }>(`/users/${id}/password-reset`, {
+    method: 'POST',
+    body: JSON.stringify({ password }),
+  });
+
+// ———————————————————— 审计日志 ————————————————————
+
+export interface AuditLogItem {
+  id: number;
+  created_at: string | null;
+  user_id: number | null;
+  user_email: string;
+  tenant_id: number | null;
+  action: string;
+  detail: Record<string, unknown>;
+  ip: string;
+  user_agent: string;
+}
+
+export const getAuditLogs = (params: {
+  action?: string;
+  user_id?: number;
+  tenant_id?: number;
+  q?: string;
+  page?: number;
+  page_size?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params.action) qs.set('action', params.action);
+  if (params.user_id != null) qs.set('user_id', String(params.user_id));
+  if (params.tenant_id != null) qs.set('tenant_id', String(params.tenant_id));
+  if (params.q) qs.set('q', params.q);
+  qs.set('page', String(params.page ?? 1));
+  qs.set('page_size', String(params.page_size ?? 50));
+  return request<{ items: AuditLogItem[]; total: number }>(`/audit-logs?${qs.toString()}`);
+};
+
+export const getAuditActions = () =>
+  request<{ items: string[] }>('/audit-actions');

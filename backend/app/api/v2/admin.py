@@ -1,8 +1,9 @@
 """管理面板 API（运维监控 + 运行时配置）。
 
-所有接口需请求头 X-Admin-Token 与生效 admin_token 一致；
-admin_token 未配置时拒绝访问（去 .env 设 ADMIN_TOKEN，或用 SQL 往
-system_setting 表插一行 key=admin_token）。
+鉴权双通道（require_admin）：
+① super_admin 登录会话（Cookie，前端常规路径）；
+② X-Admin-Token 应急后门——与生效 admin_token 一致即放行，供脚本/回归使用；
+ADMIN_NO_AUTH=true 时直接放行（仅限内网，公网必须关闭）。
 """
 import csv
 import hmac
@@ -12,11 +13,13 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import redis as redis_lib
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.auth import sessions as session_store
+from app.auth.deps import current_user_of
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.models.article import Article
@@ -24,7 +27,8 @@ from app.models.event import HotEvent
 from app.models.summary import ArticleSummary
 from app.models.task_run import TaskRun
 from app.models.usage import AiUsageLog
-from app.services import config_service, usage_service
+from app.models.user import ROLE_SUPER_ADMIN, User
+from app.services import audit_service, config_service, usage_service
 from app.services.embedding_service import get_embedding_fingerprint
 from app.utils.url_guard import UrlNotAllowed, assert_public_http_url
 
@@ -34,11 +38,26 @@ router = APIRouter(prefix="/api/v2/admin")
 # ———————————————————— 鉴权 ————————————————————
 
 def require_admin(
+    request: Request,
     db: Session = Depends(get_db),
     x_admin_token: str | None = Header(default=None),
 ):
     if get_settings().admin_no_auth:
         return  # 内网免鉴权模式（ADMIN_NO_AUTH=true）
+    # ① 登录会话（super_admin）
+    row = session_store.get_active_session(db, request.cookies.get(session_store.SESSION_COOKIE, ""))
+    if row is not None:
+        user = db.get(User, row.user_id)
+        if user is not None and user.status == "active":
+            if user.role != ROLE_SUPER_ADMIN:
+                raise HTTPException(403, "需要平台超管权限")
+            session_store.touch(row)
+            if getattr(row, "_touched", False):
+                db.commit()
+            request.state.current_user = user
+            request.state.current_session = row
+            return
+    # ② X-Admin-Token 应急后门（脚本/回归；未配置保持原 503 提示）
     effective = config_service.get_effective(db, "admin_token")
     if not effective:
         raise HTTPException(
@@ -58,7 +77,7 @@ def get_config(db: Session = Depends(get_db)):
 
 
 @router.put("/config", dependencies=[Depends(require_admin)])
-def put_config(data: dict[str, str], db: Session = Depends(get_db)):
+def put_config(data: dict[str, str], request: Request, db: Session = Depends(get_db)):
     """更新运行时配置。值为空串 = 清除该覆盖，回落 .env 默认值。立即生效。"""
     try:
         updated = config_service.set_overrides(db, data)
@@ -66,6 +85,10 @@ def put_config(data: dict[str, str], db: Session = Depends(get_db)):
         raise HTTPException(400, f"unknown config key: {exc}")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    audit_service.record(
+        db, "admin.config_updated", request=request, user=current_user_of(request),
+        detail={"keys": updated},
+    )
     return {"updated": updated, **config_service.masked_view(db)}
 
 
@@ -76,9 +99,10 @@ def _normalize_base(base_url: str) -> str:
 
 
 @router.post("/test/llm", dependencies=[Depends(require_admin)])
-def test_llm(payload: dict | None = None, db: Session = Depends(get_db)):
+def test_llm(payload: dict | None = None, request: Request = None, db: Session = Depends(get_db)):
     """用一条最小请求验证 LLM 连通性；可传入未保存的 base_url/api_key/model 先测后存。"""
     p = payload or {}
+    actor = current_user_of(request)
     try:
         base_url = str(p.get("base_url") or config_service.get_effective(db, "llm_base_url"))
         api_key = str(p.get("api_key") or config_service.get_effective(db, "llm_api_key"))
@@ -92,6 +116,8 @@ def test_llm(payload: dict | None = None, db: Session = Depends(get_db)):
     try:
         base_url = assert_public_http_url(base_url)
     except UrlNotAllowed as exc:
+        audit_service.record(db, "admin.test_llm", request=request, user=actor,
+                             detail={"ok": False, "model": model, "error": str(exc)[:200]})
         raise HTTPException(400, str(exc))
 
     body = {
@@ -108,21 +134,30 @@ def test_llm(payload: dict | None = None, db: Session = Depends(get_db)):
             json=body, headers=headers, timeout=25,
         )
     except httpx.HTTPError as exc:
+        audit_service.record(db, "admin.test_llm", request=request, user=actor,
+                             detail={"ok": False, "model": model, "error": str(exc)[:200]})
         raise HTTPException(502, f"无法连接 {base_url}：{exc}")
     latency = int((time.monotonic() - start) * 1000)
     if resp.status_code != 200:
+        audit_service.record(db, "admin.test_llm", request=request, user=actor,
+                             detail={"ok": False, "model": model, "http_status": resp.status_code})
         raise HTTPException(502, f"HTTP {resp.status_code}：{resp.text[:300]}")
     try:
         content = resp.json()["choices"][0]["message"]["content"]
     except Exception:
+        audit_service.record(db, "admin.test_llm", request=request, user=actor,
+                             detail={"ok": False, "model": model, "error": "响应格式异常"})
         raise HTTPException(502, f"响应格式异常：{resp.text[:300]}")
+    audit_service.record(db, "admin.test_llm", request=request, user=actor,
+                         detail={"ok": True, "model": model, "latency_ms": latency})
     return {"ok": True, "latency_ms": latency, "model": model, "reply": (content or "").strip()[:80]}
 
 
 @router.post("/test/embedding", dependencies=[Depends(require_admin)])
-def test_embedding(payload: dict | None = None, db: Session = Depends(get_db)):
+def test_embedding(payload: dict | None = None, request: Request = None, db: Session = Depends(get_db)):
     """验证 Embedding 服务连通性，并回读向量维度（应与 EMBED_DIM 一致）。"""
     p = payload or {}
+    actor = current_user_of(request)
     try:
         base_url = str(p.get("base_url") or config_service.get_effective(db, "embedding_base_url"))
         api_key = str(p.get("api_key") or config_service.get_effective(db, "embedding_api_key"))
@@ -136,6 +171,8 @@ def test_embedding(payload: dict | None = None, db: Session = Depends(get_db)):
     try:
         base_url = assert_public_http_url(base_url)
     except UrlNotAllowed as exc:
+        audit_service.record(db, "admin.test_embedding", request=request, user=actor,
+                             detail={"ok": False, "model": model, "error": str(exc)[:200]})
         raise HTTPException(400, str(exc))
 
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -146,15 +183,23 @@ def test_embedding(payload: dict | None = None, db: Session = Depends(get_db)):
             json={"model": model, "input": "连通性测试"}, headers=headers, timeout=25,
         )
     except httpx.HTTPError as exc:
+        audit_service.record(db, "admin.test_embedding", request=request, user=actor,
+                             detail={"ok": False, "model": model, "error": str(exc)[:200]})
         raise HTTPException(502, f"无法连接 {base_url}：{exc}")
     latency = int((time.monotonic() - start) * 1000)
     if resp.status_code != 200:
+        audit_service.record(db, "admin.test_embedding", request=request, user=actor,
+                             detail={"ok": False, "model": model, "http_status": resp.status_code})
         raise HTTPException(502, f"HTTP {resp.status_code}：{resp.text[:300]}")
     try:
         dim = len(resp.json()["data"][0]["embedding"])
     except Exception:
+        audit_service.record(db, "admin.test_embedding", request=request, user=actor,
+                             detail={"ok": False, "model": model, "error": "响应格式异常"})
         raise HTTPException(502, f"响应格式异常：{resp.text[:300]}")
     expected = get_settings().embed_dim
+    audit_service.record(db, "admin.test_embedding", request=request, user=actor,
+                         detail={"ok": True, "model": model, "dim": dim, "latency_ms": latency})
     return {
         "ok": True,
         "latency_ms": latency,

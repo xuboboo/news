@@ -19,6 +19,12 @@ ALLOWED_KEYS: dict[str, type] = {
     "sim_threshold": float,
     "cluster_lookback_hours": int,
     "admin_token": str,
+    # —— 登录与会话 ——
+    "session_ttl_hours": int,
+    "login_max_attempts": int,
+    "login_lock_minutes": int,
+    "cookie_secure": bool,
+    "audit_retention_days": int,
 }
 
 # 脱敏展示的字段
@@ -31,6 +37,8 @@ def _coerce(key: str, value: str):
         return str(int(str(value).strip()))
     if t is float:
         return str(float(str(value).strip()))
+    if t is bool:
+        return "true" if str(value).strip().lower() in ("1", "true", "yes", "on") else "false"
     return str(value).strip()
 
 
@@ -53,6 +61,8 @@ def get_effective(db: Session, key: str):
         return int(float(raw))
     if t is float:
         return float(raw)
+    if t is bool:
+        return raw.strip().lower() in ("1", "true", "yes", "on")
     return raw
 
 

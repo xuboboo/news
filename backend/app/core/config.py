@@ -28,8 +28,17 @@ class Settings(BaseSettings):
     embed_dim: int = 256
 
     # —— 管理面板 ——
-    admin_token: str = ""       # 运维接口鉴权；为空则管理面板不可用
+    admin_token: str = ""       # 运维接口应急后门（脚本/回归用）；正式访问走登录会话
     admin_no_auth: bool = False # 免鉴权开关（仅限内网/本机使用；公网部署必须为 False）
+
+    # —— 登录与会话（除 bootstrap 外均可管理面板热调）——
+    bootstrap_admin_email: str = ""      # 首启引导：user 表为空时自动创建的超管邮箱
+    bootstrap_admin_password: str = ""   # 首启引导：初始密码（首登强制改密；建号后可从 .env 移除）
+    session_ttl_hours: int = 168         # 会话有效期（小时），固定自签发起算
+    login_max_attempts: int = 5          # 连续失败锁定阈值
+    login_lock_minutes: int = 15         # 锁定时长（分钟）
+    cookie_secure: bool = False          # 会话 Cookie Secure 标记；HTTPS 部署必须为 true
+    audit_retention_days: int = 180      # 审计日志保留天数（beat 每周清理超期行）
 
     # —— 安全 ——
     cors_origins: str = "http://localhost,http://127.0.0.1"  # 允许跨域的前端来源（逗号分隔）

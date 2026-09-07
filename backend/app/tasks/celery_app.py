@@ -41,5 +41,10 @@ celery_app.conf.update(
                 "task": "report_task",
                 "schedule": crontab(hour=8, minute=0),
             },
+            # 每周一 03:30（北京时间）：清理过期会话与超保留期审计日志
+            "auth-cleanup-weekly": {
+                "task": "auth_cleanup_task",
+                "schedule": crontab(hour=3, minute=30, day_of_week=1),
+            },
         },
 )

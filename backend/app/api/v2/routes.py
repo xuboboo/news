@@ -10,7 +10,7 @@ summary、批量取事件成员关联，禁止逐行懒加载。
 from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
@@ -153,16 +153,7 @@ def _events_payload(db: Session, events: list[HotEvent], max_raw: float, with_ar
 
 
 # ———————————————————— 健康 / 统计 ————————————————————
-
-@router.get("/health")
-def health(db: Session = Depends(get_db)):
-    db_ok = True
-    try:
-        db.query(func.count(Article.id)).scalar()
-    except Exception:
-        db_ok = False
-    return {"status": "ok" if db_ok else "degraded", "db": db_ok, "time": datetime.now(timezone.utc).isoformat()}
-
+# /health 已移至 public.py（全站门禁的公开探针例外）；stats 需登录。
 
 @router.get("/stats")
 def stats(db: Session = Depends(get_db)):
@@ -321,29 +312,41 @@ def report_dates(db: Session = Depends(get_db)):
 
 # ———————————————————— 运维触发 ————————————————————
 
+def _audit_trigger(request, db: Session, action: str, task_id: str) -> None:
+    from app.auth.deps import current_user_of
+    from app.services import audit_service
+
+    audit_service.record(db, action, request=request, user=current_user_of(request),
+                         detail={"task_id": task_id})
+
+
 @router.post("/admin/crawl")
-def trigger_crawl(db: Session = Depends(get_db), _: None = Depends(require_admin)):
+def trigger_crawl(request: Request, db: Session = Depends(get_db), _: None = Depends(require_admin)):
     from app.tasks.tasks import crawler_task
 
     task = crawler_task.delay(trigger="manual")
+    _audit_trigger(request, db, "admin.trigger_crawl", task.id)
     return {"queued": True, "task_id": task.id}
 
 
 @router.post("/admin/events")
-def trigger_events(db: Session = Depends(get_db), _: None = Depends(require_admin)):
+def trigger_events(request: Request, db: Session = Depends(get_db), _: None = Depends(require_admin)):
     from app.tasks.tasks import event_task
 
     task = event_task.delay(trigger="manual")
+    _audit_trigger(request, db, "admin.trigger_events", task.id)
     return {"queued": True, "task_id": task.id}
 
 
 @router.post("/admin/report")
 def trigger_report(
     date: str | None = None,
+    request: Request = None,
     db: Session = Depends(get_db),
     _: None = Depends(require_admin),
 ):
     from app.tasks.tasks import report_task
 
     task = report_task.delay(date, trigger="manual")
+    _audit_trigger(request, db, "admin.trigger_report", task.id)
     return {"queued": True, "task_id": task.id}

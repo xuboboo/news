@@ -132,3 +132,24 @@ def report_task(date_str: str | None = None, trigger: str = "auto"):
             return {"date": row.date.isoformat(), "issue_no": row.issue_no}
         finally:
             db.close()
+
+
+@celery_app.task(name="auth_cleanup_task")
+def auth_cleanup_task():
+    """每周清理：物理删除过期/已吊销会话 + 超过保留期的审计日志。"""
+    from app.auth import sessions as session_store
+    from app.services import audit_service, config_service
+
+    db = new_session()
+    try:
+        sessions_deleted = session_store.purge_expired(db)
+        try:
+            days = int(config_service.get_effective(db, "audit_retention_days"))
+        except Exception:
+            days = 180
+        audits_deleted = audit_service.purge_older_than(db, days)
+        db.commit()
+        logger.info("auth_cleanup: sessions=%s audit_logs=%s", sessions_deleted, audits_deleted)
+        return {"sessions_deleted": sessions_deleted, "audit_deleted": audits_deleted}
+    finally:
+        db.close()

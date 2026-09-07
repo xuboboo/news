@@ -38,6 +38,7 @@
 | 📊 **AI 用量统计** | LLM / Embedding 的 token 消耗与调用记录 |
 | 🛠️ **运维监控面板** | 基础设施连通性（DB/Redis/Celery）、任务执行记录、**运行时配置热更新**（DB 覆盖 > .env，保存即生效无需重建）、LLM/Embedding 连通性测试 |
 | 🌗 **界面主题** | 浅色 / 深色 / 跟随系统三态切换（顶栏与移动端抽屉均可切换）；浅色为 **macOS 设计语言**（Apple 灰窗体 + 白卡悬浮 + 蓝色 accent + 毛玻璃顶栏）；偏好本地持久化、刷新不丢失，「跟随系统」实时响应操作系统深浅色变化 |
+| 🔑 **登录与多租户权限** | 全站强制登录（**邮箱 + 密码**，无注册，账号由管理员后台创建）；多租户三级 RBAC（平台超管 / 租户管理员 / 成员）；服务端会话（HttpOnly Cookie，即时吊销）+ 登录失败锁定 + 首登强制改密；完整审计日志（登录/管理操作留痕，超管可查，自动清理） |
 
 ## 🏗️ 系统架构
 
@@ -100,8 +101,12 @@ docker compose up -d --build           # 一键上线全套 8 个服务
 | `EMBED_DIM` | 向量维度（内置模式 256；外部服务需与之一致，严格模式下维度不符即硬失败） |
 | `SIM_THRESHOLD` / `CLUSTER_WINDOW_HOURS` | 事件聚类阈值（默认 0.85）与时间窗（默认 48h） |
 | `CRAWLER_INTERVAL_MINUTES` | 采集间隔，支持面板热调 |
-| `ADMIN_TOKEN` | 管理面板鉴权 Token；未设置时管理接口不可用（503） |
+| `ADMIN_TOKEN` | 管理接口应急后门 Token（脚本/回归用）；未设置时后门不可用（503） |
 | `ADMIN_NO_AUTH` | 免鉴权开关，**仅限本机/内网**；公网部署必须为 `false` |
+| `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` | 首启引导：user 表为空时自动创建「默认租户 + 平台超管」；建号后可移除 |
+| `SESSION_TTL_HOURS` / `LOGIN_MAX_ATTEMPTS` / `LOGIN_LOCK_MINUTES` | 会话有效期（默认 168h）/ 登录失败锁定阈值（5 次）/ 锁定时长（15 分钟），支持面板热调 |
+| `COOKIE_SECURE` | 会话 Cookie Secure 标记，HTTPS 部署必须 `true` |
+| `AUDIT_RETENTION_DAYS` | 审计日志保留天数（默认 180，beat 每周自动清理） |
 | `EMBEDDING_STRICT` | Embedding 失败/维度不符时是否硬失败（false 会静默降级本地哈希向量、污染聚类） |
 | `ALLOW_PRIVATE_AI_URLS` | 是否允许 LLM/Embedding 地址指向私网/环回 |
 | `CORS_ORIGINS` | 允许跨域的前端来源，勿用 `*` |
@@ -115,8 +120,14 @@ docker compose up -d --build           # 一键上线全套 8 个服务
 | GET | `/api/v2/article/{id}` / `/api/v2/article/{id}/summary` | 文章详情 / **AI 摘要** |
 | GET | `/api/v2/events` / `/api/v2/events/{id}` | 热点事件列表 / 事件详情（时间线、相关报道） |
 | GET | `/api/v2/report/daily?date=` / `/api/v2/report/dates` | **科技日报** / 可用日期 |
-| GET | `/api/v2/stats` / `/api/v2/health` | 系统统计 / 健康检查 |
-| POST | `/api/v2/admin/crawl` · `/admin/events` · `/admin/report` | 手动触发任务（需 Token） |
+| GET | `/api/v2/stats` · GET `/api/v2/health` | 系统统计（需登录）/ 健康检查（公开） |
+| POST | `/api/v2/auth/login` · `/auth/logout` | 登录 / 登出（HttpOnly 会话 Cookie） |
+| GET | `/api/v2/auth/me` · GET `/auth/sessions` | 当前用户 / 我的活跃会话 |
+| PUT | `/api/v2/auth/me/password` · DELETE `/auth/sessions/{id}` | 修改密码 / 吊销会话 |
+| GET/POST | `/api/v2/admin/tenants` · PUT `/admin/tenants/{id}` | 租户管理（超管） |
+| GET/POST | `/api/v2/admin/users` · PUT `/admin/users/{id}` · POST `/admin/users/{id}/password-reset` | 用户管理（超管全局 / 租户管理员限本租户 member） |
+| GET | `/api/v2/admin/audit-logs` · `/admin/audit-actions` | 审计日志查询（超管） |
+| POST | `/api/v2/admin/crawl` · `/admin/events` · `/admin/report` | 手动触发任务（需超管会话或 Token） |
 | GET/PUT | `/api/v2/admin/config` | 运行时配置（敏感值脱敏，留空 = 不修改） |
 | GET | `/api/v2/admin/status` · `/admin/task-runs` | 基础设施状态 · 任务执行记录 |
 | POST | `/api/v2/admin/test/llm` · `/test/embedding` | AI 连通性测试（可先验证未保存的 key 再存） |
@@ -143,6 +154,15 @@ news/
 └── docker-compose.yml     # 8 服务一键编排
 ```
 
+## 👤 账号与登录
+
+全站强制登录：未登录访问任何页面会跳转登录页（`/health` 等基础设施探针除外）。账号**无注册入口**，全部由管理员后台创建（用户与租户页 → 新建用户），初始密码一次性线下发放，**首次登录强制修改**。
+
+- **角色**：`super_admin` 平台超管（租户/用户/审计/运维/成本全部可见）→ `tenant_admin` 租户管理员（本租户内管理成员）→ `member` 成员（热榜/最新/事件/日报只读）
+- **会话**：HttpOnly Cookie（SameSite=Lax，默认 7 天），改密/停用/登出即时吊销；连续失败 5 次锁定 15 分钟
+- **审计**：登录成功/失败/锁定、用户与租户变更、配置修改、手动触发任务全部留痕（操作者/IP/UA/时间），超管在「审计日志」页可查，保留 180 天自动清理
+- **忘记超管密码**：`docker compose exec backend python scripts/manage_user.py reset-password <邮箱> <新密码>`
+
 ## 🔧 常用运维命令
 
 ```bash
@@ -153,12 +173,22 @@ docker compose restart crawler                         # 重启即触发一轮�
 docker compose up -d --build backend                   # 改 .env 后重建生效
 ```
 
+### 验收脚本（需后端已在 18000 运行）
+
+```bash
+# 常规 API 回归（数据端点需先登录）
+AUDIT_EMAIL=... AUDIT_PASSWORD=... ADMIN_TOKEN=... python backend/scripts/audit_api.py
+# 登录/权限/审计专项（权限矩阵、锁定、会话吊销、CSRF）
+AUDIT_EMAIL=... AUDIT_PASSWORD=... ADMIN_TOKEN=... python backend/scripts/audit_auth.py
+```
+
 ## 🔐 安全须知
 
-- 管理接口（`/api/v2/admin/*`）默认要求 `X-Admin-Token` 请求头鉴权；`ADMIN_NO_AUTH=true` 仅限本机/内网调试，公网部署必须关闭并配置强随机 `ADMIN_TOKEN`。
-- `backend` 端口仅绑定 `127.0.0.1`，公网入口统一走 nginx(80)。
+- **登录与多租户**：全站强制登录；会话令牌服务端存储（库中仅存 SHA-256，即时可吊销）；密码 bcrypt(cost 12)；变更接口要求 JSON + `X-Requested-With`（CSRF 双保险，配合 SameSite=Lax Cookie）。
+- 管理接口（`/api/v2/admin/*`）：super_admin 登录会话，或 `X-Admin-Token` 应急后门（脚本/回归用）；`ADMIN_NO_AUTH=true` 仅限本机/内网调试，公网部署必须关闭。
+- `backend` 端口仅绑定 `127.0.0.1`，公网入口统一走 nginx(80)；上 HTTPS 时必须 `COOKIE_SECURE=true`。
 - 敏感键（`api_key` / `admin_token`）接口侧只做脱敏展示、不回传明文；留空即表示不修改。
-- 生产部署请遵循 `.env.example` 末尾的检查单：更换 `POSTGRES_PASSWORD` 强口令、同步 `DATABASE_URL`、更换强随机 `ADMIN_TOKEN`。
+- 生产部署请遵循 `.env.example` 末尾的检查单：更换 `POSTGRES_PASSWORD` 强口令、同步 `DATABASE_URL`、更换强随机 `ADMIN_TOKEN`、配置 `BOOTSTRAP_ADMIN_*` 完成引导。
 
 ## 🗺️ Roadmap
 

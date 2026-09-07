@@ -1,6 +1,7 @@
 import { ARTICLES as LOCAL_ARTICLES, EVENTS as LOCAL_EVENTS } from './data';
 import { Article, ArticleWithScore, HotEvent } from '../types';
 import { toDateKey } from '../utils/format';
+import { getAuthStatus, onAuthChange, setAnon } from '../auth';
 
 /**
  * API 层（对接后端 /api/v2，见 PRD 第 12 节）：
@@ -39,9 +40,9 @@ function buildLocalArticles(): ArticleWithScore[] {
     const raw = rawEngagement(a) * Math.exp(-DECAY_PER_HOUR * hours);
     return { ...a, publishTime, rawScore: raw, hotScore: 0 };
   });
-  const max = Math.max(...withRaw.map((a) => a.rawScore));
+  const max = withRaw.length ? Math.max(...withRaw.map((a) => a.rawScore)) : 0;
   withRaw.forEach((a) => {
-    a.hotScore = (a.rawScore / max) * 100;
+    a.hotScore = (a.rawScore / (max || 1)) * 100;
   });
   return withRaw;
 }
@@ -78,9 +79,9 @@ function buildLocalEvents(): EventWithScore[] {
       lastTime: sorted[sorted.length - 1]?.publishTime ?? new Date(),
     };
   });
-  const max = Math.max(...list.map((e) => e.rawScore));
+  const max = list.length ? Math.max(...list.map((e) => e.rawScore)) : 0;
   list.forEach((e) => {
-    e.hotScore = (e.rawScore / max) * 100;
+    e.hotScore = (e.rawScore / (max || 1)) * 100;
   });
   return list.sort((x, y) => y.rawScore - x.rawScore);
 }
@@ -101,7 +102,14 @@ async function fetchJSON(path: string, timeoutMs = 4000): Promise<any> {
   try {
     // no-store：轮询接口必须拿实时数据，避免浏览器启发式缓存返回陈旧 JSON
     const resp = await fetch(`${API_BASE}/api/v2${path}`, { signal: ctrl.signal, cache: 'no-store' });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if (!resp.ok) {
+      const err = new Error(`HTTP ${resp.status}`) as Error & { status?: number };
+      err.status = resp.status;
+      // 401 = 会话失效/未登录：全局反映到登录态，由 RequireAuth 跳转登录页
+      // （而不是静默降级演示数据——未登录用户绝不能看到"假数据糊脸"）
+      if (resp.status === 401) setAnon();
+      throw err;
+    }
     // content-type 校验：无 /api 反代的静态预览站会把 SPA fallback 的 HTML 以 200 返回，
     // 若只查 resp.ok 会把 HTML 当 JSON 解析失败后静默落入演示模式
     const contentType = resp.headers.get('content-type') ?? '';
@@ -238,7 +246,8 @@ function mapApiReport(date: string, data: any, articleMap: Map<string, ArticleWi
   };
 }
 
-/** 应用启动时执行：尝试连接后端并水合数据；全部成功才提交（原子化，避免混血数据），失败则保持本地引擎。 */
+/** 后端不可达时保持本地引擎；401（未登录）不算后端不可达——登录后由下面的
+ *  onAuthChange 监听器重启引导。 */
 export async function bootstrapFromApi(): Promise<boolean> {
   try {
     await fetchJSON('/health', 3500);
@@ -268,12 +277,37 @@ export async function bootstrapFromApi(): Promise<boolean> {
   }
 }
 
+// 登录成功（anon→authed）后重启数据引导：登录前 401 失败的首次引导在此补偿
+let authWatchInstalled = false;
+function installAuthWatch(): void {
+  if (authWatchInstalled) return;
+  authWatchInstalled = true;
+  let prev = getAuthStatus();
+  onAuthChange((next) => {
+    if (prev === 'anon' && next === 'authed') {
+      void (async () => {
+        const ok = await bootstrapFromApi();
+        if (ok) {
+          startAutoRefresh(refreshIntervalMs);
+          setTimeout(() => {
+            void loadReports(true);
+          }, 0);
+        }
+        bootstrapState = 'ready';
+        notify();
+      })();
+    }
+    prev = next;
+  });
+}
+
 /**
  * 引导入口：先拉必要数据（health/文章/事件），就绪后立即通知首帧；
  * 日报数据非首屏必需，推迟到下一帧再拉，不阻塞页面展示。
  * 后端不可达时保持本地引擎并启动周期性重连，恢复后无缝切换 API 模式。
  */
 export async function startBootstrap(): Promise<void> {
+  installAuthWatch();
   await bootstrapFromApi();
   bootstrapState = 'ready';
   notify();
@@ -296,7 +330,8 @@ let reconnecting = false;
 function ensureReconnect(): void {
   if (reconnectTimer) return;
   reconnectTimer = setInterval(() => {
-    if (reconnecting) return;
+    // 未登录时 401 必然失败，不空转（登录成功后由 auth 监听器重启引导）
+    if (reconnecting || getAuthStatus() === 'anon') return;
     reconnecting = true;
     void bootstrapFromApi()
       .then((ok) => {
@@ -400,26 +435,29 @@ export async function refreshFromApi(): Promise<boolean> {
   if (!apiMode || refreshing) return false;
   refreshing = true;
   try {
-    const latest = await fetchJSON('/articles/latest?limit=400', 10000);
+    // 两个请求并行且全部成功后才提交（原子化：避免文章已换、事件未换的混血一轮）
+    const [latest, events] = await Promise.all([
+      fetchJSON('/articles/latest?limit=400', 10000),
+      fetchJSON('/events?limit=100', 8000),
+    ]);
     const hydrated: ArticleWithScore[] = (latest.items ?? []).map(mapApiArticle);
+    const articleMap = new Map<string, ArticleWithScore>(
+      hydrated.map((a) => [a.id, a] as [string, ArticleWithScore])
+    );
+    const mapped: EventWithScore[] = (events.items ?? []).map((e: any) => mapApiEvent(e, articleMap));
+
     FRESH_ARTICLE_IDS = new Set(
       hydrated
         .map((a) => a.id)
         .filter((id) => prevArticleIds.length > 0 && !prevArticleIds.includes(id))
     );
-    ARTICLES_WITH_SCORE = hydrated;
-    prevArticleIds = hydrated.map((a) => a.id);
-
-    const events = await fetchJSON('/events?limit=100', 8000);
-    const articleMap = new Map<string, ArticleWithScore>(
-      hydrated.map((a) => [a.id, a] as [string, ArticleWithScore])
-    );
-    const mapped: EventWithScore[] = (events.items ?? []).map((e: any) => mapApiEvent(e, articleMap));
     FRESH_EVENT_IDS = new Set(
       mapped
         .map((e) => e.id)
         .filter((id) => prevEventIds.length > 0 && !prevEventIds.includes(id))
     );
+    ARTICLES_WITH_SCORE = hydrated;
+    prevArticleIds = hydrated.map((a) => a.id);
     EVENTS_WITH_SCORE = mapped;
     prevEventIds = mapped.map((e) => e.id);
 
