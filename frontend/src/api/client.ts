@@ -288,7 +288,8 @@ export async function startBootstrap(): Promise<void> {
 
 // ———————————————————— 后端重连（本地兜底模式专用） ————————————————————
 
-const RECONNECT_INTERVAL_MS = 60000;
+// 15s：后端重启/部署窗口通常只有几十秒，快速重连让演示横幅尽快消失
+const RECONNECT_INTERVAL_MS = 15000;
 let reconnectTimer: ReturnType<typeof setInterval> | null = null;
 let reconnecting = false;
 
