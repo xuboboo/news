@@ -11,7 +11,7 @@
 | 数据库 | PostgreSQL 16 + **pgvector**（向量检索） |
 | 缓存/队列 | Redis 7 |
 | 异步任务 | Celery（default 队列 + ai 队列 + beat 定时） |
-| 采集 | 常驻爬虫服务（IT之家体系 RSS） |
+| 采集 | 常驻爬虫服务（IT之家体系四频道页面） |
 | AI | LLM 摘要服务（OpenAI 兼容协议）+ Embedding 服务 + 事件聚类 |
 | 部署 | Docker Compose：postgres / redis / backend / worker / ai-worker / beat / crawler / nginx(frontend) |
 
@@ -30,12 +30,21 @@ docker compose up -d --build     # 一键上线全套服务
 ## 数据流水线（PRD 第 2/5/8/11 节）
 
 ```
-RSS 订阅源 → crawler(每30分钟) → article 表
+频道页面（页面即频道真相）→ crawler(每30分钟) → article 表
     → summary_task（AI 摘要 → article_summary 表）
     → embedding_task（向量 → article.embedding, pgvector）
     → event_task（每15分钟：相似度>0.85 + 标题关键词 + 48h 时间窗 → event/event_article 表）
     → report_task（每日 08:00：daily_report 表）
 ```
+
+四频道 = 四个采集页面（只收页面内文章，不做关键词归类，页面外文章不入库）：
+
+| 频道 | 采集页面 |
+| --- | --- |
+| Win11之家 | win11.ithome.com（/tags/Win11/ 兜底） |
+| Win10之家 | win10.ithome.com（/tags/Win10/ 兜底） |
+| 软件之家 | soft.ithome.com（/tags/软件/ 已 404） |
+| 智能时代 | ithome.com/tags/AI/（官方 AI 标签页） |
 
 ## 目录结构（PRD 第 4 节）
 
@@ -47,7 +56,7 @@ backend/app/
 ├── algorithms/      # hot_score（HotScore = Engagement × TimeDecay）
 ├── ai/              # summary.py / embedding.py / event_cluster.py
 ├── tasks/           # Celery：summary_task / embedding_task / event_task / report_task
-├── crawler/         # IT之家 RSS 采集 + 常驻循环
+├── crawler/         # IT之家频道页面采集 + 常驻循环
 ├── core/            # 配置、数据库
 └── utils/           # 中文文本处理（jieba）
 ```
@@ -107,8 +116,8 @@ started/finished/耗时/成败/错误摘要；逐篇 summary/embedding 任务不
 
 ## 数据真实性说明
 
-- 文章、标题、正文、时间均**真实采集**自 IT之家 RSS（测试时 30 篇真实文章、28 个事件、
-  其中「理想回应雷军增程之争」为真实聚类合并案例）。
+- 文章、标题、正文、时间均**真实采集**自 IT之家体系频道页面（见上表四频道映射；
+  2026-09 起废弃主站 RSS 全量抓取 + 关键词归类，频道归属以页面为准）。
 - IT之家公开的阅读/评论数接口已下线（实测 404），`views/comments/shares` 字段保留为 0，
   热度算法自动降级为时间衰减主导；未来接入任何互动数据源后，HotScore 公式自动恢复
   `Engagement × TimeDecay` 全量形态，无需改代码。

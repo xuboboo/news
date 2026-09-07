@@ -41,9 +41,16 @@ def main():
                         db = new_session()
                         try:
                             result = ingest_all(db)
-                            run.detail = "新增 %d 篇 · 扫描 %d · 跳过 %d · 频道纠偏 %d" % (
+                            per_channel = result.get("per_channel") or {}
+                            extra = ""
+                            if per_channel:
+                                extra = " ｜ 新增分布：" + " / ".join(
+                                    f"{ch} {n}" for ch, n in per_channel.items()
+                                )
+                            run.detail = "新增 %d 篇 · 扫描 %d · 跳过 %d · 频道纠偏 %d%s" % (
                                 len(result["new_ids"]), result.get("scanned", 0),
                                 result.get("skipped", 0), result.get("rechanneled", 0),
+                                extra,
                             )
                             logger.info("ingest result: %s", result)
                             # 为新文章派发 AI 处理任务

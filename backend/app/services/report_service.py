@@ -84,6 +84,8 @@ def build_report(db: Session, day: date_type) -> dict:
             "source": a.source,
             "channel": a.channel,
             "hot_score": round(hs, 1),
+            "url": a.url,
+            "publish_time": _tz(a.publish_time).isoformat(),
             "summary_short": a.summary.summary_short if a.summary else "",
             "tags": (a.summary.tags if a.summary else [])[:4],
         }

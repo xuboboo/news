@@ -102,6 +102,12 @@ async function fetchJSON(path: string, timeoutMs = 4000): Promise<any> {
     // no-store：轮询接口必须拿实时数据，避免浏览器启发式缓存返回陈旧 JSON
     const resp = await fetch(`${API_BASE}/api/v2${path}`, { signal: ctrl.signal, cache: 'no-store' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    // content-type 校验：无 /api 反代的静态预览站会把 SPA fallback 的 HTML 以 200 返回，
+    // 若只查 resp.ok 会把 HTML 当 JSON 解析失败后静默落入演示模式
+    const contentType = resp.headers.get('content-type') ?? '';
+    if (!contentType.includes('application/json')) {
+      throw new Error(`非 JSON 应答（content-type: ${contentType || '缺失'}）`);
+    }
     return await resp.json();
   } finally {
     clearTimeout(timer);
@@ -141,6 +147,31 @@ function mapApiTimeline(t: any): { time: Date; text: string; source?: string } {
     time: t.time ? new Date(t.time) : new Date(),
     text: t.text ?? '',
     source: t.source,
+  };
+}
+
+/** 日报 brief → 展示结构：文章已滚出「最近400篇」窗口或被清理时，
+ *  用日报快照里自带的书目信息兜底渲染，历史日报不再缺项。 */
+function briefToArticle(brief: any): ArticleWithScore {
+  return {
+    id: String(brief.id),
+    title: brief.title ?? '',
+    channel: brief.channel ?? '智能时代',
+    source: brief.source ?? 'IT之家',
+    url: brief.url ?? '',
+    publishOffsetMin: 0,
+    views: 0,
+    comments: 0,
+    shares: 0,
+    summary: {
+      summary_short: brief.summary_short ?? '',
+      key_points: [],
+      tags: brief.tags ?? [],
+      model: '',
+    },
+    publishTime: brief.publish_time ? new Date(brief.publish_time) : new Date(0),
+    rawScore: brief.hot_score ?? 0,
+    hotScore: brief.hot_score ?? 0,
   };
 }
 
@@ -198,13 +229,11 @@ function mapApiReport(date: string, data: any, articleMap: Map<string, ArticleWi
       lastTime: new Date(),
     })) as unknown as EventWithScore[],
     quickNews: (data.quick_news ?? [])
-      .map((n: any) => articleMap.get(String(n.id)))
-      .filter(Boolean) as ArticleWithScore[],
+      .map((n: any) => articleMap.get(String(n.id)) ?? briefToArticle(n)) as ArticleWithScore[],
     industryChanges: data.industry_changes ?? [],
     sourceStats: data.source_stats ?? [],
     topArticles: (data.top_articles ?? [])
-      .map((n: any) => articleMap.get(String(n.id)))
-      .filter(Boolean) as ArticleWithScore[],
+      .map((n: any) => articleMap.get(String(n.id)) ?? briefToArticle(n)) as ArticleWithScore[],
     aiCost: data.ai_cost ?? undefined,
   };
 }

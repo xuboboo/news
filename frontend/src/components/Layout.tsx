@@ -248,6 +248,17 @@ export default function Layout() {
           </div>
           <LiveClock />
         </header>
+        {bootReady && !apiMode && (
+          <div
+            className="bg-amber-500/10 border-b border-amber-400/30 px-4 md:px-6 py-2.5 flex items-center gap-2 text-xs text-amber-300"
+            role="alert"
+          >
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>
+              演示模式：后端未连接，当前展示的是内置演示数据，非真实采集内容；连接恢复后将自动切换为实时数据。
+            </span>
+          </div>
+        )}
         <main className="flex-1 px-4 md:px-6 py-6 max-w-[1400px] w-full mx-auto">
           <Outlet />
         </main>
