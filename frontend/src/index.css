@@ -375,3 +375,38 @@
     background-clip: padding-box;
   }
 }
+
+/* ———— 登录页·雷达扫描盘（Login 品牌区专用，恒定深色不随主题） /*login-radar-styles*/
+@keyframes radar-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes radar-blip {
+  0% { opacity: 0; transform: scale(0.5); }
+  5% { opacity: 1; transform: scale(1); }
+  38% { opacity: 0.22; }
+  100% { opacity: 0; transform: scale(1); }
+}
+.radar-sweep {
+  background: conic-gradient(from 0deg,
+    transparent 0deg,
+    rgba(56, 189, 248, 0.03) 280deg,
+    rgba(56, 189, 248, 0.16) 335deg,
+    rgba(56, 189, 248, 0.5) 358deg,
+    rgba(125, 211, 252, 0.8) 360deg);
+  animation: radar-spin 7s linear infinite;
+  will-change: transform;
+}
+.radar-blip {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 9999px;
+  background: #7dd3fc;
+  box-shadow: 0 0 12px rgba(125, 211, 252, 0.9);
+  animation: radar-blip 7s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .radar-sweep { animation: none; opacity: 0.35; }
+  .radar-blip { animation: none; opacity: 0.5; }
+}
