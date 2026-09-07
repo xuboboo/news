@@ -181,7 +181,7 @@ export default function EventDetail() {
                     <span
                       className={`absolute -left-4 top-1 h-[11px] w-[11px] rounded-full border-2 ${
                         i === timeline.length - 1
-                          ? 'bg-amber-400 border-amber-400/30 shadow-[0_0_8px_rgba(251,191,36,0.5)]'
+                          ? 'bg-amber-400 border-amber-400/30 shadow-[var(--glow-latest)]'
                           : 'bg-radar-card border-radar-borderStrong'
                       }`}
                     />

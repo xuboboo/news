@@ -5,16 +5,8 @@ import { EVENTS_WITH_SCORE, FRESH_EVENT_IDS } from '../api/client';
 import { activateOnKey, useBootstrapReady, useDataVersion, usePageTitle, useTick } from '../utils/hooks';
 import { EventStatusTag } from '../components/ArticleModal';
 import { HeatBar, Loading, PageHeader, RankBadge } from '../components/common';
+import { SOURCE_COLORS, SOURCE_FALLBACK_COLOR } from '../constants/sourceColors';
 import { fullTime, formatScore, timeAgo } from '../utils/format';
-
-const SOURCE_DOT: Record<string, string> = {
-  IT之家: '#EF4444',
-  极客公园: '#F97316',
-  少数派: '#10B981',
-  '36氪': '#A78BFA',
-  爱范儿: '#EC4899',
-  InfoQ: '#14B8A6',
-};
 
 export default function Events() {
   const bootReady = useBootstrapReady();
@@ -99,7 +91,7 @@ export default function Events() {
                       key={s}
                       title={s}
                       className="h-5 w-5 rounded-full ring-2 ring-radar-card flex items-center justify-center text-[9px] font-bold text-white/90"
-                      style={{ background: SOURCE_DOT[s] ?? '#94A3B8' }}
+                      style={{ background: SOURCE_COLORS[s] ?? SOURCE_FALLBACK_COLOR }}
                     >
                       {s.charAt(0)}
                     </span>

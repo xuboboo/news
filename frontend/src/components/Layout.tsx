@@ -6,12 +6,15 @@ import {
   Clock3,
   Coins,
   Menu,
+  Monitor,
+  Moon,
   Radar,
   FileText,
   Radio,
   Database,
   Bot,
   Settings,
+  Sun,
   X,
 } from 'lucide-react';
 import {
@@ -22,6 +25,7 @@ import {
   lastSyncError,
 } from '../api/client';
 import { useBootstrapReady, useDataVersion } from '../utils/hooks';
+import { setThemeMode, useThemeMode, type ThemeMode } from '../theme';
 
 const NAV_ITEMS = [
   { to: '/hot', label: '热榜中心', icon: Activity, desc: 'HotScore 实时榜单' },
@@ -48,7 +52,47 @@ function LiveClock() {
     const timer = setInterval(() => setClock(nowClock()), 1000);
     return () => clearInterval(timer);
   }, []);
-  return <div className="text-sm text-slate-400 tabular-nums shrink-0">{clock}</div>;
+  return (
+    <div className="hidden sm:block text-sm text-slate-400 tabular-nums shrink-0">{clock}</div>
+  );
+}
+
+const THEME_OPTIONS: { value: ThemeMode; icon: typeof Sun; label: string }[] = [
+  { value: 'light', icon: Sun, label: '浅色' },
+  { value: 'system', icon: Monitor, label: '跟随系统' },
+  { value: 'dark', icon: Moon, label: '深色' },
+];
+
+/** 主题三态切换（浅色/跟随系统/深色），状态持久化见 src/theme.ts */
+export function ThemeToggle({ fullWidth = false }: { fullWidth?: boolean }) {
+  const mode = useThemeMode();
+  return (
+    <div
+      className={`flex items-center rounded-lg border border-radar-border bg-radar-card p-0.5 shrink-0 ${
+        fullWidth ? 'w-full' : ''
+      }`}
+      role="group"
+      aria-label="界面主题"
+    >
+      {THEME_OPTIONS.map((o) => {
+        const active = mode === o.value;
+        return (
+          <button
+            key={o.value}
+            onClick={() => setThemeMode(o.value)}
+            aria-pressed={active}
+            title={`主题：${o.label}`}
+            className={`${fullWidth ? 'flex-1 flex justify-center' : ''} p-1.5 rounded-md cursor-pointer transition-colors ${
+              active ? 'bg-accent/15 text-accent' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <o.icon className="h-4 w-4" />
+            <span className="sr-only">{o.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 /** 同步状态区：每 15s 更新一次“最近同步”相对时间；同时订阅数据通知，
@@ -225,6 +269,9 @@ export default function Layout() {
             </button>
             {brand}
             {nav}
+            <div className="px-4 py-2">
+              <ThemeToggle fullWidth />
+            </div>
             {statusPanel}
           </aside>
         </div>
@@ -246,7 +293,10 @@ export default function Layout() {
               数据源：软件之家 · Win11之家 · Win10之家 · 智能时代
             </span>
           </div>
-          <LiveClock />
+          <div className="flex items-center gap-3 shrink-0">
+            <ThemeToggle />
+            <LiveClock />
+          </div>
         </header>
         {bootReady && !apiMode && (
           <div

@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { Sparkles } from 'lucide-react';
+import { SOURCE_COLORS, SOURCE_FALLBACK_COLOR } from '../constants/sourceColors';
 
 const CHANNEL_STYLES: Record<string, string> = {
   软件之家: 'bg-violet-500/10 text-violet-300 border-violet-400/20',
@@ -16,17 +17,8 @@ export function ChannelTag({ channel }: { channel: string }) {
   );
 }
 
-const SOURCE_COLORS: Record<string, string> = {
-  IT之家: '#EF4444',
-  极客公园: '#F97316',
-  少数派: '#10B981',
-  '36氪': '#A78BFA',
-  爱范儿: '#EC4899',
-  InfoQ: '#14B8A6',
-};
-
 export function SourceBadge({ source, size = 'md' }: { source: string; size?: 'sm' | 'md' }) {
-  const color = SOURCE_COLORS[source] ?? '#94A3B8';
+  const color = SOURCE_COLORS[source] ?? SOURCE_FALLBACK_COLOR;
   const box = size === 'sm' ? 'h-4 w-4 text-[9px]' : 'h-5 w-5 text-[10px]';
   return (
     <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
