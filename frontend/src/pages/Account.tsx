@@ -51,7 +51,10 @@ export default function Account() {
   }, []);
 
   useEffect(() => {
-    if (!mustChange) void loadSessions();
+    if (!mustChange) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 挂载拉取会话列表（异步数据加载）
+      void loadSessions();
+    }
   }, [mustChange, loadSessions]);
 
   const clientOf = (ua: string): string => {

@@ -86,7 +86,6 @@ export const revokeSession = (id: number) =>
 // ———————————————————— 启动会话引导 ————————————————————
 
 let bootstrapped = false;
-let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** 应用启动时调用一次：GET /me 恢复会话镜像。
  *  401 → 未登录；网络失败（status 0）→ 3s 后重试（后端部署窗口不误踢有效会话）。 */
@@ -101,7 +100,7 @@ export async function bootstrapAuth(): Promise<void> {
       const status = err instanceof ApiError ? err.status : 0;
       if (status === 0) {
         // 后端不可达：保持 loading 态并重试，避免部署窗口把有效会话踢到登录页
-        retryTimer = setTimeout(() => void attempt(), 3000);
+        setTimeout(() => void attempt(), 3000);
         return;
       }
       setAnon();

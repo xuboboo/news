@@ -150,6 +150,7 @@ export default function Users() {
   }, [superAdmin]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 切 tab 拉取列表（异步数据加载）
     if (canManage) void loadUsers();
     if (superAdmin) void loadTenants();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -337,7 +338,6 @@ export default function Users() {
             void loadUsers();
             flash(true, `已创建 ${u.email}，初始密码仅此一次展示，请立即线下告知用户`);
           }}
-          onFlash={flash}
         />
       )}
 
@@ -484,14 +484,12 @@ function CreateUserModal({
   myTenantId,
   onClose,
   onCreated,
-  onFlash,
 }: {
   superAdmin: boolean;
   tenants: TenantItem[];
   myTenantId?: number;
   onClose: () => void;
   onCreated: (u: ManagedUser) => void;
-  onFlash: (ok: boolean, text: string) => void;
 }) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -798,7 +796,6 @@ function TenantsPanel({
             onReload();
             onFlash(true, '租户已创建');
           }}
-          onFlash={onFlash}
         />
       )}
     </section>
@@ -808,11 +805,9 @@ function TenantsPanel({
 function CreateTenantModal({
   onClose,
   onCreated,
-  onFlash,
 }: {
   onClose: () => void;
   onCreated: () => void;
-  onFlash: (ok: boolean, text: string) => void;
 }) {
   const [name, setName] = useState('');
   const [remark, setRemark] = useState('');

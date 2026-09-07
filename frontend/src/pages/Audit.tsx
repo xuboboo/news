@@ -75,7 +75,10 @@ export default function Audit() {
   }, [allowed, action, q, page]);
 
   useEffect(() => {
-    if (allowed) void load();
+    if (allowed) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 挂载拉取审计数据（异步数据加载）
+      void load();
+    }
   }, [allowed, load]);
 
   useEffect(() => {
