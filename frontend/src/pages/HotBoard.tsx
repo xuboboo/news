@@ -26,6 +26,9 @@ const WINDOWS = [
   { key: 'all', label: '全部', mins: Infinity },
 ] as const;
 
+/** 默认时间窗口：近 24 小时（URL 无 win 参数或参数非法时生效） */
+const DEFAULT_WIN = '24h';
+
 export default function HotBoard() {
   // 筛选状态同步到 URL（#/hot?channel=...&win=...），刷新/分享不丢失
   const [searchParams, setSearchParams] = useSearchParams();
@@ -38,12 +41,12 @@ export default function HotBoard() {
   );
   const channelParam = searchParams.get('channel') ?? '全部';
   const channel = channels.includes(channelParam) ? channelParam : '全部';
-  const winParam = searchParams.get('win') ?? '7d';
-  const winKey = WINDOWS.some((w) => w.key === winParam) ? winParam : '7d';
+  const winParam = searchParams.get('win') ?? DEFAULT_WIN;
+  const winKey = WINDOWS.some((w) => w.key === winParam) ? winParam : DEFAULT_WIN;
 
   const setFilter = (key: 'channel' | 'win', value: string) => {
     const next = new URLSearchParams(searchParams);
-    const fallback = key === 'channel' ? '全部' : '7d';
+    const fallback = key === 'channel' ? '全部' : DEFAULT_WIN;
     if (value === fallback) next.delete(key);
     else next.set(key, value);
     setSearchParams(next, { replace: true });
@@ -57,7 +60,7 @@ export default function HotBoard() {
 
   usePageTitle('热榜中心');
 
-  const win = WINDOWS.find((w) => w.key === winKey) ?? WINDOWS[1];
+  const win = WINDOWS.find((w) => w.key === winKey) ?? WINDOWS[0];
 
   const filtered = useMemo(() => {
     const list = ARTICLES_WITH_SCORE.filter(
