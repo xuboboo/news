@@ -63,17 +63,11 @@ const THEME_OPTIONS: { value: ThemeMode; icon: typeof Sun; label: string }[] = [
   { value: 'dark', icon: Moon, label: '深色' },
 ];
 
-/** 主题三态切换（浅色/跟随系统/深色），状态持久化见 src/theme.ts */
+/** 主题三态切换（浅色/跟随系统/深色）：macOS 分段控件样式，状态持久化见 src/theme.ts */
 export function ThemeToggle({ fullWidth = false }: { fullWidth?: boolean }) {
   const mode = useThemeMode();
   return (
-    <div
-      className={`flex items-center rounded-lg border border-radar-border bg-radar-card p-0.5 shrink-0 ${
-        fullWidth ? 'w-full' : ''
-      }`}
-      role="group"
-      aria-label="界面主题"
-    >
+    <div className={`seg ${fullWidth ? 'w-full' : ''}`} role="group" aria-label="界面主题">
       {THEME_OPTIONS.map((o) => {
         const active = mode === o.value;
         return (
@@ -82,8 +76,8 @@ export function ThemeToggle({ fullWidth = false }: { fullWidth?: boolean }) {
             onClick={() => setThemeMode(o.value)}
             aria-pressed={active}
             title={`主题：${o.label}`}
-            className={`${fullWidth ? 'flex-1 flex justify-center' : ''} p-1.5 rounded-md cursor-pointer transition-colors ${
-              active ? 'bg-accent/15 text-accent' : 'text-slate-400 hover:text-slate-200'
+            className={`seg-item ${fullWidth ? 'flex-1 flex justify-center' : ''} ${
+              active ? 'seg-item-active' : ''
             }`}
           >
             <o.icon className="h-4 w-4" />
@@ -178,13 +172,21 @@ export default function Layout() {
   const events = EVENTS_WITH_SCORE.length;
 
   const brand = (
-    <div className="px-4 py-5 flex items-center gap-2.5 border-b border-radar-border">
-      <div className="relative p-2 rounded-xl bg-accent/10 shadow-glow">
-        <Radar className="h-6 w-6 text-accent" />
+    <div className="border-b border-radar-border">
+      {/* macOS 窗口红绿灯（装饰） */}
+      <div className="px-4 pt-3.5 flex items-center gap-2" aria-hidden="true">
+        <span className="h-3 w-3 rounded-full bg-[#FF5F57]" />
+        <span className="h-3 w-3 rounded-full bg-[#FEBC2E]" />
+        <span className="h-3 w-3 rounded-full bg-[#28C840]" />
       </div>
-      <div className="leading-tight">
-        <div className="text-sm font-semibold text-slate-100">资讯雷达</div>
-        <div className="text-[10px] text-slate-500 mt-0.5">华军软件园V2.0</div>
+      <div className="px-4 py-4 flex items-center gap-2.5">
+        <div className="relative p-2 rounded-xl bg-accent/10 shadow-glow">
+          <Radar className="h-6 w-6 text-accent" />
+        </div>
+        <div className="leading-tight">
+          <div className="text-sm font-semibold text-slate-100">资讯雷达</div>
+          <div className="text-[10px] text-slate-500 mt-0.5">华军软件园V2.0</div>
+        </div>
       </div>
     </div>
   );

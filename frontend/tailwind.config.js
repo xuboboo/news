@@ -37,8 +37,9 @@ export default {
       },
       fontFamily: {
         sans: [
-          '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'PingFang SC',
-          'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', 'Arial', 'sans-serif',
+          '-apple-system', 'BlinkMacSystemFont', 'SF Pro Display', 'SF Pro Text',
+          'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+          'Helvetica Neue', 'Arial', 'sans-serif',
         ],
       },
       boxShadow: {

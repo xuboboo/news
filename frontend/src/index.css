@@ -160,6 +160,12 @@
   --focus-ring: 56 189 248;
   --glow-latest: 0 0 8px rgba(251, 191, 36, 0.5); /* 事件时间线最新节点发光 */
   --overlay-alpha: 0.6; /* 弹窗/抽屉遮罩浓度 */
+
+  /* 分段控件（主题切换等）：深色保持 accent tint 激活态 */
+  --seg-track: rgba(255, 255, 255, 0.06);
+  --seg-active-bg: rgb(var(--c-accent) / 0.15);
+  --seg-active-color: rgb(var(--c-accent));
+  --seg-active-shadow: none;
 }
 
 /* ==========================================================================
@@ -242,8 +248,8 @@
   --c-fuchsia-400: 217 70 239; /* →500 */
 
   /* Mac 风格：柔和分层阴影替代重边框；细滚动条；玻璃拟态遮罩减淡 */
-  --shadow-card: 0 0 0 1px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.04),
-    0 4px 16px rgba(0, 0, 0, 0.05);
+  --shadow-card: 0 0 0 1px rgba(0, 0, 0, 0.035), 0 1px 2px rgba(0, 0, 0, 0.04),
+    0 4px 12px rgba(0, 0, 0, 0.045), 0 12px 28px rgba(31, 41, 66, 0.06);
   --shadow-glow: 0 0 24px rgba(0, 113, 227, 0.12);
   --scrollbar-thumb: #c7c7cc;
   --scrollbar-thumb-hover: #aeaeb2;
@@ -252,6 +258,21 @@
   --focus-ring: 0 113 227;
   --glow-latest: 0 0 8px rgba(180, 83, 9, 0.35);
   --overlay-alpha: 0.4;
+
+  /* 分段控件：macOS 灰轨道 + 白色浮起拇指 */
+  --seg-track: rgba(0, 0, 0, 0.05);
+  --seg-active-bg: #ffffff;
+  --seg-active-color: rgb(var(--c-slate-200));
+  --seg-active-shadow: 0 1px 4px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.05);
+}
+
+/* macOS 桌面感：低饱和渐变窗体底 + 双侧柔光，替换单一平色 */
+:root[data-theme='light'] body {
+  background:
+    radial-gradient(1200px 700px at 85% -10%, rgba(0, 113, 227, 0.07), transparent 60%),
+    radial-gradient(1000px 600px at -10% 110%, rgba(88, 86, 214, 0.055), transparent 60%),
+    linear-gradient(180deg, #f7f8fc 0%, #f0f2f8 100%);
+  background-attachment: fixed;
 }
 
 @layer base {
@@ -262,11 +283,12 @@
   body {
     @apply bg-radar-bg text-slate-200 font-sans;
   }
-  /* 键盘导航焦点环（鼠标点击不显示） */
+  /* 键盘导航焦点环（鼠标点击不显示）：macOS 式蓝色光晕 */
   :focus-visible {
-    outline: 2px solid rgb(var(--focus-ring) / 0.6);
-    outline-offset: 2px;
-    border-radius: 4px;
+    outline: 2px solid rgb(var(--focus-ring) / 0.55);
+    outline-offset: 1px;
+    box-shadow: 0 0 0 5px rgb(var(--focus-ring) / 0.12);
+    border-radius: 6px;
   }
   ::-webkit-scrollbar {
     width: 8px;
@@ -297,9 +319,39 @@
   .nav-item-active {
     @apply bg-accent/10 text-accent;
   }
-  /* macOS 侧边栏选中态：浅色下为实心 accent 胶囊 + 白字（深色保持 tint 风格不变） */
+  /* macOS 侧边栏选中态：浅色下为 accent 渐变胶囊 + 白字 + 投影（深色保持 tint 风格不变） */
   :root[data-theme='light'] .nav-item-active {
-    @apply bg-accent text-white;
+    color: #fff;
+    background-image: linear-gradient(180deg, #2382ec 0%, #0071e3 100%);
+    box-shadow:
+      0 0 0 1px rgba(0, 87, 178, 0.25),
+      0 2px 6px rgba(0, 87, 178, 0.28);
+  }
+  /* 胶囊内标题/图标/副标题统一白系（覆盖子元素自带的 slate 色类，副标题半透明作层级） */
+  :root[data-theme='light'] .nav-item-active *,
+  :root[data-theme='light'] .nav-item-active *:hover {
+    color: inherit;
+  }
+  :root[data-theme='light'] .nav-item-active > div > div:last-child {
+    color: rgb(255 255 255 / 0.72);
+  }
+  /* macOS 分段控件（主题切换等）：轨道/拇指配色由主题变量驱动 */
+  .seg {
+    @apply flex items-center rounded-full shrink-0;
+    padding: 3px;
+    background: var(--seg-track);
+  }
+  .seg-item {
+    @apply p-1.5 rounded-full cursor-pointer transition-colors;
+    color: rgb(var(--c-slate-400));
+  }
+  .seg-item:not(.seg-item-active):hover {
+    color: rgb(var(--c-slate-200));
+  }
+  .seg-item-active {
+    background: var(--seg-active-bg);
+    color: var(--seg-active-color);
+    box-shadow: var(--seg-active-shadow);
   }
   /* 弹窗内滚动条：细版悬浮式，半透明胶囊，悬停加深（Firefox 走 scrollbar-*） */
   .modal-scroll {

@@ -94,7 +94,7 @@ export default function Latest() {
         </div>
       </PageHeader>
 
-      <div className="sticky top-14 z-10 flex items-center gap-2 mb-5 py-2 -mx-1 px-1 rounded-lg bg-radar-bg/95 backdrop-blur">
+      <div className="sticky top-14 z-10 flex items-center gap-2 mb-5 py-2 -mx-1 px-1 rounded-xl bg-radar-bg/70 backdrop-blur-xl backdrop-saturate-150">
         {channels.map((c) => (
           <button
             key={c}

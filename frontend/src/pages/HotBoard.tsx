@@ -125,7 +125,7 @@ export default function HotBoard() {
       </div>
 
       {/* 频道筛选（吸顶：滚动时不再被顶部导航遮挡） */}
-      <div className="sticky top-14 z-10 flex items-center gap-2 mb-4 py-2 -mx-1 px-1 rounded-lg bg-radar-bg/95 backdrop-blur flex-wrap">
+      <div className="sticky top-14 z-10 flex items-center gap-2 mb-4 py-2 -mx-1 px-1 rounded-xl bg-radar-bg/70 backdrop-blur-xl backdrop-saturate-150 flex-wrap">
         {channels.map((c) => (
           <button
             key={c}
