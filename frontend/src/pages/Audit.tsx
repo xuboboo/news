@@ -7,7 +7,7 @@ import { ChevronLeft, ChevronRight, Loader2, RefreshCw, ScrollText, Search, Shie
 import { PageHeader } from '../components/common';
 import { usePageTitle } from '../utils/hooks';
 import { isSuperAdmin, useAuth } from '../auth';
-import { AuditLogItem, getAuditActions, getAuditLogs } from '../api/admin';
+import { getTenants, type AuditLogItem, getAuditActions, getAuditLogs } from '../api/admin';
 
 const PAGE_SIZE = 50;
 
@@ -54,6 +54,7 @@ export default function Audit() {
   const [q, setQ] = useState('');
   const [committedQ, setCommittedQ] = useState(''); // 回车提交的筛选值（避免逐键请求）
   const [actions, setActions] = useState<string[]>([]);
+  const [tenantNames, setTenantNames] = useState<Map<number, string>>(new Map());
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -86,6 +87,10 @@ export default function Audit() {
     if (allowed) {
       getAuditActions()
         .then((r) => setActions(r.items ?? []))
+        .catch(() => {});
+      // 租户名称映射：审计表只存 tenant_id，展示层翻译成可读名称
+      getTenants()
+        .then((r) => setTenantNames(new Map((r.items ?? []).map((t) => [t.id, t.name]))))
         .catch(() => {});
     }
   }, [allowed]);
@@ -192,7 +197,7 @@ export default function Audit() {
                         <span className={`chip text-[10px] border ${a.cls}`}>{a.label}</span>
                       </td>
                       <td className="px-2 py-2 text-slate-200">{it.user_email || '—'}</td>
-                      <td className="px-2 py-2 text-slate-400">{it.tenant_id ?? '—'}</td>
+                      <td className="px-2 py-2 text-slate-400">{it.tenant_id != null ? (tenantNames.get(it.tenant_id) ?? `#${it.tenant_id}`) : '—'}</td>
                       <td className="px-2 py-2 text-slate-400 font-mono">{it.ip || '—'}</td>
                       <td className="px-4 py-2 text-slate-400 max-w-sm truncate" title={JSON.stringify(it.detail)}>
                         {Object.keys(it.detail ?? {}).length ? JSON.stringify(it.detail) : '—'}

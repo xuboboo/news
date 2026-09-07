@@ -101,7 +101,8 @@ def query_logs(
     if tenant_id is not None:
         query = query.filter(AuditLog.tenant_id == tenant_id)
     if q:
-        query = query.filter(AuditLog.user_email.ilike(f"%{q}%"))
+        escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        query = query.filter(AuditLog.user_email.ilike(f"%{escaped}%", escape="\\"))
     total = query.count()
     rows = (
         query.order_by(AuditLog.id.desc())

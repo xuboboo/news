@@ -84,6 +84,22 @@ def api_my_sessions(request: Request, user: User = Depends(require_user), db: Se
     }
 
 
+@router.post("/sessions/revoke-others", dependencies=[Depends(require_user)])
+def api_revoke_other_sessions(
+    request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)
+):
+    """登出其他设备：保留当前会话，吊销本人全部其余会话。"""
+    current = getattr(request.state, "current_session", None)
+    count = session_store.revoke_user_sessions(
+        db, user.id, except_session_id=current.id if current else None
+    )
+    audit_service.record(
+        db, "auth.session_revoked", request=request, user=user,
+        detail={"revoke_others": count},
+    )
+    return {"ok": True, "revoked": count}
+
+
 @router.delete("/sessions/{session_id}", dependencies=[Depends(require_user)])
 def api_revoke_session(
     session_id: int,

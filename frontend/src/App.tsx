@@ -1,6 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import Layout from './components/Layout';
-import RequireAuth from './components/RequireAuth';
+import RequireAuth, { RequireSuper } from './components/RequireAuth';
 import ErrorBoundary from './components/ErrorBoundary';
 import HotBoard from './pages/HotBoard';
 import Latest from './pages/Latest';
@@ -43,7 +43,7 @@ export default function App() {
           <Route path="/account" element={bound('账号设置', <Account />)} />
           <Route path="/users" element={bound('用户与租户', <Users />)} />
           <Route path="/audit" element={bound('审计日志', <Audit />)} />
-          <Route path="/usage" element={bound('成本看板', <Usage />)} />
+          <Route path="/usage" element={bound('成本看板', <RequireSuper><Usage /></RequireSuper>)} />
           <Route path="/admin" element={bound('运维监控', <Admin />)} />
           <Route path="*" element={<NotFound />} />
         </Route>

@@ -309,6 +309,42 @@ def admin_status(db: Session = Depends(get_db)):
             > 0
         )
 
+    # 互动数据轮询水位（crawler/stats.py）：到期/待回填/已放弃/近24h成功轮询
+    from app.crawler.stats import GIVE_UP_FAILS
+
+    now_utc = datetime.now(timezone.utc)
+    stats_since = now_utc - timedelta(hours=24)
+    try:
+        stats_enabled = config_service.get_effective(db, "stats_poll_enabled")
+    except Exception:
+        stats_enabled = None
+    due_now = (
+        db.query(func.count(Article.id))
+        .filter(Article.stats_next_poll_at.isnot(None), Article.stats_next_poll_at <= now_utc)
+        .scalar() or 0
+    )
+    unscheduled = and_(
+        Article.stats_polled_at.is_(None), Article.stats_next_poll_at.is_(None)
+    )
+    pending_backfill = (
+        db.query(func.count(Article.id))
+        .filter(unscheduled, Article.stats_fail_count < GIVE_UP_FAILS)
+        .scalar() or 0
+    )
+    gave_up = (
+        db.query(func.count(Article.id))
+        .filter(unscheduled, Article.stats_fail_count >= GIVE_UP_FAILS)
+        .scalar() or 0
+    )
+    polled_24h = (
+        db.query(func.count(Article.id))
+        .filter(Article.stats_polled_at.isnot(None), Article.stats_polled_at >= stats_since)
+        .scalar() or 0
+    )
+    last_stats_run = (
+        db.query(TaskRun).filter(TaskRun.name == "stats").order_by(TaskRun.id.desc()).first()
+    )
+
     return {
         "app": settings.app_name,
         "version": settings.version,

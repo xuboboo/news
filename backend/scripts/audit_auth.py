@@ -174,12 +174,13 @@ if not tenant_id:
 record("测试租户就绪", tenant_id is not None, f"tenant_id={tenant_id}")
 
 
-def ensure_user(email, role, password=TEST_PW):
+def ensure_user(email, role, password=TEST_PW, tenant=None):
     """创建或重置测试账号；返回 user_id。（email 交给 call() 统一做 URL 编码，勿提前 quote）"""
+    tid = tenant if tenant is not None else tenant_id
     _, d, _ = call(super_c[1], f"建账号 {email}", "/admin/users", method="POST",
                    body={"email": email, "password": password, "role": role,
-                         "tenant_id": tenant_id, "display_name": "审计测试"},
-                   headers={}, expect=(200, 400))
+                         "tenant_id": tid, "display_name": "审计测试"},
+                   expect=(200, 400))
     uid = (d or {}).get("item", {}).get("id")
     if uid:
         return uid
@@ -195,6 +196,12 @@ def ensure_user(email, role, password=TEST_PW):
     return uid
 
 
+def clear_must_change(client, email, password):
+    """同值改密清除首登强制改密标记：服务端守卫会拦 must_change 用户的非认证请求。"""
+    call(client[1], f"解除改密标记 {email}", "/auth/me/password", expect=200, method="PUT",
+         body={"old_password": password, "new_password": password})
+
+
 member_id = ensure_user(MEMBER_EMAIL, "member")
 ta_id = ensure_user(TA_EMAIL, "tenant_admin")
 record("测试账号就绪", member_id is not None and ta_id is not None)
@@ -205,6 +212,9 @@ if member_id is None or ta_id is None:
 # ———— 6. 权限矩阵 ————
 login(member_c, MEMBER_EMAIL, TEST_PW)
 login(ta_c, TA_EMAIL, TEST_PW)
+# 重置过的账号 must_change_password=True，服务端守卫会拦非认证请求：先同值改密解除
+clear_must_change(member_c, MEMBER_EMAIL, TEST_PW)
+clear_must_change(ta_c, TA_EMAIL, TEST_PW)
 
 call(member_c[1], "member 热榜 → 200", "/hot/board")
 call(member_c[1], "member 用户列表 → 403", "/admin/users", expect=403)
@@ -243,6 +253,28 @@ call(member_c[1], "改密成功", "/auth/me/password", expect=200, method="PUT",
 call(member2_c[1], "旧会话已吊销 → 401", "/auth/me", expect=401)
 call(member_c[1], "改密后改回", "/auth/me/password", expect=200, method="PUT",
      body={"old_password": "audit-pw-new45", "new_password": TEST_PW})
+
+# ———— 8b. 登出其他设备（revoke-others：保留当前会话） ————
+login(member2_c, MEMBER_EMAIL, TEST_PW)
+call(member_c[1], "登出其他设备 → 200", "/auth/sessions/revoke-others", expect=200, method="POST", body={})
+call(member2_c[1], "其他设备已吊销 → 401", "/auth/me", expect=401)
+call(member_c[1], "当前会话保留 → 200", "/auth/me")
+
+# ———— 8c. 密码长度上限（bcrypt 72 字节截断防护） ————
+call(member_c[1], "超长密码 → 400", "/auth/me/password", expect=400, method="PUT",
+     body={"old_password": TEST_PW, "new_password": "x" * 80})
+
+# ———— 8d. 租户停用：登录口明确拒绝（缺陷 A 回归：不得出现"登录成功但全站 403"） ————
+call(super_c[1], "建停用测试租户", "/admin/tenants", method="POST",
+     body={"name": "停用租户审计", "remark": "audit_auth.py"}, expect=(200, 400))
+_, tl, _ = call(super_c[1], "取停用测试租户", "/admin/tenants")
+dt_id = next((t["id"] for t in (tl or {}).get("items", []) if t["name"] == "停用租户审计"), None)
+record("停用测试租户就绪", dt_id is not None)
+if dt_id is not None:
+    call(super_c[1], "停用该租户", f"/admin/tenants/{dt_id}", method="PUT", body={"status": "disabled"})
+    dt_uid = ensure_user("dt@audit.local", "member", tenant=dt_id)
+    if dt_uid:
+        login(anon, "dt@audit.local", TEST_PW, expect=403)
 
 # ———— 9. 登出吊销 ————
 call(ta_c[1], "ta 登出", "/auth/logout", expect=200, method="POST", body={})

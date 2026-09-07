@@ -53,14 +53,33 @@ def _admin_token_ok(request: Request, db: Session) -> bool:
         return False
 
 
-def require_user(request: Request, db: Session = Depends(get_db)) -> User | None:
+class _TokenPrincipal:
+    """X-Admin-Token 应急后门的虚拟主体：等价平台超管。
+
+    返回真实 User 对象形状（而非 None），使所有使用 actor 的端点
+    （users.py 的 actor.role/email/tenant_id、审计埋点 user_profile 等）
+    在后门通道下正常工作而不需要特判。
+    """
+
+    id = None
+    email = "admin-token"
+    display_name = "admin-token"
+    role = ROLE_SUPER_ADMIN
+    tenant_id = None
+    status = "active"
+    must_change_password = False
+    last_login_at = None
+
+
+def require_user(request: Request, db: Session = Depends(get_db)) -> User:
     try:
         user, row = _authenticate(request, db)
     except HTTPException as exc:
         if exc.status_code == 401 and _admin_token_ok(request, db):
-            # 应急后门：token 视为超管等价，脚本无需 Cookie 会话
-            # （业务路由挂载处丢弃返回值；审计埋点 current_user 保持为空）
-            return None
+            # 应急后门：token 视为超管等价（虚拟主体），脚本无需 Cookie 会话
+            principal = _TokenPrincipal()
+            request.state.current_user = principal
+            return principal
         raise
     # 首登强制改密：服务端兜底（前端仅是引导），只放行认证域接口
     if getattr(user, "must_change_password", False) and not request.url.path.startswith(

@@ -21,8 +21,10 @@ import {
   changePassword,
   getMySessions,
   logout as authLogout,
+  revokeOtherSessions,
   revokeSession,
 } from '../api/auth';
+import { bootstrapFromApi, loadReports, startAutoRefresh } from '../api/client';
 
 export default function Account() {
   usePageTitle('账号设置');
@@ -40,6 +42,7 @@ export default function Account() {
   // ———— 会话列表 ————
   const [sessions, setSessions] = useState<SessionItem[] | null>(null);
   const [revoking, setRevoking] = useState<number | null>(null);
+  const [revokingOthers, setRevokingOthers] = useState(false);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -89,6 +92,18 @@ export default function Account() {
       setNewPwd2('');
       setMsg({ ok: true, text: '密码已修改；其他设备的会话已全部吊销' });
       void loadSessions();
+      if (mustChange) {
+        // 强制改密期间服务端会拒绝数据请求（403），bootstrap 已失败一次：
+        // 改密完成后立即重启数据引导，否则业务页会停留在演示数据模式
+        const ok = await bootstrapFromApi();
+        if (ok) {
+          startAutoRefresh(60000);
+          setTimeout(() => {
+            void loadReports(true);
+          }, 0);
+        }
+        navigate('/hot', { replace: true });
+      }
     } catch (e: any) {
       setMsg({ ok: false, text: e?.message ?? '修改失败' });
     } finally {
@@ -105,6 +120,19 @@ export default function Account() {
       /* 失败静默，列表刷新可见 */
     } finally {
       setRevoking(null);
+    }
+  };
+
+  const doRevokeOthers = async () => {
+    if (revokingOthers) return;
+    setRevokingOthers(true);
+    try {
+      await revokeOtherSessions();
+      await loadSessions();
+    } catch {
+      /* 失败静默 */
+    } finally {
+      setRevokingOthers(false);
     }
   };
 
@@ -243,12 +271,20 @@ export default function Account() {
               ))}
             </div>
           )}
-          <div className="mt-4 pt-3 border-t border-radar-border">
+          <div className="mt-4 pt-3 border-t border-radar-border flex flex-wrap gap-2">
             <button
               onClick={() => void doLogoutAll()}
               className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-red-300 hover:border-red-400/40 cursor-pointer"
             >
               <LogOut className="h-3.5 w-3.5" /> 退出登录（当前设备）
+            </button>
+            <button
+              onClick={() => void doRevokeOthers()}
+              disabled={revokingOthers}
+              className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-amber-300 hover:border-amber-400/40 disabled:opacity-40 cursor-pointer"
+            >
+              {revokingOthers ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MonitorSmartphone className="h-3.5 w-3.5" />}
+              登出其他设备
             </button>
           </div>
         </section>

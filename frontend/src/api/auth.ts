@@ -83,6 +83,10 @@ export const getMySessions = () => request<{ items: SessionItem[] }>('/sessions'
 export const revokeSession = (id: number) =>
   request<{ ok: boolean }>(`/sessions/${id}`, { method: 'DELETE' });
 
+/** 登出其他设备：保留当前会话，吊销本人全部其余会话 */
+export const revokeOtherSessions = () =>
+  request<{ ok: boolean; revoked: number }>('/sessions/revoke-others', { method: 'POST' });
+
 // ———————————————————— 启动会话引导 ————————————————————
 
 let bootstrapped = false;

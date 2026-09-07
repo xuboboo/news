@@ -7,18 +7,22 @@ import {
   Ban,
   Building2,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
   KeyRound,
   Loader2,
   Plus,
   RefreshCw,
   Search,
+  ShieldCheck,
   ShieldX,
   UserCog,
   Users as UsersIcon,
   X,
 } from 'lucide-react';
 import { PageHeader } from '../components/common';
-import { usePageTitle } from '../utils/hooks';
+import { useModalA11y, usePageTitle } from '../utils/hooks';
 import { ROLE_LABELS, isSuperAdmin, isTenantAdmin, useAuth, type Role } from '../auth';
 import {
   ManagedUser,
@@ -33,6 +37,7 @@ import {
 } from '../api/admin';
 
 const ROLE_OPTIONS: Role[] = ['member', 'tenant_admin', 'super_admin'];
+const PAGE_SIZE = 50;
 
 function genPassword(len = 12): string {
   const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -46,7 +51,7 @@ function fmtTime(iso: string | null): string {
   return new Date(iso).toLocaleString('zh-CN', { hour12: false });
 }
 
-/** 轻量模态：Escape 关闭 + 遮罩点击关闭 + 滚动锁 */
+/** 轻量模态：Escape 关闭 + 遮罩点击关闭 + 滚动锁 + 焦点圈（useModalA11y） */
 function Modal({
   title,
   onClose,
@@ -56,25 +61,18 @@ function Modal({
   onClose: () => void;
   children: React.ReactNode;
 }) {
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.body.style.overflow = prev;
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [onClose]);
+  const ref = useModalA11y(onClose);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={title}>
       <div
         className="absolute inset-0 bg-[rgb(0_0_0/var(--overlay-alpha))] backdrop-blur-sm"
         onClick={onClose}
       />
-      <div className="card relative w-full max-w-md p-5 max-h-[85vh] overflow-y-auto">
+      <div
+        ref={ref}
+        tabIndex={-1}
+        className="card relative w-full max-w-md p-5 max-h-[85vh] overflow-y-auto outline-none"
+      >
         <div className="flex items-center justify-between mb-4">
           <div className="text-sm font-semibold text-slate-100">{title}</div>
           <button
@@ -119,6 +117,10 @@ export default function Users() {
   // ———— 弹层状态 ————
   const [createOpen, setCreateOpen] = useState(false);
   const [resetTarget, setResetTarget] = useState<ManagedUser | null>(null);
+  // 创建成功后的「初始密码一次性展示」：模态里已可见，但关闭即不可再取，这里给一次明确留存机会
+  const [createdPwd, setCreatedPwd] = useState<{ email: string; password: string } | null>(null);
+
+  const [page, setPage] = useState(1);
 
   const loadUsers = useCallback(async () => {
     if (!canManage) return;
@@ -128,6 +130,8 @@ export default function Users() {
         q: q || undefined,
         status: statusFilter || undefined,
         tenant_id: tenantFilter ? Number(tenantFilter) : undefined,
+        page,
+        page_size: PAGE_SIZE,
       });
       setUsers(r.items ?? []);
       setTotal(r.total);
@@ -137,7 +141,7 @@ export default function Users() {
     } finally {
       setListBusy(false);
     }
-  }, [canManage, q, statusFilter, tenantFilter, flash]);
+  }, [canManage, q, statusFilter, tenantFilter, page, flash]);
 
   const loadTenants = useCallback(async () => {
     if (!superAdmin) return;
@@ -233,7 +237,12 @@ export default function Users() {
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && void loadUsers()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    setPage(1);
+                    void loadUsers();
+                  }
+                }}
                 placeholder="搜索邮箱 / 姓名，回车确认"
                 className="w-full pl-8 pr-3 py-2 rounded-lg border border-radar-border bg-radar-panel text-xs text-slate-100 outline-none focus:border-accent/60"
               />
@@ -264,7 +273,10 @@ export default function Users() {
               </select>
             )}
             <button
-              onClick={() => void loadUsers()}
+              onClick={() => {
+                setPage(1);
+                void loadUsers();
+              }}
               className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-accent cursor-pointer"
             >
               查询
@@ -315,6 +327,29 @@ export default function Users() {
               </table>
             </div>
           </div>
+
+          {/* 分页 */}
+          {total > PAGE_SIZE && (
+            <div className="flex items-center justify-end gap-3 text-xs text-slate-400">
+              <span>第 {page} / {Math.max(1, Math.ceil(total / PAGE_SIZE))} 页 · 共 {total} 个账号</span>
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="chip border border-radar-border bg-radar-card disabled:opacity-30 cursor-pointer"
+                aria-label="上一页"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => setPage((p) => Math.min(Math.ceil(total / PAGE_SIZE), p + 1))}
+                disabled={page >= Math.ceil(total / PAGE_SIZE)}
+                className="chip border border-radar-border bg-radar-card disabled:opacity-30 cursor-pointer"
+                aria-label="下一页"
+              >
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
         </section>
       )}
 
@@ -333,11 +368,20 @@ export default function Users() {
           tenants={tenants}
           myTenantId={me?.tenant_id}
           onClose={() => setCreateOpen(false)}
-          onCreated={(u) => {
+          onCreated={(u, password) => {
             setCreateOpen(false);
             void loadUsers();
-            flash(true, `已创建 ${u.email}，初始密码仅此一次展示，请立即线下告知用户`);
+            setCreatedPwd({ email: u.email, password });
           }}
+        />
+      )}
+
+      {/* ———— 初始密码一次性展示（关闭后只能重置，务必先复制留存） ———— */}
+      {createdPwd && (
+        <CreatedPasswordModal
+          email={createdPwd.email}
+          password={createdPwd.password}
+          onClose={() => setCreatedPwd(null)}
         />
       )}
 
@@ -489,7 +533,7 @@ function CreateUserModal({
   tenants: TenantItem[];
   myTenantId?: number;
   onClose: () => void;
-  onCreated: (u: ManagedUser) => void;
+  onCreated: (u: ManagedUser, password: string) => void;
 }) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -513,7 +557,7 @@ function CreateUserModal({
         role,
         tenant_id: Number(tenantId),
       });
-      onCreated(r.item);
+      onCreated(r.item, password);
     } catch (e: any) {
       setErr(e?.message ?? '创建失败');
     } finally {
@@ -701,6 +745,62 @@ function ResetPasswordModal({
           >
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             确认重置
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ———————————————————— 初始密码一次性展示 ————————————————————
+
+function CreatedPasswordModal({
+  email,
+  password,
+  onClose,
+}: {
+  email: string;
+  password: string;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(`账号：${email}\n初始密码：${password}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      /* 剪贴板不可用（非安全上下文等），用户可手动选择复制 */
+    }
+  };
+  return (
+    <Modal title="账号已创建" onClose={onClose}>
+      <div className="space-y-4">
+        <div className="rounded-lg border border-amber-400/30 bg-amber-500/5 px-3 py-2.5 text-xs text-amber-300 flex items-start gap-2">
+          <ShieldCheck className="h-4 w-4 shrink-0 mt-px" />
+          初始密码仅此一次展示，关闭后只能「重置密码」重新生成。请先复制留存并线下告知用户。
+        </div>
+        <div>
+          <div className="text-xs text-slate-400 mb-1">登录账号</div>
+          <div className="font-mono text-sm text-slate-100">{email}</div>
+        </div>
+        <div>
+          <div className="text-xs text-slate-400 mb-1">初始密码（首登强制改密）</div>
+          <div className="font-mono text-base text-slate-100 select-all tracking-wide">{password}</div>
+        </div>
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            onClick={() => void copy()}
+            className="px-3 py-2 rounded-lg border border-accent/40 text-xs text-accent hover:bg-accent/10 flex items-center gap-1.5 cursor-pointer"
+          >
+            <Copy className="h-3.5 w-3.5" />
+            {copied ? '已复制' : '复制账号和密码'}
+          </button>
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg bg-accent/90 hover:bg-accent text-white text-xs font-medium cursor-pointer"
+          >
+            我已留存，关闭
           </button>
         </div>
       </div>

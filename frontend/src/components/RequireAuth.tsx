@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
-import { Radar } from 'lucide-react';
-import { useAuth } from '../auth';
+import { Radar, ShieldX } from 'lucide-react';
+import { isSuperAdmin, useAuth } from '../auth';
 import { bootstrapAuth } from '../api/auth';
 
 /**
@@ -22,6 +22,7 @@ export default function RequireAuth() {
       <div className="min-h-screen flex flex-col items-center justify-center gap-3 text-slate-400">
         <Radar className="h-8 w-8 text-accent animate-pulse" />
         <div className="text-sm">正在恢复登录态…</div>
+        <div className="text-xs text-slate-500">若后端未启动将每 3 秒自动重试</div>
       </div>
     );
   }
@@ -35,4 +36,21 @@ export default function RequireAuth() {
   }
 
   return <Outlet />;
+}
+
+/** 平台超管专属路由守卫：导航按角色隐藏了入口，这里兜住直敲 URL 的情况。 */
+export function RequireSuper({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (!isSuperAdmin(user)) {
+    return (
+      <div className="max-w-md card p-8 mx-auto mt-16 text-center">
+        <div className="mx-auto mb-4 w-fit p-3 rounded-xl bg-red-500/10 text-red-400">
+          <ShieldX className="h-7 w-7" />
+        </div>
+        <div className="text-sm font-semibold text-slate-100 mb-1.5">无访问权限</div>
+        <p className="text-xs text-slate-500 leading-5">该页面对「平台超管」开放。</p>
+      </div>
+    );
+  }
+  return <>{children}</>;
 }

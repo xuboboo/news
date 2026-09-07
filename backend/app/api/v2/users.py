@@ -29,6 +29,12 @@ router = APIRouter(prefix="/api/v2/admin", dependencies=[Depends(require_json_mu
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MIN_PASSWORD_LEN = 8
+MAX_PASSWORD_BYTES = 72  # bcrypt 输入上限，超长会被静默截断，显式拒绝
+
+
+def _escape_like(term: str) -> str:
+    """ilike 通配符转义：用户输入中的 % _ \\ 不改变匹配语义。"""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _norm_email(email: str) -> str:
@@ -45,6 +51,8 @@ def _validate_email(email: str) -> str:
 def _validate_password(password: str) -> str:
     if not password or len(password) < MIN_PASSWORD_LEN:
         raise HTTPException(400, f"密码至少 {MIN_PASSWORD_LEN} 位")
+    if len(password.encode("utf-8")) > MAX_PASSWORD_BYTES:
+        raise HTTPException(400, f"密码过长（最多 {MAX_PASSWORD_BYTES} 字节）")
     return password
 
 
@@ -199,8 +207,8 @@ def list_users(
     if status in ("active", "disabled"):
         query = query.filter(User.status == status)
     if q:
-        like = f"%{q.strip()}%"
-        query = query.filter(User.email.ilike(like) | User.display_name.ilike(like))
+        like = f"%{_escape_like(q.strip())}%"
+        query = query.filter(User.email.ilike(like, escape="\\") | User.display_name.ilike(like, escape="\\"))
     total = query.count()
     rows = (
         query.order_by(User.id.desc())
@@ -264,46 +272,56 @@ def update_user(
 ):
     target = _target_for(actor, db, user_id)
     data = payload or {}
-    detail: dict = {"target_user_id": target.id, "changes": []}
 
-    if "display_name" in data:
-        target.display_name = str(data.get("display_name") or "").strip()[:64]
-        detail["changes"].append("display_name")
-
-    if "status" in data:
-        status = str(data.get("status") or "")
-        if status not in ("active", "disabled"):
-            raise HTTPException(400, "status 只能是 active / disabled")
-        if status != target.status:
-            _guard_last_super(db, target, demoting=False, disabling=status == "disabled")
-            target.status = status
-            detail["changes"].append(f"status={status}")
-            if status == "disabled":
-                # 停用即时生效：吊销全部会话
-                from app.auth import sessions as session_store
-                session_store.revoke_user_sessions(db, target.id)
-
-    if "role" in data and str(data["role"]) != target.role:
+    # ———— 校验阶段：全部通过才落库（多字段更新保持原子性，避免前一字段已生效而后一字段 400） ————
+    new_display = str(data["display_name"] or "").strip()[:64] if "display_name" in data else None
+    new_status = data.get("status") if "status" in data else None
+    if new_status is not None and new_status not in ("active", "disabled"):
+        raise HTTPException(400, "status 只能是 active / disabled")
+    new_role = data.get("role") if "role" in data else None
+    if new_role is not None:
         if actor.role != ROLE_SUPER_ADMIN:
             raise HTTPException(403, "只有平台超管可以调整角色")
-        role = str(data.get("role") or "")
-        if role not in ROLES:
+        if new_role not in ROLES:
             raise HTTPException(400, "角色只能是 super_admin / tenant_admin / member")
-        _guard_last_super(db, target, demoting=role != ROLE_SUPER_ADMIN, disabling=False)
-        target.role = role
-        detail["changes"].append(f"role={role}")
-
-    if "tenant_id" in data and actor.role == ROLE_SUPER_ADMIN:
-        new_tenant = data.get("tenant_id")
-        if isinstance(new_tenant, int) and new_tenant != target.tenant_id:
-            if db.get(Tenant, new_tenant) is None:
-                raise HTTPException(404, "租户不存在")
-            target.tenant_id = new_tenant
-            detail["changes"].append(f"tenant_id={new_tenant}")
-        elif not isinstance(new_tenant, int):
+    new_tenant = data.get("tenant_id") if "tenant_id" in data else None
+    if new_tenant is not None:
+        if actor.role != ROLE_SUPER_ADMIN:
+            raise HTTPException(403, "只有平台超管可以调整所属租户")
+        if not isinstance(new_tenant, int):
             raise HTTPException(400, "tenant_id 必须为整数")
+        if db.get(Tenant, new_tenant) is None:
+            raise HTTPException(404, "租户不存在")
 
+    status_changing = new_status is not None and new_status != target.status
+    role_changing = new_role is not None and new_role != target.role
+    if status_changing or role_changing:
+        _guard_last_super(
+            db, target,
+            demoting=role_changing and new_role != ROLE_SUPER_ADMIN,
+            disabling=status_changing and new_status == "disabled",
+        )
+
+    # ———— 应用阶段 ————
+    detail: dict = {"target_user_id": target.id, "changes": []}
+    if new_display is not None:
+        target.display_name = new_display
+        detail["changes"].append("display_name")
+    if status_changing:
+        target.status = new_status
+        detail["changes"].append(f"status={new_status}")
+    if role_changing:
+        target.role = new_role
+        detail["changes"].append(f"role={new_role}")
+    if new_tenant is not None and new_tenant != target.tenant_id:
+        target.tenant_id = new_tenant
+        detail["changes"].append(f"tenant_id={new_tenant}")
     db.commit()
+    if status_changing and new_status == "disabled":
+        # 停用即时生效：吊销全部会话
+        from app.auth import sessions as session_store
+        session_store.revoke_user_sessions(db, target.id)
+
     action = "user.disabled" if "status=disabled" in detail["changes"] else "user.updated"
     audit_service.record(db, action, request=request, user=actor, detail=detail)
     return {"ok": True, "item": _user_dict(db, target, _tenant_names(db))}
