@@ -20,7 +20,7 @@
           var theme = dark ? 'dark' : 'light';
           document.documentElement.dataset.theme = theme;
           var meta = document.querySelector('meta[name="theme-color"]');
-          if (meta) meta.setAttribute('content', dark ? '#070B14' : '#F5F7FB');
+          if (meta) meta.setAttribute('content', dark ? '#070B14' : '#F5F5F7');
         } catch (e) {
           /* localStorage 不可用时保持默认深色 */
         }

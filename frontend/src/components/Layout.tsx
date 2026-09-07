@@ -256,7 +256,7 @@ export default function Layout() {
       {drawerOpen && (
         <div className="fixed inset-0 z-40 md:hidden" role="presentation">
           <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            className="absolute inset-0 bg-[rgb(0_0_0/var(--overlay-alpha))] backdrop-blur-sm"
             onClick={() => setDrawerForPath(null)}
           />
           <aside className="absolute left-0 top-0 bottom-0 w-64 bg-radar-panel border-r border-radar-border flex flex-col overflow-y-auto">
@@ -279,7 +279,7 @@ export default function Layout() {
 
       {/* 主内容区 */}
       <div className="flex-1 min-w-0 flex flex-col">
-        <header className="sticky top-0 z-20 h-14 border-b border-radar-border bg-radar-bg/80 backdrop-blur flex items-center justify-between gap-3 px-4 md:px-6">
+        <header className="sticky top-0 z-20 h-14 border-b border-radar-border bg-radar-bg/70 backdrop-blur-xl backdrop-saturate-150 flex items-center justify-between gap-3 px-4 md:px-6">
           <div className="flex items-center gap-2 text-xs text-slate-500 min-w-0">
             <button
               onClick={() => setDrawerForPath(location.pathname)}

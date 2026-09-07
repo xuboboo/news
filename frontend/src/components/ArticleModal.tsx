@@ -26,7 +26,7 @@ export default function ArticleModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[rgb(0_0_0/var(--overlay-alpha))] backdrop-blur-sm"
       onClick={onClose}
       role="presentation"
     >
@@ -36,11 +36,11 @@ export default function ArticleModal({
         role="dialog"
         aria-modal="true"
         aria-label={article.title}
-        className="card modal-scroll w-full max-w-2xl max-h-[85vh] overflow-y-auto bg-radar-panel outline-none"
+        className="card modal-scroll w-full max-w-2xl max-h-[85vh] overflow-y-auto outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 头部 */}
-        <div className="sticky top-0 bg-radar-panel/95 backdrop-blur border-b border-radar-border px-6 py-4 flex items-start justify-between gap-4 z-10">
+        <div className="sticky top-0 bg-radar-card/95 backdrop-blur border-b border-radar-border px-6 py-4 flex items-start justify-between gap-4 z-10">
           <div className="min-w-0">
             <div className="flex items-center gap-2 mb-2">
               <ChannelTag channel={article.channel} />

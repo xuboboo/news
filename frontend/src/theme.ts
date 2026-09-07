@@ -15,7 +15,7 @@ const STORAGE_KEY = 'radar-theme';
 /** 与 index.html 内联 pre-paint 脚本保持一致的 meta theme-color 值 */
 export const THEME_META_COLORS: Record<ResolvedTheme, string> = {
   dark: '#070B14',
-  light: '#F5F7FB',
+  light: '#F5F5F7',
 };
 
 function readStoredMode(): ThemeMode {

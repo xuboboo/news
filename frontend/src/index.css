@@ -159,27 +159,30 @@
   --modal-scroll-thumb-hover: rgba(90, 115, 170, 0.9);
   --focus-ring: 56 189 248;
   --glow-latest: 0 0 8px rgba(251, 191, 36, 0.5); /* 事件时间线最新节点发光 */
+  --overlay-alpha: 0.6; /* 弹窗/抽屉遮罩浓度 */
 }
 
 /* ==========================================================================
-   主题变量 · 浅色
+   主题变量 · 浅色（macOS 设计语言）
    两个映射原则：
    1. slate 灰阶按「明暗角色镜像」翻转（如 200↔800）：深色下的浅灰主文字，
       在浅色下由同一 token 呈现为深灰，所有既有 slate 类无需改动；
    2. 语义色把深色下用作文字/强调的 300/400 档加深到 600/700 档，
-      保证白底 4.5:1（正文）与 3:1（图形）对比度；500 档统一收到 600 档。
+      保证白底 4.5:1（正文）与 3:1（图形）对比度。
+   Mac 风格基调：Apple 灰窗体 + 白卡片悬浮 + 柔和分层阴影 + 蓝色 accent +
+   毛玻璃顶栏；灰阶表面（panel=次级面）对应 macOS 的 sidebar/输入底色。
    ========================================================================== */
 :root[data-theme='light'] {
   color-scheme: light;
 
-  /* 品牌面板色：浅灰底 + 白卡片 */
-  --c-radar-bg: 245 247 251; /* #F5F7FB */
-  --c-radar-panel: 255 255 255;
+  /* 品牌面板色：Apple 灰窗体 + 白卡片 */
+  --c-radar-bg: 245 245 247; /* #F5F5F7 Apple 官方灰 */
+  --c-radar-panel: 242 242 247; /* #F2F2F7 sidebar/次级表面 */
   --c-radar-card: 255 255 255;
-  --c-radar-cardHover: 241 245 249; /* #F1F5F9 */
-  --c-radar-border: 226 232 240; /* #E2E8F0 */
-  --c-radar-borderStrong: 203 213 225; /* #CBD5E1 */
-  --c-accent: 3 105 161; /* #0369A1 sky-700 */
+  --c-radar-cardHover: 245 245 247; /* #F5F5F7 */
+  --c-radar-border: 229 229 234; /* #E5E5EA Apple 发丝线 */
+  --c-radar-borderStrong: 210 210 215; /* #D2D2D7 */
+  --c-accent: 0 113 227; /* #0071E3 Apple 蓝 */
 
   /* slate 灰阶镜像（-500 自映射，白底对比度 4.8:1，无需覆盖） */
   --c-slate-50: 2 6 23;
@@ -238,15 +241,17 @@
   --c-fuchsia-300: 192 38 211; /* →600 */
   --c-fuchsia-400: 217 70 239; /* →500 */
 
-  /* 阴影减淡 / 滚动条 / 焦点环 */
-  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.06), 0 0 0 1px rgba(226, 232, 240, 0.9);
-  --shadow-glow: 0 0 24px rgba(3, 105, 161, 0.1);
-  --scrollbar-thumb: #cbd5e1;
-  --scrollbar-thumb-hover: #94a3b8;
-  --modal-scroll-thumb: rgba(100, 116, 139, 0.4);
-  --modal-scroll-thumb-hover: rgba(71, 85, 105, 0.7);
-  --focus-ring: 2 132 199;
+  /* Mac 风格：柔和分层阴影替代重边框；细滚动条；玻璃拟态遮罩减淡 */
+  --shadow-card: 0 0 0 1px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.04),
+    0 4px 16px rgba(0, 0, 0, 0.05);
+  --shadow-glow: 0 0 24px rgba(0, 113, 227, 0.12);
+  --scrollbar-thumb: #c7c7cc;
+  --scrollbar-thumb-hover: #aeaeb2;
+  --modal-scroll-thumb: rgba(60, 60, 67, 0.3);
+  --modal-scroll-thumb-hover: rgba(60, 60, 67, 0.5);
+  --focus-ring: 0 113 227;
   --glow-latest: 0 0 8px rgba(180, 83, 9, 0.35);
+  --overlay-alpha: 0.4;
 }
 
 @layer base {
@@ -281,7 +286,7 @@
 
 @layer components {
   .card {
-    @apply bg-radar-card border border-radar-border rounded-xl shadow-card;
+    @apply bg-radar-card border border-radar-border rounded-2xl shadow-card;
   }
   .chip {
     @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs leading-5 whitespace-nowrap;
@@ -291,6 +296,10 @@
   }
   .nav-item-active {
     @apply bg-accent/10 text-accent;
+  }
+  /* macOS 侧边栏选中态：浅色下为实心 accent 胶囊 + 白字（深色保持 tint 风格不变） */
+  :root[data-theme='light'] .nav-item-active {
+    @apply bg-accent text-white;
   }
   /* 弹窗内滚动条：细版悬浮式，半透明胶囊，悬停加深（Firefox 走 scrollbar-*） */
   .modal-scroll {
