@@ -392,8 +392,8 @@ export default function Layout() {
           <Outlet />
         </main>
         <footer className="px-4 md:px-6 py-4 border-t border-radar-border text-[11px] text-slate-500 flex flex-wrap items-center justify-between gap-2">
-          <span>华军资讯雷达 V2.0 · 内部科技情报系统</span>
-          <span>HotScore = Engagement × TimeDecay · AI 摘要由 AI Worker 自动生成</span>
+          <span>华军软件园资讯雷达系统 V2.0</span>
+          <span>版权所有 © {new Date().getFullYear()} 华军软件园</span>
         </footer>
       </div>
     </div>

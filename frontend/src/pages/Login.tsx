@@ -66,7 +66,7 @@ export default function Login() {
           </div>
           <div>
             <h1 className="text-xl font-bold tracking-tight text-slate-100">资讯雷达</h1>
-            <p className="text-[11px] text-slate-500 mt-0.5">华军科技 · 内部情报系统 V2.0</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">华军软件园 · 资讯雷达系统 V2.0</p>
           </div>
         </div>
         <p className="text-sm text-slate-400 mb-6">请使用管理员分配的账号登录</p>
@@ -126,6 +126,9 @@ export default function Login() {
 
         <p className="mt-6 text-center text-[11px] text-slate-500">
           没有账号？联系平台管理员开通 · 连续登录失败将临时锁定
+        </p>
+        <p className="mt-3 text-center text-[11px] text-slate-600">
+          版权所有 © {new Date().getFullYear()} 华军软件园
         </p>
       </div>
     </div>

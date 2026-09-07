@@ -183,7 +183,7 @@ export default function DailyReport() {
               </span>
             </div>
             <h2 className="text-2xl font-semibold text-slate-100">
-              华军科技日报 · {report.date}
+              华军软件园 · 科技日报 {report.date}
             </h2>
             <p className="text-sm text-slate-400 mt-1.5">
               {report.topEvents.length > 0

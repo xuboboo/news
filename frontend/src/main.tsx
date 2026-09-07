@@ -19,7 +19,7 @@ async function start() {
   await startBootstrap();
 
   if (!apiMode) {
-    console.warn('[华军资讯雷达] 后端不可达，已降级为本地数据引擎');
+    console.warn('[华军软件园资讯雷达系统] 后端不可达，已降级为本地数据引擎');
   } else {
     // API 模式下启动周期性增量刷新（60s），页面自动吃到新数据
     startAutoRefresh(60000);

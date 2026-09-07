@@ -73,12 +73,12 @@ export function useBootstrapReady(): boolean {
 }
 
 /**
- * 页面标题：随路由切换 document.title，格式「{页名} · 华军资讯雷达」。
+ * 页面标题：随路由切换 document.title，格式「{页名} · 华军软件园资讯雷达系统」。
  * 不传或传 undefined 时使用默认标题。
  */
 export function usePageTitle(title?: string) {
   useEffect(() => {
-    document.title = title ? `${title} · 华军资讯雷达` : '华军资讯雷达 V2.0';
+    document.title = title ? `${title} · 华军软件园资讯雷达系统` : '华军软件园资讯雷达系统 V2.0';
   }, [title]);
 }
 
