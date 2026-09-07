@@ -7,6 +7,25 @@
     <meta name="theme-color" content="#070B14" />
     <meta name="description" content="华军资讯雷达 V2.0 — 科技情报分析平台：热榜中心、最新资讯、AI 摘要、热点事件聚合与科技日报" />
     <title>华军资讯雷达 V2.0</title>
+    <script>
+      // pre-paint 主题解析：首帧渲染前落定 data-theme，避免浅色用户看到深色闪烁（FOUC）。
+      // 逻辑须与 src/theme.ts 保持一致（STORAGE_KEY / system 解析 / theme-color 值）。
+      (function () {
+        try {
+          var m = localStorage.getItem('radar-theme');
+          var dark =
+            m === 'dark' ||
+            ((m === null || m === 'system') &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          var theme = dark ? 'dark' : 'light';
+          document.documentElement.dataset.theme = theme;
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', dark ? '#070B14' : '#F5F7FB');
+        } catch (e) {
+          /* localStorage 不可用时保持默认深色 */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

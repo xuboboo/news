@@ -1,18 +1,39 @@
 /** @type {import('tailwindcss').Config} */
+
+/**
+ * 主题变量化桥接层：颜色真值统一定义在 src/index.css 的 :root（深色，默认）
+ * 与 :root[data-theme='light']（浅色）两组 CSS 变量中，本文件只做「变量 → 色 token」引用。
+ * 透明度修饰符（如 bg-amber-500/10）通过 <alpha-value> 自动兼容，无需关心主题。
+ */
+const palette = (name, shades) =>
+  Object.fromEntries(shades.map((s) => [s, `rgb(var(--c-${name}-${s}) / <alpha-value>)`]));
+
+const FULL = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950];
+
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
       colors: {
         radar: {
-          bg: '#070B14',
-          panel: '#0C1220',
-          card: '#0E1628',
-          cardHover: '#121C33',
-          border: '#1B2742',
-          borderStrong: '#27375C',
+          bg: 'rgb(var(--c-radar-bg) / <alpha-value>)',
+          panel: 'rgb(var(--c-radar-panel) / <alpha-value>)',
+          card: 'rgb(var(--c-radar-card) / <alpha-value>)',
+          cardHover: 'rgb(var(--c-radar-cardHover) / <alpha-value>)',
+          border: 'rgb(var(--c-radar-border) / <alpha-value>)',
+          borderStrong: 'rgb(var(--c-radar-borderStrong) / <alpha-value>)',
         },
-        accent: '#38BDF8',
+        accent: 'rgb(var(--c-accent) / <alpha-value>)',
+        slate: palette('slate', FULL),
+        amber: palette('amber', FULL),
+        emerald: palette('emerald', FULL),
+        red: palette('red', FULL),
+        orange: palette('orange', FULL),
+        cyan: palette('cyan', FULL),
+        sky: palette('sky', FULL),
+        violet: palette('violet', FULL),
+        blue: palette('blue', FULL),
+        fuchsia: palette('fuchsia', FULL),
       },
       fontFamily: {
         sans: [
@@ -21,8 +42,8 @@ export default {
         ],
       },
       boxShadow: {
-        card: '0 1px 2px rgba(0,0,0,0.35), 0 0 0 1px rgba(27,39,66,0.6)',
-        glow: '0 0 24px rgba(56,189,248,0.15)',
+        card: 'var(--shadow-card)',
+        glow: 'var(--shadow-glow)',
       },
     },
   },

@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { HashRouter } from 'react-router-dom';
 import App from './App';
 import { startBootstrap, apiMode, startAutoRefresh } from './api/client';
+import './theme'; // 渲染前应用主题（兜底 index.html pre-paint 脚本未生效的场景）
 import './index.css';
 
 async function start() {
