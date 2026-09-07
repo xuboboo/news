@@ -94,11 +94,12 @@ export default function Latest() {
         </div>
       </PageHeader>
 
-      <div className="sticky top-14 z-10 flex items-center gap-2 mb-5 py-2 -mx-1 px-1 rounded-xl bg-radar-bg/70 backdrop-blur-xl backdrop-saturate-150">
+      <div className="sticky top-14 z-10 flex items-center gap-2 mb-5 py-2 -mx-1 px-1 rounded-xl bg-radar-bg/70 backdrop-blur-xl backdrop-saturate-150 flex-wrap">
         {channels.map((c) => (
           <button
             key={c}
             onClick={() => setChannel(c)}
+            aria-pressed={channel === c}
             className={`chip border px-3 py-1.5 cursor-pointer transition-colors ${
               channel === c
                 ? 'bg-accent/15 text-accent border-accent/40'
@@ -167,9 +168,14 @@ export default function Latest() {
                             ev.stopPropagation();
                             navigate(`/events/${e.id}`);
                           }}
-                          className="chip bg-amber-500/10 text-amber-300 border border-amber-400/25 hover:bg-amber-500/20 cursor-pointer"
+                          // 事件芯片是卡片内的独立可点元素：阻止键盘/点击事件冒泡到卡片，
+                          // 否则卡片激活逻辑会劫持 Enter 键（打开弹窗而非跳转事件页）
+                          onKeyDown={(ev) => ev.stopPropagation()}
+                          title={e.title}
+                          className="chip max-w-[240px] bg-amber-500/10 text-amber-300 border border-amber-400/25 hover:bg-amber-500/20 cursor-pointer"
                         >
-                          <Zap className="h-3 w-3" /> {e.title}
+                          <Zap className="h-3 w-3 shrink-0" />
+                          <span className="truncate min-w-0">{e.title}</span>
                         </button>
                       ))}
                     </div>
@@ -177,7 +183,7 @@ export default function Latest() {
                       <AiBadge />
                       <p
                         className={`text-[13px] leading-relaxed flex-1 min-w-0 ${
-                          a.summary.summary_short ? 'text-slate-400' : 'text-slate-600'
+                          a.summary.summary_short ? 'text-slate-400' : 'text-slate-500'
                         }`}
                       >
                         {a.summary.summary_short || 'AI 摘要生成中…'}

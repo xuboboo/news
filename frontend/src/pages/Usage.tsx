@@ -136,6 +136,7 @@ export default function Usage() {
       setLogTotal(logPage.total ?? 0);
       setPage(1);
       setPrices(priceList.items ?? []);
+      setPriceEdits({}); // 服务端价目已是最新，丢弃本地残留的行内编辑态
       setNeedAuth(false);
       setError('');
     } catch (e: any) {
@@ -199,6 +200,12 @@ export default function Usage() {
       });
       const r = await getUsagePrices();
       setPrices(r.items ?? []);
+      setPriceEdits((m) => {
+        if (!(model in m)) return m;
+        const rest = { ...m };
+        delete rest[model];
+        return rest;
+      });
       flash(true, `价目已保存：${model.trim()}`);
       return true;
     } catch (e: any) {
@@ -366,10 +373,10 @@ export default function Usage() {
                     <tr key={p.model} className="border-b border-radar-border/50 hover:bg-radar-panel/50">
                       <td className="px-4 py-2 text-slate-200 font-mono">{p.model}</td>
                       <td className="px-2 py-2">
-                        <PriceInput value={edit ? edit.in : String(p.price_input)} onChange={(v) => setPriceEdits((m) => ({ ...m, [p.model]: { in: v, out: m[p.model]?.out ?? String(p.price_output) } }))} />
+                        <PriceInput value={edit ? edit.in : String(p.price_input)} onChange={(v) => setPriceEdits((m) => ({ ...m, [p.model]: { in: v, out: m[p.model]?.out ?? String(p.price_output) } }))} ariaLabel={`编辑 ${p.model} 输入单价`} />
                       </td>
                       <td className="px-2 py-2">
-                        <PriceInput value={edit ? edit.out : String(p.price_output)} onChange={(v) => setPriceEdits((m) => ({ ...m, [p.model]: { in: m[p.model]?.in ?? String(p.price_input), out: v } }))} />
+                        <PriceInput value={edit ? edit.out : String(p.price_output)} onChange={(v) => setPriceEdits((m) => ({ ...m, [p.model]: { in: m[p.model]?.in ?? String(p.price_input), out: v } }))} ariaLabel={`编辑 ${p.model} 输出单价`} />
                       </td>
                       <td className="px-2 py-2 text-slate-500 whitespace-nowrap">{fmtTime(p.updated_at)}</td>
                       <td className="px-4 py-2 text-right">
@@ -392,14 +399,19 @@ export default function Usage() {
                       value={newPrice.model}
                       onChange={(e) => setNewPrice((s) => ({ ...s, model: e.target.value }))}
                       placeholder="模型名，如 glm-4-flash"
+                      aria-label="新增模型名"
                       className="w-44 px-2 py-1 rounded bg-radar-panel border border-radar-border text-slate-200 outline-none focus:border-accent font-mono"
                     />
                   </td>
                   <td className="px-2 py-2">
-                    <PriceInput value={newPrice.in} onChange={(v) => setNewPrice((s) => ({ ...s, in: v }))} />
+                    <PriceInput
+                      value={newPrice.in}
+                      onChange={(v) => setNewPrice((s) => ({ ...s, in: v }))}
+                      ariaLabel="新增模型输入单价"
+                    />
                   </td>
                   <td className="px-2 py-2">
-                    <PriceInput value={newPrice.out} onChange={(v) => setNewPrice((s) => ({ ...s, out: v }))} />
+                    <PriceInput value={newPrice.out} onChange={(v) => setNewPrice((s) => ({ ...s, out: v }))} ariaLabel="新增模型输出单价" />
                   </td>
                   <td className="px-2 py-2 text-slate-500">—</td>
                   <td className="px-4 py-2 text-right">
@@ -545,12 +557,21 @@ function GroupTable({ title, rows }: { title: string; rows: UsageGroup[] }) {
   );
 }
 
-function PriceInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function PriceInput({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  ariaLabel: string;
+}) {
   return (
     <input
       value={value}
       onChange={(e) => onChange(e.target.value)}
       inputMode="decimal"
+      aria-label={ariaLabel}
       className="w-20 px-2 py-1 rounded bg-radar-panel border border-radar-border text-slate-200 outline-none focus:border-accent tabular-nums"
     />
   );

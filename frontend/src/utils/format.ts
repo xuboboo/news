@@ -42,6 +42,7 @@ export function fullTime(t: TimeLike): string {
 }
 
 export function formatScore(score: number): string {
+  if (!Number.isFinite(score)) return '—';
   return score >= 100 ? score.toFixed(0) : score.toFixed(1);
 }
 

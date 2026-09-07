@@ -1,6 +1,7 @@
 /**
  * 运维监控页：运行状态总览 / 运行时配置（含连通性测试）/ 任务执行记录 / 手动触发。
  * 数据源：/api/v2/admin/*（见 backend/app/api/v2/admin.py）。
+ * 鉴权：走全局登录会话（RequireAuth 已保证已登录），本页仅平台超管可见。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -17,21 +18,22 @@ import {
   Save,
   Server,
   ShieldCheck,
+  ShieldX,
   XCircle,
 } from 'lucide-react';
-import { PageHeader, StatCard, Loading } from '../components/common';
+import { PageHeader, StatCard } from '../components/common';
 import { loadReports } from '../api/client';
 import { usePageTitle } from '../utils/hooks';
+import { isSuperAdmin, setAnon, useAuth } from '../auth';
+import { logout as authLogout } from '../api/auth';
 import {
   AdminStatus,
   ConfigView,
   TaskRunItem,
-  getAdminToken,
   getConfig,
   getStatus,
   getTaskRuns,
   putConfig,
-  saveAdminToken,
   testEmbedding,
   testLlm,
   triggerCrawl,
@@ -49,7 +51,12 @@ const FIELD_LABELS: Record<string, string> = {
   crawler_interval_minutes: '采集间隔（分钟）',
   sim_threshold: '事件聚合相似度阈值',
   cluster_lookback_hours: '聚合回看窗口（小时）',
-  admin_token: '管理面板 Token',
+  admin_token: '管理后门 Token',
+  session_ttl_hours: '会话有效期（小时）',
+  login_max_attempts: '登录失败锁定阈值（次）',
+  login_lock_minutes: '登录锁定时长（分钟）',
+  cookie_secure: 'Cookie Secure（HTTPS 必开）',
+  audit_retention_days: '审计日志保留（天）',
 };
 
 const SENSITIVE = new Set(['llm_api_key', 'embedding_api_key', 'admin_token']);
@@ -59,6 +66,10 @@ const NUMERIC_RULES: Record<string, { min: number; max: number }> = {
   crawler_interval_minutes: { min: 1, max: 1440 },
   sim_threshold: { min: 0, max: 1 },
   cluster_lookback_hours: { min: 1, max: 720 },
+  session_ttl_hours: { min: 1, max: 8760 },
+  login_max_attempts: { min: 1, max: 100 },
+  login_lock_minutes: { min: 1, max: 1440 },
+  audit_retention_days: { min: 7, max: 3650 },
 };
 
 const GROUPS: { title: string; hint: string; keys: string[] }[] = [
@@ -78,9 +89,16 @@ const GROUPS: { title: string; hint: string; keys: string[] }[] = [
     keys: ['crawler_interval_minutes', 'sim_threshold', 'cluster_lookback_hours'],
   },
   {
-    title: '安全',
-    hint: '修改后立即生效；请妥善保管，丢失后需进数据库重置',
-    keys: ['admin_token'],
+    title: '安全与会话',
+    hint: '登录锁定 / 会话有效期 / 审计保留期；admin_token 仅作脚本应急后门',
+    keys: [
+      'admin_token',
+      'session_ttl_hours',
+      'login_max_attempts',
+      'login_lock_minutes',
+      'cookie_secure',
+      'audit_retention_days',
+    ],
   },
 ];
 
@@ -96,10 +114,8 @@ function fmtDuration(ms: number | null): string {
 
 export default function Admin() {
   usePageTitle('运维监控');
-  const [tokenInput, setTokenInput] = useState('');
-  const [authed, setAuthed] = useState(false);
-  const [authError, setAuthError] = useState('');
-  const [checking, setChecking] = useState(true);   // 初始自动登录进行中
+  const { user } = useAuth();
+  const allowed = isSuperAdmin(user);
   const [loadError, setLoadError] = useState('');   // 状态获取失败（非鉴权问题）
 
   const [status, setStatus] = useState<AdminStatus | null>(null);
@@ -108,7 +124,6 @@ export default function Admin() {
   const [runs, setRuns] = useState<TaskRunItem[]>([]);
 
   const [busy, setBusy] = useState('');
-  const [loginBusy, setLoginBusy] = useState(false);
   const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null);
   const [testResult, setTestResult] = useState<{ llm?: string; embedding?: string }>({});
   const [revealKeys, setRevealKeys] = useState<Set<string>>(new Set());
@@ -139,31 +154,6 @@ export default function Admin() {
       return next;
     });
 
-  const verifyToken = useCallback(async (token: string): Promise<boolean> => {
-    saveAdminToken(token);
-    try {
-      await getStatus();
-      setAuthed(true);
-      setAuthError('');
-      return true;
-    } catch (e: any) {
-      saveAdminToken('');
-      setAuthed(false);
-      setAuthError(e?.message ?? '验证失败');
-      return false;
-    }
-  }, []);  // 挂载即尝试用已保存的 Token（可能为空）登录：后端开启免鉴权模式时可直接进入
-  useEffect(() => {
-    const saved = getAdminToken();
-    verifyToken(saved)
-      .catch(() => {})
-      .finally(() => {
-        if (!saved) setAuthError('');
-        setChecking(false);
-      });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const refreshAll = useCallback(async () => {
     try {
       const [s, c, r] = await Promise.all([getStatus(), getConfig(), getTaskRuns(50)]);
@@ -172,20 +162,15 @@ export default function Admin() {
       setRuns(r.items ?? []);
       setLoadError('');
     } catch (e: any) {
-      if (e?.status === 401) {
-        // Token 失效才退回登录页；503/网络错误属于后端暂不可达，保留会话与旧数据
-        setAuthed(false);
-        setAuthError(e?.message ?? '登录已失效');
-      } else {
-        // 后端暂时不可达：保留旧数据，显示明确错误并等待 30s 自动重试
-        setLoadError(e?.message ?? '网络错误');
-      }
+      // 401 已由请求层全局处理（setAnon → 跳登录页）；这里只管网络/后端错误：
+      // 保留旧数据，显示明确错误并等待 30s 自动重试
+      setLoadError(e?.status === 401 ? '登录已失效' : e?.message ?? '网络错误');
     }
   }, []);
 
-  // 登录成功后拉取全量数据 + 每 30s 刷新状态
+  // 进入面板即拉全量数据 + 每 30s 刷新状态（会话失效由全局登录态接管）
   useEffect(() => {
-    if (authed) {
+    if (allowed) {
       refreshAll();
       const timer = setInterval(() => {
         getStatus()
@@ -193,17 +178,13 @@ export default function Admin() {
             setStatus(s);
             setLoadError('');
           })
-          .catch((e: any) => {
-            // 轮询期间 Token 被吊销/改密：退回登录页；其余错误静默等待下一轮
-            if (e?.status === 401) {
-              setAuthed(false);
-              setAuthError('登录已失效，请重新登录');
-            }
+          .catch(() => {
+            /* 轮询错误静默等待下一轮 */
           });
       }, 30000);
       return () => clearInterval(timer);
     }
-  }, [authed, refreshAll]);
+  }, [allowed, refreshAll]);
 
   // ———— 配置编辑 ————
   // 敏感键（api_key/admin_token）后端不回传明文：留空 = 不修改，输入了内容才算待保存的修改
@@ -230,25 +211,13 @@ export default function Admin() {
     return out;
   }, [edits]);
 
-  const logout = () => {
-    saveAdminToken('');
-    setAuthed(false);
-    setTokenInput('');
-    setStatus(null);
-    setConfig(null);
-    setRuns([]);
-    setEdits({});
-    setAuthError('');
-  };
-
-  /** 手动登录：防连点（自动登录验证不打此状态，避免初始加载闪烁） */
-  const login = async () => {
-    if (!tokenInput || loginBusy) return;
-    setLoginBusy(true);
+  /** 退出登录：吊销当前会话并回到登录页（全局登录态接管跳转） */
+  const logout = async () => {
     try {
-      await verifyToken(tokenInput);
+      await authLogout();
     } finally {
-      setLoginBusy(false);
+      setRevealKeys(new Set());
+      setAnon();
     }
   };
 
@@ -325,7 +294,7 @@ export default function Admin() {
     try {
       const fn = name === 'crawl' ? triggerCrawl : name === 'events' ? triggerEvents : triggerReport;
       await fn();
-      flash(true, '任务已入队，稍后可在"任务执行记录"查看结果');
+      flash(true, '任务已入队，稍后可在「任务执行记录」查看结果');
       later(() => {
         getTaskRuns(50).then((r) => setRuns(r.items ?? [])).catch(() => {});
         // 日报生成入队后同步强制刷新日报缓存（绕过 60s 节流），科技日报页即可见
@@ -338,55 +307,21 @@ export default function Admin() {
     }
   };
 
-  // ———— 登录界面（初始自动登录期间显示加载动画，避免闪现表单） ————
-  if (checking) {
+  // ———— 访问控制（会话有效性由 RequireAuth 保证；这里只拦角色） ————
+  if (!allowed) {
     return (
       <div>
-        <PageHeader title="运维监控" description="服务管理面板 · 正在连接后端…" />
-        <Loading />
-      </div>
-    );
-  }
-
-  if (!authed) {
-    return (
-      <div>
-        <PageHeader title="运维监控" description="服务管理面板 · 需管理员 Token 登录" />
-        <div className="max-w-md card p-6 mx-auto mt-16">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 rounded-lg bg-accent/10 text-accent">
-              <ShieldCheck className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="text-sm font-semibold text-slate-100">管理员登录</div>
-              <div className="text-[11px] text-slate-500">Token 对应后端 .env 的 ADMIN_TOKEN</div>
-            </div>
+        <PageHeader title="运维监控" description="服务管理面板 · 仅平台超管可见" />
+        <div className="max-w-md card p-8 mx-auto mt-16 text-center">
+          <div className="mx-auto mb-4 w-fit p-3 rounded-xl bg-red-500/10 text-red-400">
+            <ShieldX className="h-7 w-7" />
           </div>
-          <input
-            type="password"
-            autoFocus
-            value={tokenInput}
-            onChange={(e) => setTokenInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && void login()}
-            placeholder="输入管理 Token"
-            autoComplete="off"
-            aria-label="管理员 Token"
-            className="w-full px-3 py-2 rounded-lg bg-radar-panel border border-radar-border text-sm text-slate-200 outline-none focus:border-accent"
-          />
-          {authError && (
-            <div className="mt-3 text-xs text-red-400 flex items-start gap-1.5">
-              <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-              <span>{authError}</span>
-            </div>
-          )}
-          <button
-            onClick={() => void login()}
-            disabled={!tokenInput || loginBusy}
-            className="mt-4 w-full py-2 rounded-lg bg-accent/90 hover:bg-accent text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-          >
-            {loginBusy && <Loader2 className="h-4 w-4 animate-spin" />}
-            {loginBusy ? '验证中…' : '登录'}
-          </button>
+          <div className="text-sm font-semibold text-slate-100 mb-1.5">无访问权限</div>
+          <p className="text-xs text-slate-500 leading-5">
+            运维监控仅对「平台超管」开放。
+            <br />
+            当前账号：{user?.email}（{user?.role === 'tenant_admin' ? '租户管理员' : '成员'}）
+          </p>
         </div>
       </div>
     );
@@ -405,7 +340,7 @@ export default function Admin() {
           <RefreshCw className="h-3.5 w-3.5" /> 刷新
         </button>
         <button
-          onClick={logout}
+          onClick={() => void logout()}
           className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-red-300 hover:border-red-400/40"
         >
           <LogOut className="h-3.5 w-3.5" /> 退出登录
@@ -464,7 +399,7 @@ export default function Admin() {
             icon={<Server className="h-4 w-4" />}
             label="Redis"
             ok={!!infra?.redis}
-            sub={infra?.redis ? `连通 · ${infra.redis_latency_ms ?? '—'}ms` : '连接失败'}
+            sub={infra?.redis ? `连通 · ${infra.redis_latency_ms != null ? `${infra.redis_latency_ms}ms` : '—'}` : '连接失败'}
           />
           <HealthCard
             icon={<Bot className="h-4 w-4" />}
@@ -547,7 +482,7 @@ export default function Admin() {
                         >
                           {item.source === 'db' ? 'DB 覆盖' : '.env 默认'}
                         </span>
-                        {changed && <span className="text-[10px] text-amber-400">已修改</span>}
+                        {changed && <span className="text-[10px] text-amber-300">已修改</span>}
                         {isSensitive && item.overridden && (
                           <button
                             type="button"

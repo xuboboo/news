@@ -1,4 +1,5 @@
 import { X, Eye, MessageSquare, Share2, ExternalLink, Link2, Zap } from 'lucide-react';
+import { useRef } from 'react';
 import { ArticleWithScore, EventStatus } from '../types';
 import {
   AiBadge,
@@ -7,11 +8,11 @@ import {
   TagChip,
 } from './common';
 import { dateLabel, formatCount, fullTime, timeAgo } from '../utils/format';
-import { eventsForArticle } from '../api/client';
+import { ARTICLES_WITH_SCORE, eventsForArticle } from '../api/client';
 import { useModalA11y } from '../utils/hooks';
 
 export default function ArticleModal({
-  article,
+  article: propArticle,
   onClose,
   onOpenEvent,
 }: {
@@ -19,15 +20,25 @@ export default function ArticleModal({
   onClose: () => void;
   onOpenEvent: (eventId: string) => void;
 }) {
+  // 按.id 重查最新数据：后台 60s 刷新后父页面 state 里的对象快照会过期
+  // （阅读数/摘要不更新甚至文章已滚出列表），以最新数据为准
+  const article = ARTICLES_WITH_SCORE.find((a) => a.id === propArticle.id) ?? propArticle;
   const relatedEvents = eventsForArticle(article.id);
   const s = article.summary;
   const hasSummary = s.summary_short.trim() !== '' || s.key_points.length > 0;
   const dialogRef = useModalA11y(onClose);
+  // 记录 mousedown 是否起始于遮罩自身：从弹窗内拖选文本到外部松开不应误关
+  const downOnOverlay = useRef(false);
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[rgb(0_0_0/var(--overlay-alpha))] backdrop-blur-sm"
-      onClick={onClose}
+      onMouseDown={(e) => {
+        downOnOverlay.current = e.target === e.currentTarget;
+      }}
+      onClick={(e) => {
+        if (downOnOverlay.current && e.target === e.currentTarget) onClose();
+      }}
       role="presentation"
     >
       <div
@@ -64,6 +75,7 @@ export default function ArticleModal({
             <button
               onClick={onClose}
               className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-radar-card"
+              aria-label="关闭"
               title="关闭"
             >
               <X className="h-5 w-5" />

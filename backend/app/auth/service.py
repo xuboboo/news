@@ -11,6 +11,12 @@ from app.models.user import User
 from app.services import audit_service, config_service
 
 MIN_PASSWORD_LEN = 8
+# bcrypt 只取输入前 72 字节：超长部分会被静默截断，改为显式拒绝
+MAX_PASSWORD_LEN = 72
+
+# 防用户枚举的时序拉平桩：对不存在的邮箱也执行一次同成本 bcrypt 校验，
+# 使「邮箱不存在」与「密码错误」的响应耗时一致（模块导入时算一次，约 200ms）
+_ENUM_GUARD_HASH = passwords.hash_password("timing-equalizer-dummy-account")
 
 
 def _now() -> datetime:
@@ -58,7 +64,16 @@ def login(db: Session, request: Request, response: Response, email: str, passwor
         raise HTTPException(status, message)
 
     if user is None or user.status != "active":
+        passwords.verify_password(password or "", _ENUM_GUARD_HASH)  # 时序拉平，防枚举
         _fail("auth.login_failed", 401, "邮箱或密码错误")
+
+    # 租户停用必须在登录口明确拒绝：否则用户"登录成功"后每个请求都 403，
+    # 前端只会反复弹回登录页且无任何提示（2026-09-08 审计缺陷 A）
+    from app.models.tenant import Tenant
+    tenant = db.get(Tenant, user.tenant_id)
+    if tenant is None or tenant.status != "active":
+        _fail("auth.login_failed", 403, "所属租户已停用，请联系平台管理员",
+              {"tenant_disabled": True})
 
     if user.locked_until and user.locked_until > _now():
         retry_min = max(1, int((user.locked_until - _now()).total_seconds() // 60) + 1)
@@ -111,6 +126,8 @@ def change_password(
         raise HTTPException(400, "当前密码错误")
     if len(new_password or "") < MIN_PASSWORD_LEN:
         raise HTTPException(400, f"新密码至少 {MIN_PASSWORD_LEN} 位")
+    if len((new_password or "").encode("utf-8")) > MAX_PASSWORD_LEN:
+        raise HTTPException(400, "新密码过长（最多 72 字节）")
     user.password_hash = passwords.hash_password(new_password)
     user.must_change_password = False
     user.failed_attempts = 0

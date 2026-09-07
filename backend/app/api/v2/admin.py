@@ -64,7 +64,9 @@ def require_admin(
             503,
             "admin_token 未配置：请在后端 .env 设置 ADMIN_TOKEN（或向 system_setting 表插入 key=admin_token），并重启/生效后重试",
         )
-    if not x_admin_token or not hmac.compare_digest(str(x_admin_token), effective):
+    if not x_admin_token or not hmac.compare_digest(
+        str(x_admin_token).encode(), str(effective).encode()
+    ):
         raise HTTPException(401, "admin token 无效")
 
 

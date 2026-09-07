@@ -130,6 +130,7 @@ export default function HotBoard() {
           <button
             key={c}
             onClick={() => setFilter('channel', c)}
+            aria-pressed={channel === c}
             className={`chip border px-3 py-1.5 cursor-pointer transition-colors ${
               channel === c
                 ? 'bg-accent/15 text-accent border-accent/40'
@@ -144,6 +145,7 @@ export default function HotBoard() {
           <button
             key={w.key}
             onClick={() => setFilter('win', w.key)}
+            aria-pressed={winKey === w.key}
             className={`chip border px-3 py-1.5 cursor-pointer transition-colors ${
               winKey === w.key
                 ? 'bg-orange-500/15 text-orange-300 border-orange-400/40'

@@ -79,9 +79,13 @@ export default function DailyReport() {
   useEffect(() => {
     if (!effectiveDateKey || cachedReport) return;
     let cancelled = false;
-    fetchDailyReport(effectiveDateKey).then((view) => {
-      if (!cancelled) setFetched({ date: effectiveDateKey, view });
-    });
+    fetchDailyReport(effectiveDateKey)
+      .then((view) => {
+        if (!cancelled) setFetched({ date: effectiveDateKey, view });
+      })
+      .catch(() => {
+        if (!cancelled) setFetched({ date: effectiveDateKey, view: null });
+      });
     return () => {
       cancelled = true;
     };
@@ -102,6 +106,7 @@ export default function DailyReport() {
               <button
                 key={d.key}
                 onClick={() => setDateKey(d.key)}
+                aria-pressed={effectiveDateKey === d.key}
                 className={`chip border px-3 py-1.5 cursor-pointer transition-colors ${
                   effectiveDateKey === d.key
                     ? 'bg-accent/15 text-accent border-accent/40'
@@ -151,6 +156,7 @@ export default function DailyReport() {
             <button
               key={d.key}
               onClick={() => setDateKey(d.key)}
+              aria-pressed={effectiveDateKey === d.key}
               className={`chip border px-3 py-1.5 cursor-pointer transition-colors ${
                 effectiveDateKey === d.key
                   ? 'bg-accent/15 text-accent border-accent/40'
@@ -400,7 +406,7 @@ export default function DailyReport() {
               <li>· 本报告由 report_task 于每日 08:00 自动生成</li>
               <li>· 事件摘要基于 event 聚合结果与 AI 总结交叉生成</li>
               <li>· 热度算法：HotScore = Engagement × TimeDecay</li>
-              <li>· 数据来源：IT之家体系 4 频道 · {report.sourceStats.length} 家媒体</li>
+              <li>· 数据来源：软件之家 / Win11之家 / Win10之家 / 智能时代 · {report.sourceStats.length} 家媒体</li>
             </ul>
           </section>
         </div>

@@ -52,6 +52,7 @@ export default function Audit() {
   const [page, setPage] = useState(1);
   const [action, setAction] = useState('');
   const [q, setQ] = useState('');
+  const [committedQ, setCommittedQ] = useState(''); // 回车提交的筛选值（避免逐键请求）
   const [actions, setActions] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -61,7 +62,7 @@ export default function Audit() {
     try {
       const r = await getAuditLogs({
         action: action || undefined,
-        q: q || undefined,
+        q: committedQ.trim() || undefined,
         page,
         page_size: PAGE_SIZE,
       });
@@ -72,7 +73,7 @@ export default function Audit() {
     } finally {
       setBusy(false);
     }
-  }, [allowed, action, q, page]);
+  }, [allowed, action, committedQ, page]);
 
   useEffect(() => {
     if (allowed) {
@@ -142,8 +143,8 @@ export default function Audit() {
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
+                setCommittedQ(q); // 提交后由依赖 committedQ/page 的 effect 统一加载
                 setPage(1);
-                void load();
               }
             }}
             placeholder="按操作者邮箱筛选，回车确认"

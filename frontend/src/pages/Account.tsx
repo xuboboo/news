@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '../components/common';
 import { usePageTitle } from '../utils/hooks';
-import { markPasswordChanged, useAuth } from '../auth';
+import { markPasswordChanged, setAnon, useAuth } from '../auth';
 import {
   SessionItem,
   changePassword,
@@ -112,6 +112,9 @@ export default function Account() {
     try {
       await authLogout();
     } finally {
+      // 与 Layout/Admin 的登出对齐：先清全局登录态再跳转，
+      // 否则 RequireAuth/Login 的 authed 早退分支会把已登出用户弹回业务页
+      setAnon();
       navigate('/login', { replace: true });
     }
   };

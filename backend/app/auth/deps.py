@@ -3,11 +3,15 @@
 会话载体：HttpOnly Cookie（SameSite=Lax）。当前用户/会话挂到 request.state，
 供审计埋点与业务端点复用。
 """
+import hmac
+
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.auth import sessions as session_store
+from app.core.config import get_settings
 from app.core.db import get_db
+from app.services import config_service
 from app.models.tenant import Tenant
 from app.models.user import (
     ROLE_MEMBER,
@@ -35,8 +39,34 @@ def _authenticate(request: Request, db: Session) -> tuple[User, object]:
     return user, row
 
 
-def require_user(request: Request, db: Session = Depends(get_db)) -> User:
-    user, row = _authenticate(request, db)
+def _admin_token_ok(request: Request, db: Session) -> bool:
+    """X-Admin-Token 应急通道校验（与 admin.require_admin 同源，供脚本/回归使用）。"""
+    token = request.headers.get("x-admin-token") or ""
+    if not token:
+        return False
+    try:
+        effective = config_service.get_effective(db, "admin_token")
+        if not effective:
+            return False
+        return hmac.compare_digest(token.encode(), str(effective).encode())
+    except Exception:
+        return False
+
+
+def require_user(request: Request, db: Session = Depends(get_db)) -> User | None:
+    try:
+        user, row = _authenticate(request, db)
+    except HTTPException as exc:
+        if exc.status_code == 401 and _admin_token_ok(request, db):
+            # 应急后门：token 视为超管等价，脚本无需 Cookie 会话
+            # （业务路由挂载处丢弃返回值；审计埋点 current_user 保持为空）
+            return None
+        raise
+    # 首登强制改密：服务端兜底（前端仅是引导），只放行认证域接口
+    if getattr(user, "must_change_password", False) and not request.url.path.startswith(
+        "/api/v2/auth"
+    ):
+        raise HTTPException(403, "首次登录请先修改密码")
     request.state.current_user = user
     request.state.current_session = row
     return user
