@@ -1,0 +1,102 @@
+name: hj-tech-radar
+
+services:
+  # ---------- 数据层 ----------
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: hjradar
+      # 密码从 .env 注入（首次建库生效）；已有卷轮换口令见 .env.example 检查单
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hjradar}
+      POSTGRES_DB: hjradar
+      TZ: Asia/Shanghai
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # 不向宿主机发布端口：仅容器网络内可达；临时调试用
+    # docker compose exec postgres psql -U hjradar -d hjradar
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hjradar -d hjradar"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ---------- 后端 API ----------
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      # 仅绑定本机回环：公网入口统一走 nginx(80)，避免管理接口直接暴露
+      - "127.0.0.1:18000:8000"
+    restart: unless-stopped
+
+  # ---------- 任务队列 ----------
+  worker:        # 默认队列：事件聚合 / 日报
+    build: ./backend
+    env_file: ./backend/.env
+    command: celery -A app.tasks.celery_app worker -Q default -c 4 --loglevel=INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ai-worker:     # AI 队列：摘要 / Embedding
+    build: ./backend
+    env_file: ./backend/.env
+    command: celery -A app.tasks.celery_app worker -Q ai -c 2 --loglevel=INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  beat:          # 定时调度：事件聚类 10min / 日报每日 08:00（生成昨日报告）
+    build: ./backend
+    env_file: ./backend/.env
+    command: celery -A app.tasks.celery_app beat --loglevel=INFO
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------- 采集服务 ----------
+  crawler:       # 常驻循环：RSS 采集 → 入库 → 派发 AI 任务
+    build: ./backend
+    env_file: ./backend/.env
+    command: python -m app.crawler.loop
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------- 前端 + Nginx ----------
+  nginx:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

@@ -1,0 +1,22 @@
+# 密钥与本地配置（真实配置不上传，保留 .env.example）
+.env
+backend/.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node / 前端
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# 日志与运行时
+logs/
+*.log
+
+# 工具/编辑器
+.zcode/
+.DS_Store
