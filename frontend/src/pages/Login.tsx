@@ -30,7 +30,6 @@ function BrandPanel() {
   return (
     <div
       className="relative hidden w-[47%] shrink-0 select-none flex-col justify-between overflow-hidden bg-[#060A14] lg:flex lg:w-[52%]"
-      aria-hidden={false}
     >
       {/* 极淡网格底纹 */}
       <div
@@ -118,20 +117,24 @@ function BrandPanel() {
 function FloatInput({
   id,
   label,
+  name,
   type = 'text',
   value,
   onChange,
   onKeyDown,
+  onBlur,
   autoComplete,
   autoFocus,
   trailing,
 }: {
   id: string;
   label: string;
+  name: string;
   type?: string;
   value: string;
   onChange: (v: string) => void;
   onKeyDown?: (e: ReactKeyboardEvent<HTMLInputElement>) => void;
+  onBlur?: () => void;
   autoComplete?: string;
   autoFocus?: boolean;
   trailing?: React.ReactNode;
@@ -140,6 +143,7 @@ function FloatInput({
     <label htmlFor={id} className="relative block">
       <input
         id={id}
+        name={name}
         type={type}
         placeholder=" "
         autoComplete={autoComplete}
@@ -147,6 +151,7 @@ function FloatInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
+        onBlur={onBlur}
         className={`peer h-14 w-full rounded-xl border border-radar-border bg-radar-panel/70 px-4 ${
           trailing ? 'pr-12' : ''
         } pt-[22px] pb-2 text-[15px] text-slate-100 outline-none transition-colors duration-150 placeholder-transparent hover:border-radar-border/80 focus:border-accent/70 focus:bg-radar-panel`}
@@ -243,6 +248,7 @@ export default function Login() {
               <FloatInput
                 id="login-email"
                 label="邮箱"
+                name="email"
                 type="email"
                 autoComplete="username"
                 autoFocus
@@ -252,11 +258,13 @@ export default function Login() {
               <FloatInput
                 id="login-password"
                 label="密码"
+                name="password"
                 type={showPwd ? 'text' : 'password'}
                 autoComplete="current-password"
                 value={password}
                 onChange={setPassword}
                 onKeyDown={(e) => checkCaps(e)}
+                onBlur={() => setCapsOn(false)}
                 trailing={
                   <button
                     type="button"

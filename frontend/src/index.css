@@ -410,3 +410,14 @@
   .radar-sweep { animation: none; opacity: 0.35; }
   .radar-blip { animation: none; opacity: 0.5; }
 }
+
+/* ———— 自动填充视觉修复 /*autofill-visual-fix*/
+/* Chrome 对 autofill 输入框强加浅蓝底色，深色输入框上非常突兀；
+   用无限过渡绕过（保留 -webkit-text-fill-color 继承文字颜色） */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: inherit;
+  caret-color: inherit;
+  transition: background-color 99999s ease-in-out 0s, color 99999s ease-in-out 0s;
+}

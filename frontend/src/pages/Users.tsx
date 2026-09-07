@@ -122,26 +122,30 @@ export default function Users() {
 
   const [page, setPage] = useState(1);
 
-  const loadUsers = useCallback(async () => {
-    if (!canManage) return;
-    setListBusy(true);
-    try {
-      const r = await getUsers({
-        q: q || undefined,
-        status: statusFilter || undefined,
-        tenant_id: tenantFilter ? Number(tenantFilter) : undefined,
-        page,
-        page_size: PAGE_SIZE,
-      });
-      setUsers(r.items ?? []);
-      setTotal(r.total);
-    } catch (e: any) {
-      flash(false, `加载用户失败：${e?.message ?? e}`);
-      setUsers([]);
-    } finally {
-      setListBusy(false);
-    }
-  }, [canManage, q, statusFilter, tenantFilter, page, flash]);
+  /** 拉取用户列表：可显式指定页码（翻页/重置查询时避免读到过期的 page 闭包值） */
+  const loadUsers = useCallback(
+    async (targetPage?: number) => {
+      if (!canManage) return;
+      setListBusy(true);
+      try {
+        const r = await getUsers({
+          q: q || undefined,
+          status: statusFilter || undefined,
+          tenant_id: tenantFilter ? Number(tenantFilter) : undefined,
+          page: targetPage ?? page,
+          page_size: PAGE_SIZE,
+        });
+        setUsers(r.items ?? []);
+        setTotal(r.total);
+      } catch (e: any) {
+        flash(false, `加载用户失败：${e?.message ?? e}`);
+        setUsers([]);
+      } finally {
+        setListBusy(false);
+      }
+    },
+    [canManage, q, statusFilter, tenantFilter, page, flash]
+  );
 
   const loadTenants = useCallback(async () => {
     if (!superAdmin) return;
@@ -240,7 +244,7 @@ export default function Users() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     setPage(1);
-                    void loadUsers();
+                    void loadUsers(1);
                   }
                 }}
                 placeholder="搜索邮箱 / 姓名，回车确认"
@@ -275,7 +279,7 @@ export default function Users() {
             <button
               onClick={() => {
                 setPage(1);
-                void loadUsers();
+                void loadUsers(1);
               }}
               className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-accent cursor-pointer"
             >
@@ -333,7 +337,11 @@ export default function Users() {
             <div className="flex items-center justify-end gap-3 text-xs text-slate-400">
               <span>第 {page} / {Math.max(1, Math.ceil(total / PAGE_SIZE))} 页 · 共 {total} 个账号</span>
               <button
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                onClick={() => {
+                  const prev = Math.max(1, page - 1);
+                  setPage(prev);
+                  void loadUsers(prev);
+                }}
                 disabled={page <= 1}
                 className="chip border border-radar-border bg-radar-card disabled:opacity-30 cursor-pointer"
                 aria-label="上一页"
@@ -341,7 +349,11 @@ export default function Users() {
                 <ChevronLeft className="h-3.5 w-3.5" />
               </button>
               <button
-                onClick={() => setPage((p) => Math.min(Math.ceil(total / PAGE_SIZE), p + 1))}
+                onClick={() => {
+                  const next = Math.min(Math.ceil(total / PAGE_SIZE), page + 1);
+                  setPage(next);
+                  void loadUsers(next);
+                }}
                 disabled={page >= Math.ceil(total / PAGE_SIZE)}
                 className="chip border border-radar-border bg-radar-card disabled:opacity-30 cursor-pointer"
                 aria-label="下一页"
@@ -765,12 +777,25 @@ function CreatedPasswordModal({
 }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
+    const text = `账号：${email}\n初始密码：${password}`;
     try {
-      await navigator.clipboard.writeText(`账号：${email}\n初始密码：${password}`);
+      // 非安全上下文（如 http://局域网IP）没有 clipboard API，降级为临时选区复制
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     } catch {
-      /* 剪贴板不可用（非安全上下文等），用户可手动选择复制 */
+      /* 复制失败（权限拒绝等），用户可手动选择文本复制 */
     }
   };
   return (
