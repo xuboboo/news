@@ -72,6 +72,9 @@ STATS_FIRST_POLL_DELAY_MINUTES = 45
 _LINK_CHECK_TTL_SECONDS = 2 * 3600
 _LINK_CHECKED: dict[str, float] = {}
 
+# 轮内请求间隔：单轮约 130 篇文章页请求，留礼貌间隔降低 403 风险（403 兜底走域名退避）
+_POLITENESS_SLEEP_SECONDS = 0.3
+
 _NID = re.compile(r"ithome\.com/0/(\d+)/(\d+)\.htm")
 
 _ARTICLE_HREF = re.compile(r'href="([^"]*/0/\d+/\d+\.htm)(?:[?#][^"]*)?"')
@@ -180,12 +183,13 @@ def _decode_response(resp: httpx.Response) -> str:
 _PAGE_TIME_RE = re.compile(r"(\d{4})/(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})")
 
 
-def _parse_article_page(link: str) -> tuple[str, datetime, str] | None:
-    """解析文章页：返回 (标题, 发布时间, 正文)；失败返回 None。"""
-    resp = _fetch(link)
-    if resp is None or resp.status_code != 200:
-        return None
-    soup = BeautifulSoup(resp.text, "html.parser")
+def _parse_article_html(text: str) -> tuple[str, datetime, str] | None:
+    """解析文章页 HTML：返回 (标题, 发布时间, 正文)；结构缺失返回 None。
+
+    纯解析、不做网络请求：抓取由调用方负责——网络失败是瞬态（不该写链接缓存），
+    与结构解析失败（确定性）语义不同。
+    """
+    soup = BeautifulSoup(text, "html.parser")
     h1 = soup.select_one("h1")
     title = h1.get_text(strip=True) if h1 else ""
     if not title:
@@ -193,7 +197,7 @@ def _parse_article_page(link: str) -> tuple[str, datetime, str] | None:
         title = og.get("content", "").strip() if og else ""
     if not title:
         return None
-    m = _PAGE_TIME_RE.search(resp.text)
+    m = _PAGE_TIME_RE.search(text)
     if not m:
         return None
     try:
@@ -205,6 +209,9 @@ def _parse_article_page(link: str) -> tuple[str, datetime, str] | None:
         return None
     node = soup.select_one("#paragraph") or soup.select_one(".post_content")
     content = node.get_text(" ", strip=True) if node else ""
+    if not content:
+        # 正文容器缺失（站点改版征兆）：拒收，避免入库"只有标题"的半截数据
+        return None
     return title, published, clean_content(content)
 
 
@@ -261,11 +268,22 @@ def _ingest_page_channel(
             skipped += 1
             continue
 
-        parsed = _parse_article_page(link)
-        _LINK_CHECKED[link] = now_ts
+        # 抓取与解析分离：网络失败（超时/限流退避）是瞬态，不写链接缓存，
+        # 否则轮中一次 403 触发域名退避后，当轮剩余链接会被集体标记"已处理"拉黑 2 小时
+        resp = _fetch(link)
+        if resp is None or resp.status_code != 200:
+            continue
+        time.sleep(_POLITENESS_SLEEP_SECONDS)
+        parsed = _parse_article_html(_decode_response(resp))
+        _LINK_CHECKED[link] = now_ts  # 页面已取到，解析结论是确定性的
         if parsed is None:
             continue
         title, published, content = parsed
+
+        # 站点时钟异常/时间正则误匹配的防御：未来时间直接拒收
+        if published > now + timedelta(minutes=10):
+            skipped += 1
+            continue
 
         # 页面含历史文章：超出时间窗口的旧文不入库
         age_h = (now - published).total_seconds() / 3600

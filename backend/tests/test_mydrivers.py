@@ -1,13 +1,17 @@
-"""快科技爬虫纯函数单测：链接提取 / news_id / 面包屑解析 / 时间解析 / 正文清洗。
+"""快科技爬虫单测：链接提取 / news_id / 面包屑解析 / 时间解析 / 正文清洗 / 文章页解析。
 
-样本片段取自 2026-09 实抓文章页（news.mydrivers.com/1/1149/1149297.htm）与入口页结构。
+样本取自 2026-09 实抓页面（news.mydrivers.com/1/1149/1149297.htm 等）；
+fixtures/kj_article_sample.html 为真实页面结构的最小化样本。
 """
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 from bs4 import BeautifulSoup
 
 from app.crawler.mydrivers import (
     _PAGE_TIME_RE,
+    _parse_article_html,
     clean_content,
     extract_article_links,
     extract_feed_items,
@@ -95,6 +99,32 @@ def test_publish_time_is_utc():
 def test_clean_content():
     assert clean_content("a  b\n\nc") == "a b c"
     assert clean_content("") == ""
+
+
+def _sample_article_html() -> str:
+    return (Path(__file__).parent / "fixtures" / "kj_article_sample.html").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_parse_article_html_full_pipeline():
+    """真实页面结构样本 → 标题/时间/正文/面包屑端到端解析（站点改版时的回归哨兵）。"""
+    parsed = _parse_article_html(_sample_article_html())
+    assert parsed is not None
+    title, published, content, (category, channel) = parsed
+    assert title == "8GB内存PC性能实测：Win11真是拖后腿 空闲就吃掉85%内存"
+    assert (published.hour, published.minute) == (11, 38)  # 北京 19:38 → UTC
+    assert published.tzinfo == timezone.utc
+    assert (category, channel) == ("软件之家", "桌面系统")
+    assert content.startswith("快科技9月7日消息")  # 导语按窄口径保留
+    assert "日本媒体就在8GB内存" in content
+    # 正文不含标签页/面包屑等非正文内容
+    assert "IT采购专业调查" not in content and "Windows 11" not in content.split("消息，")[0]
+
+
+def test_parse_article_html_missing_body_rejected():
+    html = re.sub(r'<div class="news_info">.*?</div>', "", _sample_article_html(), flags=re.S)
+    assert _parse_article_html(html) is None  # 正文容器缺失：拒收而非入库半截数据
 
 
 FEED_XML = """

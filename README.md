@@ -44,7 +44,7 @@
 
 ```mermaid
 flowchart LR
-    SRC[IT之家四频道子站<br/>win11/win10/soft/next.ithome.com<br/>+ 快科技全站流 technewsall] --> CR[crawler 常驻采集<br/>IT之家页面即频道真相<br/>快科技面包屑即频道真相]
+    SRC[IT之家四频道子站<br/>win11/win10/soft/next.ithome.com<br/>+ 快科技全站流 technewsall<br/>+ 官方软件栏目 RSS] --> CR[crawler 常驻采集<br/>IT之家页面即频道真相<br/>快科技面包屑即频道真相]
     CR --> PG[(PostgreSQL 16<br/>+ pgvector)]
     PG --> RD{{Redis 任务队列}}
     RD --> AI[ai-worker<br/>AI 摘要 / Embedding]
