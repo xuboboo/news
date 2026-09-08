@@ -13,8 +13,10 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 LOCK_CRAWLER = "crawler"
-# 采集单轮理论耗时 ≪ 30min（每源限流 + 每篇 15s 超时）；TTL 仅兜底进程崩溃
-LOCK_CRAWLER_TTL_MS = 30 * 60 * 1000
+# 双来源（IT之家 + 快科技，crawler/multi.py）单轮最坏耗时：约 330 次文章页请求
+# × 15s 超时 + 间隔，站点整体变慢时可逼近 1h；TTL 仅兜底进程崩溃（崩溃后最长
+# 这么久才自动放行），数据正确性由 URL 唯一约束 + SAVEPOINT 兜底
+LOCK_CRAWLER_TTL_MS = 60 * 60 * 1000
 
 LOCK_STATS = "stats"
 # 最坏轮次 = 批次 50 × 2 请求 × 8s 超时 + 间隔 ≈ 14min ≪ 30min；TTL 仅兜底进程崩溃

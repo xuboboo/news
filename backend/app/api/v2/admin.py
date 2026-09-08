@@ -309,8 +309,10 @@ def admin_status(db: Session = Depends(get_db)):
             > 0
         )
 
-    # 互动数据轮询水位（crawler/stats.py）：到期/待回填/已放弃/近24h成功轮询
-    from app.crawler.stats import GIVE_UP_FAILS
+    # 互动数据轮询水位（crawler/stats.py）：到期/待回填/已放弃/近24h成功轮询。
+    # 范围与 poll_due_articles 同口径（stats_source_filter）：仅 IT之家——
+    # 其他来源不排期轮询，漏加会让「待回填」永远清不掉
+    from app.crawler.stats import GIVE_UP_FAILS, stats_source_filter
 
     now_utc = datetime.now(timezone.utc)
     stats_since = now_utc - timedelta(hours=24)
@@ -320,7 +322,7 @@ def admin_status(db: Session = Depends(get_db)):
         stats_enabled = None
     due_now = (
         db.query(func.count(Article.id))
-        .filter(Article.stats_next_poll_at.isnot(None), Article.stats_next_poll_at <= now_utc)
+        .filter(stats_source_filter(), Article.stats_next_poll_at.isnot(None), Article.stats_next_poll_at <= now_utc)
         .scalar() or 0
     )
     unscheduled = and_(
@@ -328,17 +330,17 @@ def admin_status(db: Session = Depends(get_db)):
     )
     pending_backfill = (
         db.query(func.count(Article.id))
-        .filter(unscheduled, Article.stats_fail_count < GIVE_UP_FAILS)
+        .filter(stats_source_filter(), unscheduled, Article.stats_fail_count < GIVE_UP_FAILS)
         .scalar() or 0
     )
     gave_up = (
         db.query(func.count(Article.id))
-        .filter(unscheduled, Article.stats_fail_count >= GIVE_UP_FAILS)
+        .filter(stats_source_filter(), unscheduled, Article.stats_fail_count >= GIVE_UP_FAILS)
         .scalar() or 0
     )
     polled_24h = (
         db.query(func.count(Article.id))
-        .filter(Article.stats_polled_at.isnot(None), Article.stats_polled_at >= stats_since)
+        .filter(stats_source_filter(), Article.stats_polled_at.isnot(None), Article.stats_polled_at >= stats_since)
         .scalar() or 0
     )
     last_stats_run = (
