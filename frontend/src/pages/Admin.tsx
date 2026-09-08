@@ -70,6 +70,7 @@ const NUMERIC_RULES: Record<string, { min: number; max: number }> = {
   login_max_attempts: { min: 1, max: 100 },
   login_lock_minutes: { min: 1, max: 1440 },
   audit_retention_days: { min: 7, max: 3650 },
+  stats_poll_batch: { min: 1, max: 100 },
 };
 
 const GROUPS: { title: string; hint: string; keys: string[] }[] = [
@@ -87,6 +88,11 @@ const GROUPS: { title: string; hint: string; keys: string[] }[] = [
     title: '爬虫与聚合参数',
     hint: '采集间隔、聚合阈值修改后立即生效，无需重启服务',
     keys: ['crawler_interval_minutes', 'sim_threshold', 'cluster_lookback_hours'],
+  },
+  {
+    title: '互动数据轮询',
+    hint: '评论/点赞数回采接入热度算法；enabled 填 false 关闭后热度回退纯时间衰减',
+    keys: ['stats_poll_enabled', 'stats_poll_batch'],
   },
   {
     title: '安全与会话',

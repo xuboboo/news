@@ -124,14 +124,16 @@ export default function Users() {
 
   /** 拉取用户列表：可显式指定页码（翻页/重置查询时避免读到过期的 page 闭包值） */
   const loadUsers = useCallback(
-    async (targetPage?: number) => {
+    async (targetPage?: number, overrides?: { status?: string; tenant?: string }) => {
       if (!canManage) return;
       setListBusy(true);
       try {
+        const status = overrides?.status ?? statusFilter;
+        const tenant = overrides?.tenant ?? tenantFilter;
         const r = await getUsers({
           q: q || undefined,
-          status: statusFilter || undefined,
-          tenant_id: tenantFilter ? Number(tenantFilter) : undefined,
+          status: status || undefined,
+          tenant_id: tenant ? Number(tenant) : undefined,
           page: targetPage ?? page,
           page_size: PAGE_SIZE,
         });
@@ -253,7 +255,11 @@ export default function Users() {
             </div>
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setPage(1);
+                void loadUsers(1, { status: e.target.value });
+              }}
               className="rounded-lg border border-radar-border bg-radar-panel px-2.5 py-2 text-xs text-slate-200 outline-none focus:border-accent/60 cursor-pointer"
               aria-label="状态筛选"
             >
@@ -264,7 +270,11 @@ export default function Users() {
             {superAdmin && (
               <select
                 value={tenantFilter}
-                onChange={(e) => setTenantFilter(e.target.value)}
+                onChange={(e) => {
+                  setTenantFilter(e.target.value);
+                  setPage(1);
+                  void loadUsers(1, { tenant: e.target.value });
+                }}
                 className="rounded-lg border border-radar-border bg-radar-panel px-2.5 py-2 text-xs text-slate-200 outline-none focus:border-accent/60 cursor-pointer"
                 aria-label="租户筛选"
               >

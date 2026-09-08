@@ -353,6 +353,11 @@
     color: var(--seg-active-color);
     box-shadow: var(--seg-active-shadow);
   }
+  /* 登录 CTA：品牌蓝渐变（刻意与主题 accent 解耦的恒定品牌色） */
+  .cta-primary {
+    background-image: linear-gradient(180deg, #2e8bff 0%, #0071e3 100%);
+    box-shadow: 0 8px 24px -8px rgba(0, 113, 227, 0.55);
+  }
   /* 弹窗内滚动条：细版悬浮式，半透明胶囊，悬停加深（Firefox 走 scrollbar-*） */
   .modal-scroll {
     scrollbar-width: thin;

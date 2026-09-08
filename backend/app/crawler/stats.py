@@ -31,9 +31,9 @@ _COUNT_URL = "https://cmt.ithome.com/api/comment/count?newsid={nid}"
 _GRADE_URL = "https://dyn.ithome.com/grade/{nid}"
 _STATS_HOSTS = ("cmt.ithome.com", "dyn.ithome.com")
 
-# 评论数 JS：专属正则优先，宽松回退兜底格式微调
+# 评论数 JS：专属正则优先，宽松回退兜底格式微调（回退锚定 ccd 所在行，防捕获页面无关数字）
 _COUNT_RE = re.compile(r"ccd\.innerHTML\s*=\s*'(\d+)'")
-_COUNT_RE_FALLBACK = re.compile(r"innerHTML\s*=\s*'(\d+)'")
+_COUNT_RE_FALLBACK = re.compile(r"ccd[^\n]*innerHTML\s*=\s*'(\d+)'")
 # 点赞 JS：`<span class="s" id="sgrade2"><a>有价值</a><br><div>68</div></span>`
 _GRADE_LIKE_RE = re.compile(r'id="sgrade2">\s*<a>有价值</a>\s*<br>\s*<div>(\d+)</div>')
 

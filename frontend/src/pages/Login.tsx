@@ -46,7 +46,7 @@ function BrandPanel() {
       <div className="absolute inset-0 flex items-center justify-center" aria-hidden="true">
         <div className="relative h-[min(78vh,680px)] w-[min(78vh,680px)] -translate-x-[6%] translate-y-[2%]">
           {/* 光晕 */}
-          <div className="absolute inset-[12%] rounded-full bg-sky-500/[0.07] blur-3xl" />
+          <div className="absolute inset-[12%] rounded-full bg-[#0EA5E9]/[0.07] blur-3xl" />
           {/* 同心环 + 十字轴 */}
           <svg viewBox="0 0 100 100" fill="none" className="absolute inset-0 h-full w-full">
             <circle cx="50" cy="50" r="49" stroke="rgba(148,163,184,0.16)" strokeWidth="0.3" />
@@ -72,18 +72,18 @@ function BrandPanel() {
 
       {/* 顶部品牌锁定 */}
       <div className="relative z-10 flex items-center gap-3 px-10 pt-10 lg:px-14">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-sky-400/25 bg-sky-400/10">
-          <Radar className="h-5 w-5 text-sky-400" />
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#38BDF8]/25 bg-[#38BDF8]/10">
+          <Radar className="h-5 w-5 text-[#38BDF8]" />
         </div>
         <div className="leading-tight">
           <div className="text-[15px] font-semibold tracking-wide text-white">华军软件园资讯雷达系统</div>
-          <div className="mt-0.5 text-[11px] tracking-wider text-slate-500">HUAJUN SOFTWARE PARK · NEWS RADAR V2.0</div>
+          <div className="mt-0.5 text-[11px] tracking-wider text-[#64748B]">HUAJUN SOFTWARE PARK · NEWS RADAR V2.0</div>
         </div>
       </div>
 
       {/* 底部编辑式文案区 */}
       <div className="relative z-10 px-10 pb-10 lg:px-14">
-        <p className="text-[11px] font-medium uppercase tracking-[0.42em] text-sky-400/80">
+        <p className="text-[11px] font-medium uppercase tracking-[0.42em] text-[#38BDF8]/80">
           News Radar
         </p>
         <h2 className="mt-4 text-4xl font-semibold leading-[1.18] tracking-tight text-white lg:text-[44px]">
@@ -91,21 +91,21 @@ function BrandPanel() {
           <br />
           先人一步。
         </h2>
-        <p className="mt-5 max-w-md text-[13px] leading-6 text-slate-400">
+        <p className="mt-5 max-w-md text-[13px] leading-6 text-[#94A3B8]">
           多源科技资讯实时聚合，AI 智能摘要与热点事件聚类，每日 08:00 自动生成昨日科技日报。
         </p>
         <div className="mt-7 flex flex-wrap items-center gap-2">
-          <span className="mr-1 text-[11px] text-slate-500">数据源</span>
+          <span className="mr-1 text-[11px] text-[#64748B]">数据源</span>
           {DATA_SOURCES.map((s) => (
             <span
               key={s}
-              className="rounded-full border border-slate-700/70 bg-slate-800/40 px-3 py-1 text-[11px] text-slate-300"
+              className="rounded-full border border-[#334155]/70 bg-[#1E293B]/40 px-3 py-1 text-[11px] text-[#CBD5E1]"
             >
               {s}
             </span>
           ))}
         </div>
-        <p className="mt-10 text-[11px] text-slate-600">
+        <p className="mt-10 text-[11px] text-[#475569]">
           版权所有 © {new Date().getFullYear()} 华军软件园
         </p>
       </div>
@@ -211,7 +211,7 @@ export default function Login() {
       <BrandPanel />
 
       {/* ———— 表单面板 ———— */}
-      <div className="relative flex min-h-screen w-full flex-col md:w-[53%] lg:w-[48%]">
+      <div className="relative flex min-h-screen w-full flex-col lg:w-[48%]">
         <div className="absolute right-5 top-5 z-10">
           <ThemeToggle />
         </div>
@@ -286,8 +286,7 @@ export default function Login() {
               <button
                 type="submit"
                 disabled={submitting || !email || !password}
-                className="mt-2 h-12 w-full rounded-xl text-[15px] font-medium text-white shadow-[0_8px_24px_-8px_rgba(0,113,227,0.55)] transition-all duration-150 hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none cursor-pointer"
-                style={{ background: 'linear-gradient(180deg, #2E8BFF 0%, #0071E3 100%)' }}
+                className="cta-primary mt-2 h-12 w-full rounded-xl text-[15px] font-medium text-white transition-all duration-150 hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none cursor-pointer"
               >
                 <span className="inline-flex items-center justify-center gap-2">
                   {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -302,7 +301,7 @@ export default function Login() {
           </div>
         </div>
 
-        <p className="pb-6 pt-4 text-center text-[11px] text-slate-600">
+        <p className="pb-6 pt-4 text-center text-[11px] text-slate-500">
           版权所有 © {new Date().getFullYear()} 华军软件园
         </p>
       </div>
