@@ -17,7 +17,7 @@ from app.models.article import Article
 from app.models.event import EventArticle, HotEvent
 from app.services import config_service
 from app.services.usage_service import extract_openai_usage, record_usage
-from app.utils.text import truncate
+from app.utils.text import keyword_jaccard, truncate
 from app.utils.url_guard import assert_public_http_url
 
 
@@ -147,6 +147,7 @@ def run_event_clustering(db: Session) -> dict:
     """对近期已向量化文章执行聚类并增量更新事件库。返回统计。"""
     # 阈值/回看窗读运行时生效值（管理面板可热调，DB 覆盖 .env）
     sim_threshold = float(config_service.get_effective(db, "sim_threshold"))
+    keyword_threshold = float(config_service.get_effective(db, "keyword_jaccard_threshold"))
     lookback_hours = int(config_service.get_effective(db, "cluster_lookback_hours"))
     since = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
 
@@ -177,8 +178,11 @@ def run_event_clustering(db: Session) -> dict:
     for cluster in clusters:
         member_articles = [article_map[m.id] for m in cluster.members]
 
-        # 1) 尝试并入已有事件：成员与该事件质心相似度达标
+        # 1) 尝试并入已有事件：与簇内合并同口径，须同时满足相似度与标题关键词两条件。
+        #    此前只看 Embedding 相似度，实际发生过错合并（2026-09-09：快科技两篇不相关
+        #    文章 sim=0.8563 擦线过阈值被并入同一事件，标题关键词重合度实为 0.053）
         target_event: HotEvent | None = None
+        rep = cluster.members[0]
         for ev in db.query(HotEvent).filter(
             HotEvent.last_time >= since - timedelta(hours=24)
         ).all():
@@ -187,7 +191,7 @@ def run_event_clustering(db: Session) -> dict:
                 (cosine(list(m.embedding), ev_vec) for m in cluster.members),
                 default=0.0,
             )
-            if sim > sim_threshold:
+            if sim > sim_threshold and keyword_jaccard(rep.title, ev.title or "") >= keyword_threshold:
                 target_event = ev
                 break
 

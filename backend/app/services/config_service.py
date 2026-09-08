@@ -20,6 +20,7 @@ ALLOWED_KEYS: dict[str, type] = {
     "stats_poll_enabled": bool,
     "stats_poll_batch": int,
     "sim_threshold": float,
+    "keyword_jaccard_threshold": float,
     "cluster_lookback_hours": int,
     "admin_token": str,
     # —— 登录与会话 ——
@@ -32,6 +33,11 @@ ALLOWED_KEYS: dict[str, type] = {
 
 # 脱敏展示的字段
 SENSITIVE_KEYS = {"llm_api_key", "embedding_api_key", "admin_token"}
+
+# 整数键下界：面板误设过小值会造成实际损害（如保留期 1 天 → 周清理一次性抹掉近半年审计）
+MIN_INT_VALUES = {
+    "audit_retention_days": 30,
+}
 
 
 def _coerce(key: str, value: str):
@@ -104,6 +110,9 @@ def set_overrides(db: Session, data: dict[str, str]) -> list[str]:
                 updated.append(key)
         else:
             clean = _coerce(key, raw)
+            floor = MIN_INT_VALUES.get(key)
+            if floor is not None and int(clean) < floor:
+                raise ValueError(f"{key} 不能小于 {floor}（过低会造成不可逆的数据损失）")
             if row is None:
                 db.add(SystemSetting(key=key, value=clean))
             else:

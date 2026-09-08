@@ -50,6 +50,7 @@ const FIELD_LABELS: Record<string, string> = {
   embedding_model: 'Embedding 模型',
   crawler_interval_minutes: '采集间隔（分钟）',
   sim_threshold: '事件聚合相似度阈值',
+  keyword_jaccard_threshold: '事件聚合标题关键词阈值',
   cluster_lookback_hours: '聚合回看窗口（小时）',
   admin_token: '管理后门 Token',
   session_ttl_hours: '会话有效期（小时）',
@@ -65,6 +66,7 @@ const SENSITIVE = new Set(['llm_api_key', 'embedding_api_key', 'admin_token']);
 const NUMERIC_RULES: Record<string, { min: number; max: number }> = {
   crawler_interval_minutes: { min: 1, max: 1440 },
   sim_threshold: { min: 0, max: 1 },
+  keyword_jaccard_threshold: { min: 0, max: 1 },
   cluster_lookback_hours: { min: 1, max: 720 },
   session_ttl_hours: { min: 1, max: 8760 },
   login_max_attempts: { min: 1, max: 100 },
@@ -87,7 +89,7 @@ const GROUPS: { title: string; hint: string; keys: string[] }[] = [
   {
     title: '爬虫与聚合参数',
     hint: '采集间隔、聚合阈值修改后立即生效，无需重启服务',
-    keys: ['crawler_interval_minutes', 'sim_threshold', 'cluster_lookback_hours'],
+    keys: ['crawler_interval_minutes', 'sim_threshold', 'keyword_jaccard_threshold', 'cluster_lookback_hours'],
   },
   {
     title: '互动数据轮询',
