@@ -4,6 +4,7 @@
 供审计埋点与业务端点复用。
 """
 import hmac
+from datetime import timedelta
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -20,13 +21,36 @@ from app.models.user import (
     User,
 )
 
+# token 应急通道只等效 /api/v2/admin/*（运维面板与脚本回归的用途边界）；
+# 业务接口不接受 token——泄露一枚运维令牌不应等于全站超管
+_TOKEN_BACKDOOR_PREFIX = "/api/v2/admin"
 
-def _authenticate(request: Request, db: Session) -> tuple[User, object]:
-    """Cookie → 会话行 → 用户；校验会话有效性、账号与租户状态。"""
+
+def _effective_int(db: Session, key: str, fallback: int) -> int:
+    try:
+        return int(config_service.get_effective(db, key))
+    except Exception:
+        return fallback
+
+
+def authenticate_session(request: Request, db: Session) -> tuple[User, object]:
+    """Cookie → 会话行 → 用户；校验会话有效性、空闲超时、账号与租户状态。
+
+    全站唯一的会话校验实现（admin.require_admin 复用，避免双实现漂移）。
+    校验通过后做活跃度打点（>60s 才写库）。
+    """
     token = request.cookies.get(session_store.SESSION_COOKIE, "")
     row = session_store.get_active_session(db, token)
     if row is None:
         raise HTTPException(401, "未登录或会话已失效")
+    # 空闲超时：连续无请求超过 session_idle_hours 即失效（0 = 关闭）。
+    # OWASP 会话管理：绝对 TTL 之外还须有 inactivity timeout，限制被劫持会话的可用窗口
+    idle_hours = _effective_int(db, "session_idle_hours", get_settings().session_idle_hours)
+    if idle_hours > 0:
+        last_seen = session_store.as_aware(row.last_seen_at)
+        if last_seen is not None and last_seen < session_store._now() - timedelta(hours=idle_hours):
+            session_store.revoke_session(db, row)
+            raise HTTPException(401, "会话长时间未活动已失效，请重新登录")
     user = db.get(User, row.user_id)
     if user is None or user.status != "active":
         raise HTTPException(401, "账号不可用或已停用")
@@ -71,15 +95,32 @@ class _TokenPrincipal:
     last_login_at = None
 
 
+def attach_token_principal(request: Request) -> "_TokenPrincipal":
+    """X-Admin-Token / 免鉴权通道挂虚拟主体（等价平台超管）。
+
+    使审计埋点能记到「admin-token」而非空主体——config_updated 等最敏感操作
+    经应急通道执行时必须可追溯（2026-09-09 审计修复）。已有真实登录主体时不覆盖
+    （routes.py 全局 require_user 先行挂载、端点再过 require_admin 的场景）。
+    """
+    existing = getattr(request.state, "current_user", None)
+    if existing is not None:
+        return existing
+    principal = _TokenPrincipal()
+    request.state.current_user = principal
+    return principal
+
+
 def require_user(request: Request, db: Session = Depends(get_db)) -> User:
     try:
-        user, row = _authenticate(request, db)
+        user, row = authenticate_session(request, db)
     except HTTPException as exc:
-        if exc.status_code == 401 and _admin_token_ok(request, db):
+        if (
+            exc.status_code == 401
+            and request.url.path.startswith(_TOKEN_BACKDOOR_PREFIX)
+            and _admin_token_ok(request, db)
+        ):
             # 应急后门：token 视为超管等价（虚拟主体），脚本无需 Cookie 会话
-            principal = _TokenPrincipal()
-            request.state.current_user = principal
-            return principal
+            return attach_token_principal(request)
         raise
     # 首登强制改密：服务端兜底（前端仅是引导），只放行认证域接口
     if getattr(user, "must_change_password", False) and not request.url.path.startswith(
@@ -132,7 +173,9 @@ __all__ = [
     "require_tenant_admin",
     "require_super_admin",
     "require_json_mutation",
+    "authenticate_session",
     "current_user_of",
+    "attach_token_principal",
     "ROLE_MEMBER",
     "ROLE_TENANT_ADMIN",
     "ROLE_SUPER_ADMIN",

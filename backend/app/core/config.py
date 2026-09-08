@@ -34,11 +34,15 @@ class Settings(BaseSettings):
     # —— 登录与会话（除 bootstrap 外均可管理面板热调）——
     bootstrap_admin_email: str = ""      # 首启引导：user 表为空时自动创建的超管邮箱
     bootstrap_admin_password: str = ""   # 首启引导：初始密码（首登强制改密；建号后可从 .env 移除）
-    session_ttl_hours: int = 168         # 会话有效期（小时），固定自签发起算
+    session_ttl_hours: int = 72          # 会话绝对有效期（小时，OWASP 建议 4-8h 量级；调低不影响存量会话）
+    session_idle_hours: int = 24         # 会话空闲超时（小时）：连续无请求超此值即失效；0 = 关闭
     login_max_attempts: int = 5          # 连续失败锁定阈值
     login_lock_minutes: int = 15         # 锁定时长（分钟）
+    login_ip_throttle_max: int = 30      # 单 IP 登录尝试上限（窗口内，含失败；成功登录清零）
+    login_ip_throttle_window_seconds: int = 300  # IP 限速窗口（秒）
     cookie_secure: bool = False          # 会话 Cookie Secure 标记；HTTPS 部署必须为 true
     audit_retention_days: int = 180      # 审计日志保留天数（beat 每周清理超期行）
+    enable_docs: bool = True             # 是否公开 /docs /redoc /openapi.json（公网部署建议 false）
 
     # —— 安全 ——
     cors_origins: str = "http://localhost,http://127.0.0.1"  # 允许跨域的前端来源（逗号分隔）

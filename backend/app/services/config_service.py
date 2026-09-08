@@ -25,8 +25,11 @@ ALLOWED_KEYS: dict[str, type] = {
     "admin_token": str,
     # —— 登录与会话 ——
     "session_ttl_hours": int,
+    "session_idle_hours": int,
     "login_max_attempts": int,
     "login_lock_minutes": int,
+    "login_ip_throttle_max": int,
+    "login_ip_throttle_window_seconds": int,
     "cookie_secure": bool,
     "audit_retention_days": int,
 }
@@ -37,6 +40,11 @@ SENSITIVE_KEYS = {"llm_api_key", "embedding_api_key", "admin_token"}
 # 整数键下界：面板误设过小值会造成实际损害（如保留期 1 天 → 周清理一次性抹掉近半年审计）
 MIN_INT_VALUES = {
     "audit_retention_days": 30,
+    # IP 限速过紧会把整个出口 NAT 的正常用户挡在登录之外
+    "login_ip_throttle_max": 5,
+    "login_ip_throttle_window_seconds": 60,
+    # 空闲超时 0 = 关闭（允许），>0 时至少 1 小时
+    "session_idle_hours": 0,
 }
 
 

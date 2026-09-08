@@ -71,9 +71,12 @@ def create_super(email: str, password: str | None, display_name: str) -> None:
     with SessionLocal() as db:
         if db.query(func.count(User.id)).filter(User.role == ROLE_SUPER_ADMIN).scalar():
             sys.exit("已存在超管账号（避免误用此命令创建第二个超管；如确需请用 SQL）")
-        tenant = Tenant(name="默认租户", remark="manage_user.py 引导创建")
-        db.add(tenant)
-        db.flush()
+        # get-or-create：与 main.bootstrap_admin 同口径，重名复用既有"默认租户"
+        tenant = db.query(Tenant).filter_by(name="默认租户").first()
+        if tenant is None:
+            tenant = Tenant(name="默认租户", remark="manage_user.py 引导创建")
+            db.add(tenant)
+            db.flush()
         user = User(
             email=email,
             password_hash=passwords.hash_password(password),

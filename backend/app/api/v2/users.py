@@ -10,10 +10,12 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.deps import require_json_mutation, require_super_admin, require_tenant_admin
 from app.auth import passwords
+from app.auth import sessions as session_store
 from app.core.db import get_db
 from app.models.tenant import Tenant
 from app.models.user import (
@@ -48,12 +50,21 @@ def _validate_email(email: str) -> str:
     return email
 
 
-def _validate_password(password: str) -> str:
+def _validate_password(password: str, *, email: str = "") -> str:
     if not password or len(password) < MIN_PASSWORD_LEN:
         raise HTTPException(400, f"密码至少 {MIN_PASSWORD_LEN} 位")
     if len(password.encode("utf-8")) > MAX_PASSWORD_BYTES:
         raise HTTPException(400, f"密码过长（最多 {MAX_PASSWORD_BYTES} 字节）")
+    try:
+        passwords.check_strength(password, email=email)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     return password
+
+
+def _is_int(v) -> bool:
+    """JSON 里 true/false 也是 int 的子类，显式排除（tenant_id: true 曾被当成 1）。"""
+    return isinstance(v, int) and not isinstance(v, bool)
 
 
 def _scope_filter(actor: User):
@@ -87,6 +98,7 @@ def _guard_last_super(db: Session, target: User, *, demoting: bool, disabling: b
 
 
 def _user_dict(db: Session, u: User, tenant_names: dict[int, str] | None = None) -> dict:
+    locked_until = session_store.as_aware(u.locked_until)
     return {
         "id": u.id,
         "email": u.email,
@@ -96,6 +108,8 @@ def _user_dict(db: Session, u: User, tenant_names: dict[int, str] | None = None)
         "tenant_id": u.tenant_id,
         "tenant_name": (tenant_names or {}).get(u.tenant_id),
         "must_change_password": bool(u.must_change_password),
+        "locked": bool(locked_until and locked_until > session_store._now()),
+        "locked_until": u.locked_until.isoformat() if u.locked_until else None,
         "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
         "created_by": u.created_by,
         "created_at": u.created_at.isoformat() if u.created_at else None,
@@ -142,7 +156,12 @@ def create_tenant(
         remark=str((payload or {}).get("remark") or "")[:255],
     )
     db.add(tenant)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 并发同名创建：先查后插的窗口内撞唯一约束，转 400 而非 500
+        db.rollback()
+        raise HTTPException(400, "租户名已存在")
     audit_service.record(db, "tenant.created", request=request, user=actor,
                          detail={"tenant_id": tenant.id, "name": name})
     return {"ok": True, "item": {"id": tenant.id, "name": tenant.name, "status": tenant.status}}
@@ -176,9 +195,27 @@ def update_tenant(
         if status not in ("active", "disabled"):
             raise HTTPException(400, "status 只能是 active / disabled")
         if status != tenant.status:
+            if status == "disabled":
+                # 平台自锁护栏：租户内还有启用的超管时禁止停用——否则唯一超管
+                # 会把自己连人带管理面一起锁在门外（只能 CLI/token 应急恢复）
+                supers_here = (
+                    db.query(func.count(User.id))
+                    .filter(
+                        User.tenant_id == tenant.id,
+                        User.role == ROLE_SUPER_ADMIN,
+                        User.status == "active",
+                    )
+                    .scalar() or 0
+                )
+                if supers_here:
+                    raise HTTPException(400, "该租户下仍有启用的平台超管，请先迁移超管账号再停用租户")
             tenant.status = status
             detail["changes"].append(f"status={status}")
     db.commit()
+    if "status=disabled" in detail["changes"]:
+        # 停用即时失效：吊销该租户全部会话。仅靠每请求的租户状态检查，重启用
+        # 后停用前签发的会话会整体复活（含可能已泄露的令牌）
+        detail["sessions_revoked"] = session_store.revoke_tenant_sessions(db, tenant.id)
     audit_service.record(db, "tenant.updated", request=request, user=actor, detail=detail)
     return {"ok": True}
 
@@ -227,7 +264,7 @@ def create_user(
 ):
     data = payload or {}
     email = _validate_email(str(data.get("email") or ""))
-    password = _validate_password(str(data.get("password") or ""))
+    password = _validate_password(str(data.get("password") or ""), email=email)
     role = str(data.get("role") or ROLE_MEMBER)
     if role not in ROLES:
         raise HTTPException(400, "角色只能是 super_admin / tenant_admin / member")
@@ -238,11 +275,13 @@ def create_user(
         tenant_id = actor.tenant_id
     else:
         tenant_id = data.get("tenant_id")
-        if not isinstance(tenant_id, int):
+        if not _is_int(tenant_id):
             raise HTTPException(400, "tenant_id 必填")
     tenant = db.get(Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(404, "租户不存在")
+    if tenant.status != "active":
+        raise HTTPException(400, "租户已停用，不能向其中创建账号")
 
     if db.query(User).filter_by(email=email).first():
         raise HTTPException(400, "该邮箱已被使用")
@@ -257,7 +296,12 @@ def create_user(
         created_by=actor.email,
     )
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 并发同邮箱创建撞唯一约束（check-then-insert 竞态），转 400 而非 500
+        db.rollback()
+        raise HTTPException(400, "该邮箱已被使用")
     # 审计只记账号信息，不记初始密码
     audit_service.record(db, "user.created", request=request, user=actor,
                          detail={"created_user_id": user.id, "email": user.email,
@@ -288,7 +332,7 @@ def update_user(
     if new_tenant is not None:
         if actor.role != ROLE_SUPER_ADMIN:
             raise HTTPException(403, "只有平台超管可以调整所属租户")
-        if not isinstance(new_tenant, int):
+        if not _is_int(new_tenant):
             raise HTTPException(400, "tenant_id 必须为整数")
         if db.get(Tenant, new_tenant) is None:
             raise HTTPException(404, "租户不存在")
@@ -319,12 +363,37 @@ def update_user(
     db.commit()
     if status_changing and new_status == "disabled":
         # 停用即时生效：吊销全部会话
-        from app.auth import sessions as session_store
         session_store.revoke_user_sessions(db, target.id)
+    if role_changing or (new_tenant is not None and new_tenant != target.tenant_id):
+        # 权限/归属变更即时吊销会话（OWASP：privilege change 须重换会话）。
+        # 权限本身每请求实时查库无提权残留，吊销的目的是强制以新身份重新登录；
+        # 降级超管/搬移租户后继续用旧会话操作不符合直觉且扩大误操作面
+        detail["sessions_revoked"] = session_store.revoke_user_sessions(db, target.id)
 
     action = "user.disabled" if "status=disabled" in detail["changes"] else "user.updated"
     audit_service.record(db, action, request=request, user=actor, detail=detail)
     return {"ok": True, "item": _user_dict(db, target, _tenant_names(db))}
+
+
+@router.post("/users/{user_id}/unlock", dependencies=[Depends(require_tenant_admin)])
+def unlock_user(
+    user_id: int, request: Request,
+    actor: User = Depends(require_tenant_admin), db: Session = Depends(get_db),
+):
+    """解除登录失败锁定（清零失败计数与锁定时间），不动密码与会话。
+
+    此前解锁只能等锁定自然到期或走密码重置（顺带强制改密，杀伤过大）。
+    """
+    target = _target_for(actor, db, user_id)
+    locked_until = session_store.as_aware(target.locked_until)
+    if locked_until is None or locked_until <= session_store._now():
+        return {"ok": True, "locked": False}
+    target.locked_until = None
+    target.failed_attempts = 0
+    db.commit()
+    audit_service.record(db, "user.unlocked", request=request, user=actor,
+                         detail={"target_user_id": target.id, "email": target.email})
+    return {"ok": True, "locked": False}
 
 
 @router.post("/users/{user_id}/password-reset", dependencies=[Depends(require_tenant_admin)])
@@ -333,13 +402,12 @@ def reset_password(
     actor: User = Depends(require_tenant_admin), db: Session = Depends(get_db),
 ):
     target = _target_for(actor, db, user_id)
-    password = _validate_password(str((payload or {}).get("password") or ""))
+    password = _validate_password(str((payload or {}).get("password") or ""), email=target.email)
     target.password_hash = passwords.hash_password(password)
     target.must_change_password = True
     target.failed_attempts = 0
     target.locked_until = None
     db.commit()
-    from app.auth import sessions as session_store
     session_store.revoke_user_sessions(db, target.id)
     # 审计只记动作，不记新密码
     audit_service.record(db, "user.password_reset", request=request, user=actor,

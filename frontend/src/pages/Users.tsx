@@ -12,6 +12,7 @@ import {
   Copy,
   KeyRound,
   Loader2,
+  LockOpen,
   Plus,
   RefreshCw,
   Search,
@@ -32,6 +33,7 @@ import {
   getTenants,
   getUsers,
   resetUserPassword,
+  unlockUser,
   updateTenant,
   updateUser,
 } from '../api/admin';
@@ -469,6 +471,20 @@ function UserRow({
     }
   };
 
+  const unlock = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await unlockUser(u.id);
+      onFlash(true, `已解除 ${u.email} 的登录锁定`);
+      onChanged();
+    } catch (e: any) {
+      onFlash(false, e?.message ?? '操作失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <tr className="border-b border-radar-border/50 hover:bg-radar-panel/50">
       <td className="px-4 py-2.5 text-slate-200">
@@ -506,6 +522,14 @@ function UserRow({
         ) : (
           <span className="chip text-[10px] bg-red-500/10 text-red-300 border border-red-400/20">停用</span>
         )}
+        {u.locked && (
+          <span
+            className="chip ml-1 text-[10px] bg-amber-500/10 text-amber-300 border border-amber-400/20"
+            title={`登录失败锁定至 ${fmtTime(u.locked_until)}`}
+          >
+            锁定中
+          </span>
+        )}
       </td>
       <td className="px-2 py-2.5 text-slate-400 whitespace-nowrap">{fmtTime(u.last_login_at)}</td>
       <td className="px-4 py-2.5">
@@ -517,6 +541,16 @@ function UserRow({
           >
             <KeyRound className="h-3.5 w-3.5" />
           </button>
+          {u.locked && (
+            <button
+              onClick={() => void unlock()}
+              disabled={busy}
+              title={`解除登录锁定（锁定至 ${fmtTime(u.locked_until)}）`}
+              className="p-1.5 rounded-lg text-slate-500 hover:text-amber-300 hover:bg-radar-panel disabled:opacity-30 cursor-pointer"
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LockOpen className="h-3.5 w-3.5" />}
+            </button>
+          )}
           {u.status === 'active' ? (
             <button
               onClick={() => void toggleStatus()}

@@ -2,8 +2,9 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.api.v2 import audit, public, users
@@ -54,6 +55,12 @@ def init_db() -> None:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_article_stats_next_poll_at ON article (stats_next_poll_at)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_audit_log_user_id ON audit_log (user_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_audit_log_tenant_id ON audit_log (tenant_id)"))
+        # 审计防篡改哈希链（2026-09-09）：存量库补列，存量行 row_hash='' 视为链前遗留段
+        conn.execute(text("ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS prev_hash VARCHAR(64) NOT NULL DEFAULT ''"))
+        conn.execute(text("ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS row_hash VARCHAR(64) NOT NULL DEFAULT ''"))
+        # 成本看板（2026-09-09）：价目缓存价（NULL=按输入价全价计）+ 明细按任务×时间复合索引
+        conn.execute(text("ALTER TABLE model_price ADD COLUMN IF NOT EXISTS price_cache NUMERIC(12, 4) NULL"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_ai_usage_log_task_created ON ai_usage_log (task_type, created_at)"))
 
 
 def bootstrap_admin() -> None:
@@ -78,9 +85,13 @@ def bootstrap_admin() -> None:
                 "后重启后端完成引导；或执行 docker compose exec backend python scripts/manage_user.py create-super <邮箱> <密码>"
             )
             return
-        tenant = Tenant(name="默认租户", remark="引导自动创建")
-        db.add(tenant)
-        db.flush()
+        # get-or-create：user 表被清空但"默认租户"仍在时，重名硬插会 IntegrityError
+        # 令启动失败（unique 约束），复用既有租户即可
+        tenant = db.query(Tenant).filter_by(name="默认租户").first()
+        if tenant is None:
+            tenant = Tenant(name="默认租户", remark="引导自动创建")
+            db.add(tenant)
+            db.flush()
         admin = User(
             email=email,
             password_hash=passwords.hash_password(password),
@@ -114,6 +125,10 @@ app = FastAPI(
     version=settings.version,
     lifespan=lifespan,
     description="华军软件园资讯雷达系统 V2.0 后端（FastAPI + PostgreSQL/pgvector + Redis + Celery）",
+    # ENABLE_DOCS=false（公网部署建议）：不对外暴露 API 全貌
+    docs_url="/docs" if settings.enable_docs else None,
+    redoc_url="/redoc" if settings.enable_docs else None,
+    openapi_url="/openapi.json" if settings.enable_docs else None,
 )
 
 app.add_middleware(
@@ -123,6 +138,32 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["X-Admin-Token", "X-Requested-With", "Content-Type"],
 )
+
+
+@app.exception_handler(HTTPException)
+async def _audit_access_denied(request: Request, exc: HTTPException):
+    """管理面 403 越权留痕（OWASP：authorization failures 必须审计）。
+
+    member/tenant_admin 探测 /api/v2/admin/* 一律 403，原先不留任何痕迹；
+    现记 auth.access_denied（同 操作者+路径 5 分钟去重，防刷表）。
+    其余状态码/路径走默认语义不变。
+    """
+    if exc.status_code == 403 and request.url.path.startswith("/api/v2/admin/"):
+        try:
+            from app.services import audit_service
+
+            with SessionLocal() as db:
+                audit_service.record_access_denied(
+                    db, request=request, path=request.url.path, method=request.method
+                )
+        except Exception:  # noqa: BLE001 审计失败不影响原响应
+            logging.getLogger("uvicorn.error").exception("审计 403 落库失败")
+    headers = getattr(exc, "headers", None)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=headers,
+    )
 
 # 公开探针（/api/v2/health）——全站门禁的例外，新增公开端点必须放 public.py
 app.include_router(public.router)

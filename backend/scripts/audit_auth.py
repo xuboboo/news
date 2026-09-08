@@ -305,6 +305,35 @@ record("审计登录记录含 IP/UA", bool(first.get("ip") and first.get("user_a
 _, al, _ = call(super_c[1], "审计查询-重置密码", "/admin/audit-logs?action=user.password_reset&page_size=5")
 record("审计有「重置密码」记录", bool(al and al.get("total", 0) > 0), f"total={al and al.get('total')}")
 
+# ———— 12. 审计增强回归（2026-09-09）：越权留痕 / IP·时间过滤 / 导出 ————
+_, al, _ = call(super_c[1], "审计查询-越权拒绝", "/admin/audit-logs?action=auth.access_denied&page_size=5")
+record("越权探测已留痕（member 访问审计 → 403 有记录）",
+       bool(al and al.get("total", 0) > 0), f"total={al and al.get('total')}")
+
+lip = first.get("ip") or ""
+if lip:
+    _, al2, _ = call(super_c[1], f"审计按 IP 过滤（{lip}）",
+                     f"/admin/audit-logs?ip={urllib.parse.quote(lip)}&page_size=5")
+    record("IP 前缀过滤命中", bool(al2 and al2.get("total", 0) > 0),
+           f"total={al2 and al2.get('total')}")
+else:
+    record("IP 前缀过滤命中", False, "无登录 IP 可用于验证")
+
+_, al3, _ = call(super_c[1], "审计时间范围过滤", "/admin/audit-logs?time_from=2020-01-01T00:00:00Z&page_size=5")
+record("time_from 过滤生效", bool(al3 and al3.get("total", 0) > 0), f"total={al3 and al3.get('total')}")
+call(super_c[1], "非法 time_from → 400", "/admin/audit-logs?time_from=not-a-date", expect=400)
+
+s_exp, _, rh_exp = call(super_c[1], "审计 CSV 导出 → 200", "/admin/audit-logs/export?page_size=10")
+record("导出为 CSV", "text/csv" in (rh_exp.get("Content-Type") or rh_exp.get("content-type") or ""),
+       str(rh_exp.get("content-type") or rh_exp.get("Content-Type")))
+call(member_c[1], "member 导出 → 403", "/admin/audit-logs/export", expect=403)
+
+# 哈希链：登录失败 reason 字段抽查（步骤 3 造过 wrong-password 失败）
+_, al4, _ = call(super_c[1], "审计查询-失败原因", "/admin/audit-logs?action=auth.login_failed&page_size=20")
+reasons = {((it.get("detail") or {}).get("reason") or "") for it in (al4 or {}).get("items", [])}
+record("登录失败含 reason 细分", bool(reasons & {"bad_credentials", "unknown_email", "account_disabled", "tenant_disabled"}),
+       f"reasons={reasons}")
+
 # 汇总
 print("\n===== 鉴权与权限验收结果 =====")
 passed = sum(1 for _, v, _ in results if v == "PASS")

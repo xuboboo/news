@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import passwords
 from app.auth import sessions as session_store
+from app.auth import throttle
 from app.core.config import get_settings
 from app.models.user import User
 from app.services import audit_service, config_service
@@ -63,9 +64,25 @@ def login(db: Session, request: Request, response: Response, email: str, passwor
         )
         raise HTTPException(status, message)
 
+    # IP 级限速：账号锁定只防单账号猜爆，这里补上密码喷洒与批量锁号（DoS）的防线。
+    # 计数含成功尝试——成功登录会在下方清零，NAT 出口的正常用户不受影响
+    ip = audit_service.client_ip(request)
+    allowed, retry_after = throttle.register_attempt(
+        ip,
+        max_attempts=_effective_int(db, "login_ip_throttle_max", get_settings().login_ip_throttle_max),
+        window_seconds=_effective_int(
+            db, "login_ip_throttle_window_seconds", get_settings().login_ip_throttle_window_seconds
+        ),
+    )
+    if not allowed:
+        _fail("auth.throttled", 429, f"尝试过于频繁，请约 {retry_after} 秒后重试",
+              {"reason": "ip_throttled", "retry_after": retry_after})
+
     if user is None or user.status != "active":
         passwords.verify_password(password or "", _ENUM_GUARD_HASH)  # 时序拉平，防枚举
-        _fail("auth.login_failed", 401, "邮箱或密码错误")
+        # reason 只进审计（仅超管可见），对外响应保持同一句话以防用户枚举
+        _fail("auth.login_failed", 401, "邮箱或密码错误",
+              {"reason": "account_disabled" if user is not None else "unknown_email"})
 
     # 租户停用必须在登录口明确拒绝：否则用户"登录成功"后每个请求都 403，
     # 前端只会反复弹回登录页且无任何提示（2026-09-08 审计缺陷 A）
@@ -73,28 +90,34 @@ def login(db: Session, request: Request, response: Response, email: str, passwor
     tenant = db.get(Tenant, user.tenant_id)
     if tenant is None or tenant.status != "active":
         _fail("auth.login_failed", 403, "所属租户已停用，请联系平台管理员",
-              {"tenant_disabled": True})
+              {"tenant_disabled": True, "reason": "tenant_disabled"})
 
-    if user.locked_until and user.locked_until > _now():
-        retry_min = max(1, int((user.locked_until - _now()).total_seconds() // 60) + 1)
+    if user.locked_until and session_store.as_aware(user.locked_until) > _now():
+        retry_min = max(1, int((session_store.as_aware(user.locked_until) - _now()).total_seconds() // 60) + 1)
         _fail("auth.locked", 423, f"账号已临时锁定，请约 {retry_min} 分钟后重试")
 
     if not passwords.verify_password(password or "", user.password_hash):
         max_attempts = _effective_int(db, "login_max_attempts", get_settings().login_max_attempts)
-        user.failed_attempts = (user.failed_attempts or 0) + 1
-        if user.failed_attempts >= max_attempts:
+        # 原子自增：ORM 读-改-写在并发失败登录下会丢计数（并发放行次数低估）
+        db.query(User).filter(User.id == user.id).update(
+            {User.failed_attempts: User.failed_attempts + 1}, synchronize_session=False
+        )
+        db.refresh(user)
+        if (user.failed_attempts or 0) >= max_attempts:
             lock_minutes = _effective_int(db, "login_lock_minutes", get_settings().login_lock_minutes)
             user.locked_until = _now() + timedelta(minutes=lock_minutes)
             user.failed_attempts = 0  # 锁定到期后重新计数
             db.commit()
-            _fail("auth.locked", 423, f"连续失败 {max_attempts} 次，账号锁定 {lock_minutes} 分钟")
+            _fail("auth.locked", 423, f"连续失败 {max_attempts} 次，账号锁定 {lock_minutes} 分钟",
+                  {"reason": "max_attempts", "max_attempts": max_attempts})
         db.commit()
-        _fail("auth.login_failed", 401, "邮箱或密码错误")
+        _fail("auth.login_failed", 401, "邮箱或密码错误", {"reason": "bad_credentials"})
 
     user.failed_attempts = 0
     user.locked_until = None
     user.last_login_at = _now()
     db.commit()
+    throttle.reset(ip)  # 成功登录清零 IP 计数，NAT 下不连坐
 
     ttl_hours = session_ttl_hours(db)
     row, token = session_store.create_session(
@@ -128,6 +151,10 @@ def change_password(
         raise HTTPException(400, f"新密码至少 {MIN_PASSWORD_LEN} 位")
     if len((new_password or "").encode("utf-8")) > MAX_PASSWORD_LEN:
         raise HTTPException(400, "新密码过长（最多 72 字节）")
+    try:
+        passwords.check_strength(new_password, email=user.email)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     user.password_hash = passwords.hash_password(new_password)
     user.must_change_password = False
     user.failed_attempts = 0

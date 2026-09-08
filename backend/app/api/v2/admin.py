@@ -18,15 +18,14 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
-from app.auth import sessions as session_store
-from app.auth.deps import current_user_of
+from app.auth.deps import attach_token_principal, authenticate_session, current_user_of
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.models.article import Article
 from app.models.event import HotEvent
 from app.models.summary import ArticleSummary
 from app.models.task_run import TaskRun
-from app.models.usage import AiUsageLog
+from app.models.usage import AiUsageLog, ModelPrice
 from app.models.user import ROLE_SUPER_ADMIN, User
 from app.services import audit_service, config_service, usage_service
 from app.services.embedding_service import get_embedding_fingerprint
@@ -43,20 +42,24 @@ def require_admin(
     x_admin_token: str | None = Header(default=None),
 ):
     if get_settings().admin_no_auth:
+        attach_token_principal(request)  # 审计主体可追溯：免鉴权通道记为 admin-token
         return  # 内网免鉴权模式（ADMIN_NO_AUTH=true）
-    # ① 登录会话（super_admin）
-    row = session_store.get_active_session(db, request.cookies.get(session_store.SESSION_COOKIE, ""))
-    if row is not None:
-        user = db.get(User, row.user_id)
-        if user is not None and user.status == "active":
-            if user.role != ROLE_SUPER_ADMIN:
-                raise HTTPException(403, "需要平台超管权限")
-            session_store.touch(row)
-            if getattr(row, "_touched", False):
-                db.commit()
-            request.state.current_user = user
-            request.state.current_session = row
-            return
+    # ① 登录会话（super_admin）——复用全站唯一会话校验（含空闲超时/账号/租户状态），
+    #    此前这里的内联实现与之漂移：不查空闲超时、不校验租户状态
+    try:
+        user, row = authenticate_session(request, db)
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise  # 403（租户停用等）如实上抛；401 落到 token 通道
+    else:
+        if user.role != ROLE_SUPER_ADMIN:
+            raise HTTPException(403, "需要平台超管权限")
+        if getattr(user, "must_change_password", False):
+            # 与 require_user 的首登门禁对齐：管理面不留绕行口
+            raise HTTPException(403, "首次登录请先修改密码")
+        request.state.current_user = user
+        request.state.current_session = row
+        return
     # ② X-Admin-Token 应急后门（脚本/回归；未配置保持原 503 提示）
     effective = config_service.get_effective(db, "admin_token")
     if not effective:
@@ -67,7 +70,17 @@ def require_admin(
     if not x_admin_token or not hmac.compare_digest(
         str(x_admin_token).encode(), str(effective).encode()
     ):
+        # 携带了错误 token 是在试探应急通道，值得留痕（去重防刷表）；
+        # 未携带 token 的裸 401 多为扫描噪声，不记
+        if x_admin_token:
+            audit_service.record_access_denied(
+                db, request=request, path=request.url.path, method=request.method,
+                reason="invalid_admin_token",
+            )
         raise HTTPException(401, "admin token 无效")
+    # 审计主体可追溯（2026-09-09 审计修复）：原先 token 通道下 current_user_of
+    # 为 None，config_updated 等最敏感操作的审计主体为空、无法追责
+    attach_token_principal(request)
 
 
 # ———————————————————— 运行时配置 ————————————————————
@@ -81,15 +94,27 @@ def get_config(db: Session = Depends(get_db)):
 @router.put("/config", dependencies=[Depends(require_admin)])
 def put_config(data: dict[str, str], request: Request, db: Session = Depends(get_db)):
     """更新运行时配置。值为空串 = 清除该覆盖，回落 .env 默认值。立即生效。"""
+    old_view = {
+        k: config_service.get_effective(db, k)
+        for k in (data or {})
+        if k in config_service.ALLOWED_KEYS
+    }
     try:
         updated = config_service.set_overrides(db, data)
     except KeyError as exc:
         raise HTTPException(400, f"unknown config key: {exc}")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    # 审计记 old→new：保留期等非敏感值的改动可追责；敏感值只记「已变更」不落内容
+    changes = {}
+    for k in updated:
+        if k in config_service.SENSITIVE_KEYS:
+            changes[k] = "（敏感值，不记录内容）"
+        else:
+            changes[k] = f"{old_view.get(k)} → {config_service.get_effective(db, k)}"
     audit_service.record(
         db, "admin.config_updated", request=request, user=current_user_of(request),
-        detail={"keys": updated},
+        detail={"keys": updated, "changes": changes},
     )
     return {"updated": updated, **config_service.masked_view(db)}
 
@@ -429,24 +454,36 @@ def task_runs(limit: int = Query(50, le=200), db: Session = Depends(get_db)):
 @router.get("/usage/summary", dependencies=[Depends(require_admin)])
 def usage_summary_api(
     period: str = Query("today", pattern="^(today|7d|30d|month)$"),
+    daily: bool = Query(True, description="是否计算近 30 天按日趋势（仅 30d 视图需要）"),
+    groups: bool = Query(True, description="是否计算按任务/模型分组（仅 30d 视图需要）"),
     db: Session = Depends(get_db),
 ):
     """AI 用量/成本汇总。today 按 UTC 0 点起算，与日报日期口径一致。"""
-    return usage_service.usage_summary(db, period)
+    return usage_service.usage_summary(db, period, include_daily=daily, include_groups=groups)
 
 
 @router.get("/usage/logs", dependencies=[Depends(require_admin)])
 def usage_logs_api(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
+    task_type: str | None = Query(None, pattern="^(summary|event_summary|embedding|report)$"),
+    status: str | None = Query(None, pattern="^(success|parse_fail|api_fail)$"),
     db: Session = Depends(get_db),
 ):
-    """AI 调用流水分页明细（联 article 取标题，error 截断为摘要）。"""
-    return usage_service.usage_logs(db, page, page_size)
+    """AI 调用流水分页明细（联 article 取标题，error 截断为摘要；可按任务/状态过滤）。"""
+    return usage_service.usage_logs(db, page, page_size, task_type=task_type, status=status)
 
 
-def _usage_csv_stream(db: Session):
-    """分批产出 CSV 行（UTF-8 BOM 由首段携带；首行为对账口径注释）。"""
+def _usage_csv_stream(
+    db: Session,
+    start: datetime | None = None,
+    end: datetime | None = None,
+):
+    """分批产出 CSV 行（UTF-8 BOM 由首段携带；首行为对账口径注释）。
+
+    start/end：可选 UTC 时间范围（左闭右开）。外部文本字段过 csv_safe_cell
+    防公式注入；cost 固定 6 位小数，避免极小值变科学计数法。
+    """
     yield "\ufeff"  # UTF-8 BOM，方便 Excel 直接打开
     yield f"# {usage_service.CSV_NOTE}\n"
     buf = io.StringIO()
@@ -457,13 +494,12 @@ def _usage_csv_stream(db: Session):
     batch = 1000
     last_id = 0
     while True:
-        rows = (
-            db.query(AiUsageLog)
-            .filter(AiUsageLog.id > last_id)
-            .order_by(AiUsageLog.id)
-            .limit(batch)
-            .all()
-        )
+        q = db.query(AiUsageLog).filter(AiUsageLog.id > last_id)
+        if start is not None:
+            q = q.filter(AiUsageLog.created_at >= start)
+        if end is not None:
+            q = q.filter(AiUsageLog.created_at < end)
+        rows = q.order_by(AiUsageLog.id).limit(batch).all()
         if not rows:
             break
         last_id = rows[-1].id  # id 游标：深翻页不因 OFFSET 退化为 O(N²)
@@ -478,17 +514,17 @@ def _usage_csv_stream(db: Session):
             writer.writerow([
                 r.id,
                 r.created_at.isoformat() if r.created_at else "",
-                r.task_type,
-                r.trigger,
-                r.model,
-                r.status,
+                usage_service.csv_safe_cell(r.task_type),
+                usage_service.csv_safe_cell(r.trigger),
+                usage_service.csv_safe_cell(r.model),
+                usage_service.csv_safe_cell(r.status),
                 r.article_id if r.article_id is not None else "",
-                titles.get(r.article_id, ""),
+                usage_service.csv_safe_cell(titles.get(r.article_id, "")),
                 r.event_id if r.event_id is not None else "",
                 r.prompt_tokens, r.completion_tokens, r.cached_tokens, r.total_tokens,
                 r.latency_ms,
-                float(r.cost or 0),
-                (r.error or "").replace("\n", " ")[:500],
+                f"{float(r.cost or 0):.6f}",
+                usage_service.csv_safe_cell((r.error or "").replace("\n", " ")[:500]),
             ])
         yield buf.getvalue()
         if len(rows) < batch:
@@ -496,33 +532,64 @@ def _usage_csv_stream(db: Session):
 
 
 @router.get("/usage/export", dependencies=[Depends(require_admin)])
-def usage_export(db: Session = Depends(get_db)):
-    """全量流水导出 CSV（UTF-8 BOM；首行注释说明本地计费与供应商账单的口径差异）。"""
+def usage_export(
+    start: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    end: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    db: Session = Depends(get_db),
+):
+    """流水导出 CSV（UTF-8 BOM；首行注释说明本地计费与供应商账单的口径差异）。
+
+    start/end 可选（含端点、按 UTC 日界），不传 = 全量导出。
+    """
+    start_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc) if start else None
+    end_dt = (
+        datetime.fromisoformat(end).replace(tzinfo=timezone.utc) + timedelta(days=1) if end else None
+    )
+    filename = "ai-usage"
+    if start or end:
+        filename += f"-{start or 'begin'}-{end or 'now'}"
     return StreamingResponse(
-        _usage_csv_stream(db),
+        _usage_csv_stream(db, start_dt, end_dt),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": "attachment; filename=ai-usage.csv"},
+        headers={"Content-Disposition": f"attachment; filename={filename}.csv"},
     )
 
 
 @router.get("/usage/prices", dependencies=[Depends(require_admin)])
 def usage_prices_get(db: Session = Depends(get_db)):
-    """模型价目表（每百万 token 单价，人民币元）。"""
+    """模型价目表（每百万 token 单价，人民币元；price_cache=null 表示按输入价全价计）。"""
     return {"items": [usage_service.price_dict(p) for p in usage_service.list_prices(db)]}
 
 
 @router.post("/usage/prices", dependencies=[Depends(require_admin)])
-def usage_prices_post(data: dict, db: Session = Depends(get_db)):
-    """新增 / 更新价目：{model, price_input, price_output}（每百万 token，元）。调价只影响之后的新记录。"""
+def usage_prices_post(data: dict, request: Request, db: Session = Depends(get_db)):
+    """新增 / 更新价目：{model, price_input, price_output[, price_cache]}（每百万 token，元）。
+
+    price_cache 传 null / 缺省 = 清除缓存价（回落输入价全价口径）。
+    调价只影响之后的新记录；变更写审计（admin.price_updated，含新旧值）。
+    """
     model = str(data.get("model") or "").strip()
     if not model or len(model) > 64:
         raise HTTPException(400, "model 必填且长度 ≤ 64")
     try:
         price_input = round(float(data.get("price_input", 0)), 4)
         price_output = round(float(data.get("price_output", 0)), 4)
+        raw_cache = data.get("price_cache")
+        price_cache = None if raw_cache in (None, "") else round(float(raw_cache), 4)
     except (TypeError, ValueError):
-        raise HTTPException(400, "price_input / price_output 必须为数字")
-    if price_input < 0 or price_output < 0:
+        raise HTTPException(400, "price_input / price_output / price_cache 必须为数字")
+    if price_input < 0 or price_output < 0 or (price_cache is not None and price_cache < 0):
         raise HTTPException(400, "单价不能为负数")
-    row = usage_service.upsert_price(db, model, price_input, price_output)
-    return {"ok": True, "item": usage_service.price_dict(row)}
+
+    old = db.get(ModelPrice, model)
+    row, created = usage_service.upsert_price(db, model, price_input, price_output, price_cache)
+    audit_service.record(
+        db, "admin.price_updated", request=request, user=current_user_of(request),
+        detail={
+            "model": model,
+            "op": "create" if created else "update",
+            "old": None if old is None else usage_service.price_dict(old),
+            "new": usage_service.price_dict(row),
+        },
+    )
+    return {"ok": True, "created": created, "item": usage_service.price_dict(row)}
