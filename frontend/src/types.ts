@@ -1,4 +1,11 @@
-export type Channel = '软件之家' | 'Win11之家' | 'Win10之家' | '智能时代';
+export type Channel =
+  | '软件之家'
+  | 'Win11之家'
+  | 'Win10之家'
+  | '智能时代'
+  /** 快科技（文章页面包屑二级栏目） */
+  | '桌面系统'
+  | '电脑软件';
 
 export type EventStatus = '发酵中' | '持续关注' | '已平息';
 

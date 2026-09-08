@@ -15,7 +15,7 @@ import { ThemeToggle } from '../components/Layout';
  *   克制的排版与微交互。动效尊重 prefers-reduced-motion。
  */
 
-const DATA_SOURCES = ['软件之家', 'Win11之家', 'Win10之家', '智能时代'];
+const DATA_SOURCES = ['软件之家', 'Win11之家', 'Win10之家', '智能时代', '快科技'];
 
 /** 雷达盘上的目标光点：位置随机但固定，延迟≈波束扫过的节奏（周期同为 7s） */
 const BLIPS = [

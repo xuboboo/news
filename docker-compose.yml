@@ -77,7 +77,7 @@ services:
     restart: unless-stopped
 
   # ---------- 采集服务 ----------
-  crawler:       # 常驻循环：RSS 采集 → 入库 → 派发 AI 任务
+  crawler:       # 常驻循环：多来源采集（IT之家 / 快科技，crawler/multi.py）→ 入库 → 派发 AI 任务
     build: ./backend
     env_file: ./backend/.env
     command: python -m app.crawler.loop

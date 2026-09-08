@@ -58,6 +58,15 @@ def parse_comment_count(text: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def stats_source_filter():
+    """互动轮询的范围条件：仅 IT之家文章（评论/点赞接口为 ithome 专属）。
+
+    poll_due_articles 与 admin.py 的轮询水位统计共用此条件，防止两处口径漂移
+    （漏加会让不排期轮询的来源文章永久计入「待回填」）。
+    """
+    return Article.source == "IT之家"
+
+
 def parse_grade_likes(text: str) -> int | None:
     m = _GRADE_LIKE_RE.search(text or "")
     return int(m.group(1)) if m else None
@@ -122,6 +131,10 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
     due = (
         db.query(Article)
         .filter(
+            # 互动接口为 IT之家专属：其他来源（如快科技）不排期轮询，
+            # 必须在此挡住，否则会被下方"从未轮询"回填分支捞走打 ithome 接口连败 6 次，
+            # 且挤占批次饿死 IT之家文章的轮询
+            stats_source_filter(),
             or_(
                 and_(Article.stats_next_poll_at.isnot(None), Article.stats_next_poll_at <= now),
                 and_(
@@ -129,7 +142,7 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
                     Article.stats_next_poll_at.is_(None),
                     Article.stats_fail_count < GIVE_UP_FAILS,
                 ),
-            )
+            ),
         )
         .order_by(Article.publish_time.desc())  # 越新的文章互动变化越快，优先服务
         .limit(batch)

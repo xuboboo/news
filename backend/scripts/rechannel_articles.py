@@ -1,6 +1,6 @@
 """存量文章频道修复：以频道页面的实时链接为准（页面即真相）。
 
-对库内每篇文章：
+对库内 IT之家文章（仅 source="IT之家"，其他来源如快科技不在此语义内）：
 - URL 出现在某频道页面 → 频道改为该页面频道（优先级与爬虫 PAGE_SOURCES 一致，先到先得）
 - URL 未出现在任何频道页面 → 删除（摘要随 ORM 级联删除，事件关联由 FK CASCADE 清理，
   收尾时再删除成员为 0 的热点事件）；
@@ -52,7 +52,13 @@ def main() -> None:
             print("所有页面均不可达，中止（不做任何修改）。")
             return
 
-        rows = db.query(Article).all()
+        rows = (
+            db.query(Article)
+            # 仅限 IT之家：本脚本按 ithome 页面判定，库外来源（快科技以面包屑为真相，
+            # 不在 ithome 页面上）不参与，否则会被整体误删
+            .filter(Article.source == "IT之家")
+            .all()
+        )
         before = Counter(a.channel for a in rows)
 
         # 每个频道的「页面覆盖下界」= 该频道在库且仍在页面上的最旧一篇发布时间；

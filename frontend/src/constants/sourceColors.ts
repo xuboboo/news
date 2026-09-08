@@ -5,6 +5,7 @@
  */
 export const SOURCE_COLORS: Record<string, string> = {
   IT之家: '#EF4444',
+  快科技: '#3B82F6',
   极客公园: '#F97316',
   少数派: '#10B981',
   '36氪': '#A78BFA',

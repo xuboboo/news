@@ -50,7 +50,12 @@ def main() -> int:
             print("所有页面均不可达，无法审计。")
             return 2
 
-        rows = db.query(Article).all()
+        rows = (
+            db.query(Article)
+            # 仅审计 IT之家：快科技等来源以文章页面包屑为真相，不经 ithome 页面语义
+            .filter(Article.source == "IT之家")
+            .all()
+        )
         print(f"[2/2] 库内共 {len(rows)} 篇，逐篇核对 ...\n")
 
         # 每个频道的「页面覆盖下界」= 该频道在库且仍在页面上的最旧一篇发布时间；

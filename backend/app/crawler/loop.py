@@ -4,7 +4,7 @@ import time
 
 from app.core.config import get_settings
 from app.core.db import new_session
-from app.crawler.ithome import ingest_all
+from app.crawler.multi import format_detail, ingest_all_sources
 from app.services.taskrun_service import record_task_run
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -40,18 +40,8 @@ def main():
                     with record_task_run("crawler", trigger="auto") as run:
                         db = new_session()
                         try:
-                            result = ingest_all(db)
-                            per_channel = result.get("per_channel") or {}
-                            extra = ""
-                            if per_channel:
-                                extra = " ｜ 新增分布：" + " / ".join(
-                                    f"{ch} {n}" for ch, n in per_channel.items()
-                                )
-                            run.detail = "新增 %d 篇 · 扫描 %d · 跳过 %d · 频道纠偏 %d%s" % (
-                                len(result["new_ids"]), result.get("scanned", 0),
-                                result.get("skipped", 0), result.get("rechanneled", 0),
-                                extra,
-                            )
+                            result = ingest_all_sources(db)
+                            run.detail = format_detail(result)
                             logger.info("ingest result: %s", result)
                             # 为新文章派发 AI 处理任务
                             if result["new_ids"]:

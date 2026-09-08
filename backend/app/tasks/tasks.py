@@ -20,12 +20,12 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(name="crawler_task")
 def crawler_task(trigger: str = "auto"):
-    """采集任务：抓取 RSS → 入库 → 为新文章派发摘要任务。
+    """采集任务：多来源采集（IT之家 / 快科技，见 crawler/multi.py）→ 入库 → 为新文章派发摘要任务。
 
     与常驻 crawler loop 双入口互斥：抢不到 Redis 锁说明另一入口正在采集，
     本轮直接跳过（记 success + detail，避免面板误报失败）。
     """
-    from app.crawler.ithome import ingest_all
+    from app.crawler.multi import format_detail, ingest_all_sources
     from app.utils.lock import LOCK_CRAWLER, LOCK_CRAWLER_TTL_MS, acquire_lock, release_lock
 
     if not acquire_lock(LOCK_CRAWLER, LOCK_CRAWLER_TTL_MS):
@@ -36,18 +36,8 @@ def crawler_task(trigger: str = "auto"):
         with record_task_run("crawler", trigger=trigger) as run:
             db = new_session()
             try:
-                result = ingest_all(db)
-                per_channel = result.get("per_channel") or {}
-                extra = ""
-                if per_channel:
-                    extra = " ｜ 新增分布：" + " / ".join(
-                        f"{ch} {n}" for ch, n in per_channel.items()
-                    )
-                run.detail = "新增 %d 篇 · 扫描 %d · 跳过 %d · 频道纠偏 %d%s" % (
-                    len(result["new_ids"]), result.get("scanned", 0),
-                    result.get("skipped", 0), result.get("rechanneled", 0),
-                    extra,
-                )
+                result = ingest_all_sources(db)
+                run.detail = format_detail(result)
                 for article_id in result["new_ids"]:
                     summary_task.delay(article_id)
                 return result

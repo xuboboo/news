@@ -367,7 +367,7 @@ export default function Layout() {
             </button>
             <SyncStatus />
             <span className="hidden lg:inline">
-              数据源：软件之家 · Win11之家 · Win10之家 · 智能时代
+              数据源：软件之家 · Win11之家 · Win10之家 · 智能时代 · 快科技
             </span>
           </div>
           <div className="flex items-center gap-3 shrink-0">

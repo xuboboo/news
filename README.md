@@ -19,12 +19,12 @@
 
 ## 项目简介
 
-华军软件园资讯雷达系统是一套面向内部编辑、运营、产品团队的**多源科技资讯聚合与热点分析系统**：从 IT之家体系频道页面自动采集资讯，经 AI 摘要压缩阅读成本，通过 Embedding 向量聚类把多家媒体的报道归并为同一热点事件，再以热度算法排行、每日自动生成科技日报。
+华军软件园资讯雷达系统是一套面向内部编辑、运营、产品团队的**多源科技资讯聚合与热点分析系统**：从 IT之家与快科技自动采集资讯，经 AI 摘要压缩阅读成本，通过 Embedding 向量聚类把多家媒体的报道归并为同一热点事件，再以热度算法排行、每日自动生成科技日报。
 
 - **V1 解决**「今天发生了什么？」—— 频道热榜、最新资讯时间轴
 - **V2 解决**「这件事是什么？为什么重要？有哪些媒体关注？后续如何发展？」—— AI 摘要、热点事件聚合、多来源关联、科技日报
 
-第一阶段基于 IT之家体系频道（软件之家 / Win11之家 / Win10之家 / 智能时代）建设，架构上预留多来源扩展能力。
+第一阶段基于 IT之家体系频道（软件之家 / Win11之家 / Win10之家 / 智能时代）与快科技（桌面系统 / 电脑软件，2026-09 接入）建设，架构上预留多来源扩展能力。
 
 ## ✨ 功能特性
 
@@ -44,7 +44,7 @@
 
 ```mermaid
 flowchart LR
-    SRC[四频道页面<br/>win11/win10/soft.ithome.com · tags/AI] --> CR[crawler 常驻采集<br/>间隔可配/面板热调]
+    SRC[IT之家四频道子站<br/>win11/win10/soft/next.ithome.com<br/>+ 快科技全站流 technewsall] --> CR[crawler 常驻采集<br/>IT之家页面即频道真相<br/>快科技面包屑即频道真相]
     CR --> PG[(PostgreSQL 16<br/>+ pgvector)]
     PG --> RD{{Redis 任务队列}}
     RD --> AI[ai-worker<br/>AI 摘要 / Embedding]
@@ -60,7 +60,7 @@ flowchart LR
 | 服务 | 职责 |
 | --- | --- |
 | `backend` | FastAPI REST API（容器内 8000，宿主机映射 `127.0.0.1:18000`） |
-| `crawler` | 常驻循环：频道页面采集（页面即频道真相）→ 入库 → 派发 AI 任务 |
+| `crawler` | 常驻循环：多来源采集（IT之家页面即频道真相 / 快科技文章页面包屑即频道真相）→ 入库 → 派发 AI 任务 |
 | `worker` | Celery 默认队列：事件聚合 / 日报 |
 | `ai-worker` | Celery AI 队列：摘要 / Embedding |
 | `beat` | 定时调度：事件聚类、每日 08:00 生成昨日日报 |
@@ -144,7 +144,7 @@ news/
 │   │   ├── algorithms/    # hot_score：HotScore = Engagement × TimeDecay
 │   │   ├── ai/            # summary / embedding / event_cluster（LLM 与内置算法双模式）
 │   │   ├── tasks/         # Celery：summary / embedding / event / report
-│   │   ├── crawler/       # IT之家频道页面采集 + 常驻循环
+│   │   ├── crawler/       # 多来源采集：IT之家频道页（ithome）+ 快科技面包屑过滤（mydrivers）+ 调度（multi）+ 常驻循环 + 互动轮询（stats）
 │   │   ├── core/          # 配置、数据库
 │   │   └── utils/         # 中文文本处理（jieba）、URL 安全守卫
 │   ├── scripts/           # 运维脚本（重嵌入、数据修复、审计等）

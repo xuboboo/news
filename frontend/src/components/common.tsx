@@ -7,6 +7,9 @@ const CHANNEL_STYLES: Record<string, string> = {
   'Win11之家': 'bg-sky-500/10 text-sky-300 border-sky-400/20',
   'Win10之家': 'bg-cyan-500/10 text-cyan-300 border-cyan-400/20',
   智能时代: 'bg-emerald-500/10 text-emerald-300 border-emerald-400/20',
+  // 快科技栏目
+  桌面系统: 'bg-blue-500/10 text-blue-300 border-blue-400/20',
+  电脑软件: 'bg-indigo-500/10 text-indigo-300 border-indigo-400/20',
 };
 
 export function ChannelTag({ channel }: { channel: string }) {
