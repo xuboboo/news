@@ -35,6 +35,7 @@ ACTIONS = {
     "admin.trigger_crawl",
     "admin.trigger_events",
     "admin.trigger_report",
+    "admin.trigger_stats",
 }
 
 

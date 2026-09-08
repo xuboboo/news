@@ -19,9 +19,9 @@ class AuditLog(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow, index=True)
-    user_id = Column(Integer)  # 操作者；匿名登录失败等场景可空
+    user_id = Column(Integer, index=True)  # 操作者；匿名登录失败等场景可空
     user_email = Column(String(255), nullable=False, default="")
-    tenant_id = Column(Integer)
+    tenant_id = Column(Integer, index=True)
     action = Column(String(64), nullable=False, index=True)
     detail = Column(JSONB, nullable=False, default=dict)
     ip = Column(String(64), nullable=False, default="")

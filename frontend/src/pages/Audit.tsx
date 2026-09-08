@@ -29,6 +29,7 @@ const ACTION_STYLES: Record<string, { label: string; cls: string }> = {
   'admin.test_llm': { label: 'LLM 测试', cls: 'bg-slate-500/10 text-slate-300 border-slate-400/20' },
   'admin.test_embedding': { label: 'Embedding 测试', cls: 'bg-slate-500/10 text-slate-300 border-slate-400/20' },
   'admin.trigger_crawl': { label: '手动采集', cls: 'bg-sky-500/10 text-sky-300 border-sky-400/30' },
+  'admin.trigger_stats': { label: '手动互动轮询', cls: 'bg-sky-500/10 text-sky-300 border-sky-400/30' },
   'admin.trigger_events': { label: '手动聚合', cls: 'bg-sky-500/10 text-sky-300 border-sky-400/30' },
   'admin.trigger_report': { label: '手动日报', cls: 'bg-sky-500/10 text-sky-300 border-sky-400/30' },
 };

@@ -1,11 +1,14 @@
 """运维 CLI：建超管 / 重置密码 / 启停用户（忘记密码或无引导环境时的自救入口）。
 
 用法（在 backend 容器内或本机 backend/ 目录）：
-  python scripts/manage_user.py create-super <email> <password> [显示名]
-  python scripts/manage_user.py reset-password <email> <new_password>
+  python scripts/manage_user.py create-super <email> [password|-] [显示名]
+  python scripts/manage_user.py reset-password <email> [password|-]
   python scripts/manage_user.py set-status <email> active|disabled
   python scripts/manage_user.py list
+
+密码传参：省略 = 交互式输入（不回显，不进 shell 历史）；传 "-" = 从 stdin 读一行。
 """
+import getpass
 import sys
 from pathlib import Path
 
@@ -42,10 +45,29 @@ def _norm(email: str) -> str:
     return (email or "").strip().lower()
 
 
-def create_super(email: str, password: str, display_name: str) -> None:
-    email = _norm(email)
-    if len(password or "") < 8:
+def _read_password(arg: str | None, prompt: str) -> str:
+    """密码来源优先级：显式参数 > "-" 读 stdin > 交互式输入（不回显）。
+
+    避免口令经 argv 暴露在 shell 历史与进程列表里。"""
+    if arg == "-":
+        return sys.stdin.readline().rstrip("\r\n")
+    if arg:
+        return arg
+    pw = getpass.getpass(f"{prompt}（输入不回显）: ")
+    if not pw:
+        sys.exit("密码不能为空")
+    return pw
+
+
+def _ensure_len(pw: str) -> str:
+    if len(pw) < 8:
         sys.exit("密码至少 8 位")
+    return pw
+
+
+def create_super(email: str, password: str | None, display_name: str) -> None:
+    email = _norm(email)
+    password = _ensure_len(_read_password(password, "超管初始密码"))
     with SessionLocal() as db:
         if db.query(func.count(User.id)).filter(User.role == ROLE_SUPER_ADMIN).scalar():
             sys.exit("已存在超管账号（避免误用此命令创建第二个超管；如确需请用 SQL）")
@@ -66,9 +88,8 @@ def create_super(email: str, password: str, display_name: str) -> None:
         print(f"已创建超管 {email}（首次登录需修改密码）")
 
 
-def reset_password(email: str, password: str) -> None:
-    if len(password or "") < 8:
-        sys.exit("密码至少 8 位")
+def reset_password(email: str, password: str | None) -> None:
+    password = _ensure_len(_read_password(password, f"{_norm(email)} 的新密码"))
     with SessionLocal() as db:
         user = db.query(User).filter_by(email=_norm(email)).first()
         if user is None:
@@ -111,10 +132,11 @@ def main() -> None:
     if not args:
         sys.exit(__doc__)
     cmd, rest = args[0], args[1:]
-    if cmd == "create-super" and len(rest) >= 2:
-        create_super(rest[0], rest[1], rest[2] if len(rest) > 2 else "")
-    elif cmd == "reset-password" and len(rest) == 2:
-        reset_password(rest[0], rest[1])
+    if cmd == "create-super" and len(rest) >= 1:
+        create_super(rest[0], rest[1] if len(rest) > 1 else None,
+                     rest[2] if len(rest) > 2 else "")
+    elif cmd == "reset-password" and len(rest) >= 1:
+        reset_password(rest[0], rest[1] if len(rest) > 1 else None)
     elif cmd == "set-status" and len(rest) == 2:
         set_status(rest[0], rest[1])
     elif cmd == "list":
