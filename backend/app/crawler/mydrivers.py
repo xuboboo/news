@@ -7,7 +7,8 @@
     首页 > 资讯中心 > 软件之家 > 桌面系统 > IT采购专业调查(固定推广位，丢弃)
                                  ↑一级栏目   ↑二级栏目 = 频道真相
 
-采集流程：抓全站最新流 technewsall.html（单页约 117 篇，实测完整覆盖「最新」页）
+采集流程：抓全站最新流 technewsall.html（单页约 117 篇，广度兜底）+ 官方 RSS
+「软件相关」feed（约 100 条深度，rss.mydrivers.com，可捞回已滚出全站流的近期文章）
 → 逐篇进文章页解析标题/时间/正文/面包屑 → 面包屑二级栏目落在白名单内的才入库，
 其余看完即弃（面包屑判定需要请求文章页，白名单外文章每篇消耗一次请求，量级可接受）。
 
@@ -41,9 +42,15 @@ logger = logging.getLogger(__name__)
 
 SOURCE_NAME = "快科技"
 
-# 采集入口：全站最新流。栏目列表页是"假流"（不过滤），只有这里的链接 + 文章页面包屑可信。
+# 采集入口：全站最新流（广度兜底）+ 官方 RSS「软件相关」栏目 feed（白名单域深度覆盖）。
+# feed 为 2026-09-09 联网核实的官方服务（rss.mydrivers.com，robots.txt 允许抓取，
+# 仅 /zhibo/ 禁抓）：单 feed 约 100 条、分钟级更新，可发现已滚出全站流的近期文章。
+# feed 分类是旧驱动之家口径（与面包屑不一致），仅作发现线索，频道真相仍是文章页面包屑。
 ENTRY_PAGES: list[str] = [
     "https://news.mydrivers.com/technewsall.html",
+]
+FEED_ENTRIES: list[str] = [
+    "https://rss.mydrivers.com/rss.aspx?cid=8",  # 资讯：软件相关
 ]
 
 # 面包屑二级栏目白名单：落在名单内的文章才入库，channel 即栏目名。
@@ -72,6 +79,9 @@ _ARTICLE_HREF = re.compile(
     r'href="((?:https:)?//news\.mydrivers\.com/1/\d+/\d+\.htm)(?:[?#][^"]*)?"'
 )
 
+# RSS feed <item> 内的链接与发布时间（feed 为 UTF-8 XML，链接是绝对地址）
+_FEED_LINK_RE = re.compile(r"<link>(https://news\.mydrivers\.com/1/\d+/\d+\.htm)</link>")
+
 # 文章页元信息行（.news_bt1_left）内的发布时间，如「2026-09-07 19:38:32」（北京时间）
 _PAGE_TIME_RE = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?")
 
@@ -96,6 +106,33 @@ def extract_article_links(html: str) -> list[str]:
         if link not in links:
             links.append(link)
     return links
+
+
+def extract_feed_items(xml: str) -> list[tuple[str, datetime | None]]:
+    """RSS feed XML → [(文章链接, feed 发布时间 | None)]，保持出现顺序去重。
+
+    feed 发布时间（北京时间）仅用于跳过超窗口旧文的预过滤，省一次文章页请求；
+    入库发布时间仍以文章页元信息行为准。
+    """
+    items: list[tuple[str, datetime | None]] = []
+    seen: set[str] = set()
+    for item_body in re.findall(r"<item>.*?</item>", xml or "", re.S):
+        m = _FEED_LINK_RE.search(item_body)
+        if not m or m.group(1) in seen:
+            continue
+        seen.add(m.group(1))
+        published = None
+        t = _PAGE_TIME_RE.search(item_body)
+        if t:
+            try:
+                published = datetime(
+                    int(t.group(1)), int(t.group(2)), int(t.group(3)),
+                    int(t.group(4)), int(t.group(5)), tzinfo=SH_TZ,
+                ).astimezone(timezone.utc)
+            except ValueError:
+                published = None
+        items.append((m.group(1), published))
+    return items
 
 
 def parse_breadcrumb(soup: BeautifulSoup) -> tuple[str, str] | None:
@@ -181,23 +218,17 @@ def _prune_link_cache(now_ts: float) -> None:
             _LINK_CHECKED.pop(k, None)
 
 
-def _ingest_entry_page(
+def _ingest_links(
     db,
-    page_url: str,
+    links: list[str],
     new_ids: list[int],
     per_channel: dict[str, int],
 ) -> dict:
-    """抓单个入口页 → 逐篇解析文章页 → 白名单过滤 → 入库。
+    """逐篇处理候选链接：查库去重 → 抓文章页 → 解析 → 白名单过滤 → 入库。
 
     返回统计：scanned=新入库，skipped=已在库/过期/解析失败等，filtered=白名单外丢弃。
     已入库文章的频道以面包屑为准不再重判（重判需重复抓文章页，成本不值）。
     """
-    resp = _fetch(page_url)
-    if resp is None or resp.status_code != 200:
-        logger.warning("entry page unreachable: %s", page_url)
-        return {"scanned": 0, "skipped": 0, "filtered": 0}
-
-    links = extract_article_links(_decode_response(resp))[:_ENTRY_LINK_CAP]
     now_ts = time.time()
     now = datetime.now(timezone.utc)
     _prune_link_cache(now_ts)
@@ -269,10 +300,53 @@ def _ingest_entry_page(
             skipped += 1
 
     logger.info(
-        "entry ingest %s: links=%s new=%s skipped=%s filtered=%s",
-        page_url, len(links), scanned, skipped, filtered,
+        "link batch done: links=%s new=%s skipped=%s filtered=%s",
+        len(links), scanned, skipped, filtered,
     )
     return {"scanned": scanned, "skipped": skipped, "filtered": filtered}
+
+
+def _ingest_entry_page(
+    db,
+    page_url: str,
+    new_ids: list[int],
+    per_channel: dict[str, int],
+) -> dict:
+    """抓单个入口页（HTML 全站流）→ 解析出文章链接 → _ingest_links。"""
+    resp = _fetch(page_url)
+    if resp is None or resp.status_code != 200:
+        logger.warning("entry page unreachable: %s", page_url)
+        return {"scanned": 0, "skipped": 0, "filtered": 0}
+
+    links = extract_article_links(_decode_response(resp))[:_ENTRY_LINK_CAP]
+    return _ingest_links(db, links, new_ids, per_channel)
+
+
+def _ingest_feed(
+    db,
+    feed_url: str,
+    new_ids: list[int],
+    per_channel: dict[str, int],
+) -> dict:
+    """抓单个官方 RSS feed → 解析 item 链接（feed 时间预过滤超窗口旧文）→ _ingest_links。
+
+    feed 分类是旧驱动之家口径，与面包屑不完全对齐，故仅作发现线索；
+    feed 单条约 100 条、深度远超全站流，可捞回已滚出 technewsall 的近期文章。
+    """
+    resp = _fetch(feed_url)
+    if resp is None or resp.status_code != 200:
+        logger.warning("feed unreachable: %s", feed_url)
+        return {"scanned": 0, "skipped": 0, "filtered": 0}
+
+    items = extract_feed_items(_decode_response(resp))
+    window_start = datetime.now(timezone.utc) - timedelta(hours=_PAGE_MAX_AGE_HOURS)
+    links = [
+        link
+        for link, published in items
+        if published is None or published >= window_start
+    ]
+    logger.info("feed items %s: total=%s in-window=%s", feed_url, len(items), len(links))
+    return _ingest_links(db, links, new_ids, per_channel)
 
 
 def ingest_all(db) -> dict:
@@ -285,6 +359,12 @@ def ingest_all(db) -> dict:
 
     for page_url in ENTRY_PAGES:
         result = _ingest_entry_page(db, page_url, new_ids, per_channel)
+        scanned += result["scanned"]
+        skipped += result["skipped"]
+        filtered += result["filtered"]
+
+    for feed_url in FEED_ENTRIES:
+        result = _ingest_feed(db, feed_url, new_ids, per_channel)
         scanned += result["scanned"]
         skipped += result["skipped"]
         filtered += result["filtered"]
@@ -306,42 +386,58 @@ def ingest_all(db) -> dict:
 
 
 def _dry_run(limit: int = 40) -> None:
-    """实网验证：抓入口页 + 逐篇解析，打印面包屑判定明细，不写库。"""
-    total_links = 0
-    stats = {"new": 0, "filtered": 0, "skip": 0, "parse_fail": 0}
+    """实网验证：抓全部入口（HTML 页 + RSS feed）→ 逐篇解析，打印面包屑判定明细，不写库。"""
     from collections import Counter
 
-    channel_counter: Counter[str] = Counter()
+    candidates: list[str] = []
     for page_url in ENTRY_PAGES:
         resp = _fetch(page_url)
         if resp is None or resp.status_code != 200:
             print(f"入口页不可达：{page_url}")
             return
-        links = extract_article_links(_decode_response(resp))[:limit]
-        total_links += len(links)
-        print(f"入口页 {page_url}：链接 {len(links)} 条")
-        for link in links:
-            art = _fetch(link)
-            if art is None or art.status_code != 200:
-                stats["parse_fail"] += 1
-                print(f"  [抓取失败] {link}")
-                continue
-            parsed = _parse_article_html(_decode_response(art))
-            if parsed is None:
-                stats["parse_fail"] += 1
-                print(f"  [解析失败] {link}")
-                continue
-            title, published, content, (category, channel) = parsed
-            if channel in CHANNEL_WHITELIST:
-                stats["new"] += 1
-                channel_counter[channel] += 1
-                verdict = f"[入库 {category} > {channel}]"
-            else:
-                stats["filtered"] += 1
-                verdict = f"[过滤 {category} > {channel}]"
-            print(f"  {verdict} {published.astimezone(SH_TZ):%m-%d %H:%M} {title[:40]}（正文 {len(content)} 字）")
+        page_links = extract_article_links(_decode_response(resp))
+        print(f"入口页 {page_url}：链接 {len(page_links)} 条")
+        candidates.extend(page_links)
+    window_start = datetime.now(timezone.utc) - timedelta(hours=_PAGE_MAX_AGE_HOURS)
+    for feed_url in FEED_ENTRIES:
+        resp = _fetch(feed_url)
+        if resp is None or resp.status_code != 200:
+            print(f"Feed 不可达：{feed_url}")
+            continue
+        items = extract_feed_items(_decode_response(resp))
+        in_window = [link for link, pub in items if pub is None or pub >= window_start]
+        print(f"Feed {feed_url}：item {len(items)} 条，窗口内 {len(in_window)} 条")
+        candidates.extend(in_window)
+
+    # 入口页与 feed 重叠部分去重（保持出现顺序）
+    seen: set[str] = set()
+    links = [c for c in candidates if not (c in seen or seen.add(c))][:limit]
+    print(f"\n去重后候选 {len(links)} 条（上限 {limit}），开始逐篇判定：\n")
+
+    stats = {"new": 0, "filtered": 0, "parse_fail": 0}
+    channel_counter: Counter[str] = Counter()
+    for link in links:
+        art = _fetch(link)
+        if art is None or art.status_code != 200:
+            stats["parse_fail"] += 1
+            print(f"  [抓取失败] {link}")
+            continue
+        parsed = _parse_article_html(_decode_response(art))
+        if parsed is None:
+            stats["parse_fail"] += 1
+            print(f"  [解析失败] {link}")
+            continue
+        title, published, content, (category, channel) = parsed
+        if channel in CHANNEL_WHITELIST:
+            stats["new"] += 1
+            channel_counter[channel] += 1
+            verdict = f"[入库 {category} > {channel}]"
+        else:
+            stats["filtered"] += 1
+            verdict = f"[过滤 {category} > {channel}]"
+        print(f"  {verdict} {published.astimezone(SH_TZ):%m-%d %H:%M} {title[:40]}（正文 {len(content)} 字）")
     print(
-        f"\n合计：链接 {total_links} ｜ 入库 {stats['new']} ｜ 过滤 {stats['filtered']}"
+        f"\n合计：链接 {len(links)} ｜ 入库 {stats['new']} ｜ 过滤 {stats['filtered']}"
         f" ｜ 解析失败 {stats['parse_fail']} ｜ 频道分布 {dict(channel_counter)}"
     )
 
