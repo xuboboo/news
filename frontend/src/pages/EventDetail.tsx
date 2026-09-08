@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Clock3, Newspaper, TrendingUp, ArrowRight } from 'lucide-react';
-import { eventById } from '../api/client';
+import { apiMode, eventById, fetchEventById, type EventWithScore } from '../api/client';
 import { activateOnKey, useBootstrapReady, useDataVersion, usePageTitle, useTick } from '../utils/hooks';
 import { ArticleWithScore } from '../types';
 import ArticleModal from '../components/ArticleModal';
@@ -31,14 +31,34 @@ export default function EventDetail() {
 
   // dataVer：后台同步拉到新数据后重新查询（含首次引导完成的那次通知）
   // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVer 变化触发重算
-  const event = useMemo(() => (id ? eventById(id) : undefined), [id, dataVer]);
+  const cachedEvent = useMemo(() => (id ? eventById(id) : undefined), [id, dataVer]);
+  // 事件滚出列表窗口（/events?limit=100）时的按需兜底：直调 /events/{id}
+  const [fetchedEvent, setFetchedEvent] = useState<EventWithScore | null>(null);
+  const [fetchFailed, setFetchFailed] = useState(false);
+  const event = cachedEvent ?? fetchedEvent ?? undefined;
+  const shouldFetch = bootReady && !!id && !cachedEvent && !fetchedEvent && !fetchFailed;
+
+  useEffect(() => {
+    if (!shouldFetch || !apiMode) return;
+    let cancelled = false;
+    fetchEventById(id as string).then((ev) => {
+      if (cancelled) return;
+      if (ev) setFetchedEvent(ev);
+      else setFetchFailed(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [shouldFetch, id, fetchedEvent, fetchFailed]);
 
   usePageTitle(event ? event.title : '事件详情');
 
-  // 引导未完成时不急着判“未找到”，避免直接打开链接时误报
+  // 引导未完成或兜底拉取进行中时不急着判“未找到”，避免直接打开链接时误报
+  // （后端未连接 apiMode=false 时无兜底可拉，直接落入未找到态）
   if (!bootReady) return <Loading />;
 
   if (!event) {
+    if (shouldFetch && apiMode) return <Loading />;
     return (
       <div className="card py-20 text-center">
         <div className="text-sm text-slate-400 mb-4">未找到该热点事件</div>

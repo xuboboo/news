@@ -12,6 +12,8 @@ from app.models.article import Article
 from app.models.event import EventArticle, HotEvent
 from app.models.report import DailyReport
 from app.services import usage_service
+from app.services.report_push import push_enabled, push_report
+from app.utils.text import truncate_boundary
 from sqlalchemy import text as sql_text
 
 
@@ -72,6 +74,39 @@ def _dedupe_texts(items: list[str]) -> list[str]:
             seen.add(key)
             out.append(it)
     return out
+
+
+def _compose_overview(
+    top_events: list[dict],
+    channel_stats: list[dict],
+    articles_total: int,
+) -> str:
+    """今日综述（无 LLM 的确定性模板）：头条事件 + 其余热点 + 频道亮点。
+
+    接入 LLM 后可在 build_report 里用同签名替换为 AI 撰写并以本实现兜底。
+    """
+    if articles_total <= 0:
+        return ''
+    parts: list[str] = []
+    if top_events:
+        e1 = top_events[0]
+        lead = f"今日最热「{truncate_boundary(e1['title'], 48)}」"
+        if e1['articles_count'] > 1:
+            lead += f"，聚合 {e1['articles_count']} 篇报道"
+        if e1['sources_count'] > 1:
+            lead += f"，{e1['sources_count']} 家来源交叉报道"
+        parts.append(lead + "。")
+        rest = [e for e in top_events[1:4]]
+        if rest:
+            names = "、".join(f"「{truncate_boundary(e['title'], 32)}」" for e in rest)
+            parts.append(f"此外，{names}等 {len(top_events) - 1} 个热点持续发酵。")
+    if channel_stats:
+        c1 = channel_stats[0]
+        tail = f"{c1['channel']}以 {c1['count']} 篇收录居首"
+        if len(channel_stats) > 1 and channel_stats[1]['count'] > 0:
+            tail += f"，{channel_stats[1]['channel']} {channel_stats[1]['count']} 篇次之"
+        parts.append(tail + "。")
+    return "".join(parts)
 
 
 def build_report(db: Session, day: date_type) -> dict:
@@ -156,7 +191,9 @@ def build_report(db: Session, day: date_type) -> dict:
             "tags": (a.summary.tags if a.summary else [])[:4],
         }
 
-    quick_news = [art_brief(a, hs) for a, hs in scored[:8]]
+    # 热点速览 = TOP5 之后的 8 篇：收录量上来后与「当日热榜 TOP 5」零重叠
+    # （旧口径 scored[:8] 时 TOP5 完全包含于速览，同页展示两遍）
+    quick_news = [art_brief(a, hs) for a, hs in scored[5:13]]
     top_articles = [art_brief(a, hs) for a, hs in scored[:5]]
 
     # —— 行业变化：top 事件核心影响首条，剥导语壳 / 截首句 / 近似去重 ——
@@ -198,6 +235,8 @@ def build_report(db: Session, day: date_type) -> dict:
         "issue_no": issue_no_for(day),
         # 快照生成时刻：重新生成会覆盖，前端据此展示"生成于"
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        # 今日综述（确定性模板；接入 LLM 后替换为 AI 撰写并以此兜底）
+        "overview": _compose_overview(top_events, channel_stats, len(day_articles)),
         "top_events": top_events,
         "quick_news": quick_news,
         "industry_changes": industry_changes,
@@ -230,4 +269,7 @@ def generate_daily_report(db: Session, day: date_type | None = None) -> DailyRep
         db.add(row)
     db.commit()
     db.refresh(row)
+    # 生成/重算后按配置推送（env 配置，默认关；失败不影响已落库的日报）
+    if push_enabled():
+        push_report(content)
     return row

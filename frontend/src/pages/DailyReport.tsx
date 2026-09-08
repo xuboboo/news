@@ -51,6 +51,8 @@ export default function DailyReport() {
   );
   // 空态手动重试进行中（避免重复点击、给加载反馈）
   const [retrying, setRetrying] = useState(false);
+  // 「复制 Markdown」成功提示（2s 自动复位）
+  const [copied, setCopied] = useState(false);
   const navigate = useNavigate();
 
   // API 模式下日报日期晚于首帧到达：用派生值兜底选中最新一天，无需 effect 同步
@@ -99,7 +101,7 @@ export default function DailyReport() {
 
   const visibleDates = dates.slice(0, MAX_DATE_CHIPS);
   const dateChips = (
-    <div className="flex items-center gap-1.5 flex-wrap">
+    <div className="flex items-center gap-1.5 flex-wrap print:hidden">
       {visibleDates.map((d) => (
         <button
           key={d.key}
@@ -201,6 +203,65 @@ export default function DailyReport() {
     ? new Date(report.generatedAt).toLocaleString('zh-CN', { hour12: false })
     : null;
 
+  // 导出：客户端拼 Markdown（企业微信/语雀/邮件均友好），clipboard 不可用时 execCommand 兜底
+  const reportToMarkdown = (r: DailyReportView): string => {
+    const lines: string[] = [];
+    lines.push(`## 华军软件园 · 科技日报 ${r.date}（第 ${r.issueNo} 期）`, '');
+    if (r.overview) lines.push(r.overview, '');
+    if (r.articlesTotal != null) lines.push(`> 共收录 **${r.articlesTotal}** 篇报道`, '');
+    if (r.topEvents.length) {
+      lines.push('### 当日 TOP 热点', '');
+      r.topEvents.forEach((e, i) =>
+        lines.push(`${i + 1}. **${e.title}**（热度 ${formatScore(e.hotScore)}）`)
+      );
+      lines.push('');
+    }
+    if (r.industryChanges.length) {
+      lines.push('### 行业变化', '');
+      r.industryChanges.forEach((c) => lines.push(`- ${c}`));
+      lines.push('');
+    }
+    if (r.quickNews.length) {
+      lines.push('### 热点速览', '');
+      r.quickNews.forEach((a) => lines.push(`- ${a.title}（${a.source}）`));
+      lines.push('');
+    }
+    if (r.topArticles.length) {
+      lines.push('### 当日热榜 TOP 5', '');
+      r.topArticles.forEach((a, i) =>
+        lines.push(`${i + 1}. ${a.title}（热度 ${formatScore(a.hotScore)}）`)
+      );
+      lines.push('');
+    }
+    const origins = r.channelStats?.length
+      ? r.channelStats.map((c) => `- ${c.channel}：${c.count} 篇`)
+      : r.sourceStats.map((s) => `- ${s.source}：${s.count} 篇`);
+    if (origins.length) lines.push('### 重点来源', '', ...origins, '');
+    lines.push('> 由华军软件园资讯雷达系统自动生成');
+    return lines.join('\n');
+  };
+  const copyMarkdown = async () => {
+    const text = reportToMarkdown(report);
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* 复制失败静默（http 非 Secure 上下文等） */
+    }
+  };
+
   return (
     <div>
       <PageHeader
@@ -236,24 +297,41 @@ export default function DailyReport() {
             <h2 className="text-2xl font-semibold text-slate-100">
               华军软件园 · 科技日报 {report.date}
             </h2>
-            <p className="text-sm text-slate-400 mt-1.5">
-              {report.topEvents.length > 0
-                ? `当日 ${report.topEvents.length} 个热点事件持续发酵，共聚合 ${collectedTotal} 篇报道。`
-                : `当日暂无聚合事件，共收录 ${collectedTotal} 篇重点报道。`}
+            <p className="text-sm text-slate-300 mt-2 leading-relaxed max-w-3xl">
+              {report.overview ??
+                (report.topEvents.length > 0
+                  ? `当日 ${report.topEvents.length} 个热点事件持续发酵，共聚合 ${collectedTotal} 篇报道。`
+                  : `当日暂无聚合事件，共收录 ${collectedTotal} 篇重点报道。`)}
             </p>
           </div>
-          <div className="flex gap-6 text-right">
-            <div>
-              <div className="text-2xl font-bold text-slate-100 tabular-nums">{collectedTotal}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">收录报道</div>
+          <div className="flex flex-col items-end gap-3">
+            <div className="flex gap-6 text-right">
+              <div>
+                <div className="text-2xl font-bold text-slate-100 tabular-nums">{collectedTotal}</div>
+                <div className="text-[11px] text-slate-500 mt-0.5">收录报道</div>
+              </div>
+              <div>
+                <div className="text-2xl font-bold text-amber-300 tabular-nums">{report.topEvents.length}</div>
+                <div className="text-[11px] text-slate-500 mt-0.5">热点事件</div>
+              </div>
+              <div>
+                <div className="text-2xl font-bold text-cyan-300 tabular-nums">{originStats.length}</div>
+                <div className="text-[11px] text-slate-500 mt-0.5">来源栏目</div>
+              </div>
             </div>
-            <div>
-              <div className="text-2xl font-bold text-amber-300 tabular-nums">{report.topEvents.length}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">热点事件</div>
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-cyan-300 tabular-nums">{originStats.length}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">来源栏目</div>
+            <div className="flex gap-2 print:hidden">
+              <button
+                onClick={() => void copyMarkdown()}
+                className="chip bg-radar-panel text-slate-400 border border-radar-border hover:text-slate-200 text-[11px] px-2.5 py-1 cursor-pointer"
+              >
+                {copied ? '已复制 ✓' : '复制 Markdown'}
+              </button>
+              <button
+                onClick={() => window.print()}
+                className="chip bg-radar-panel text-slate-400 border border-radar-border hover:text-slate-200 text-[11px] px-2.5 py-1 cursor-pointer"
+              >
+                打印 / 导出 PDF
+              </button>
             </div>
           </div>
         </div>

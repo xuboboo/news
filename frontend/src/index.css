@@ -426,3 +426,36 @@ input:-webkit-autofill:focus {
   caret-color: inherit;
   transition: background-color 99999s ease-in-out 0s, color 99999s ease-in-out 0s;
 }
+
+/* ———— 日报打印 / 导出 PDF（print-daily-report）————
+   只做骨架隐藏 + 强制浅色：侧边栏(aside)/顶栏(header)/页脚(footer)不入纸，
+   卡片去阴影避免断页花屏；交互控件由页面内 print:hidden 各自隐藏 */
+@media print {
+  aside,
+  header,
+  footer {
+    display: none !important;
+  }
+  html,
+  body {
+    background: #fff !important;
+  }
+  main {
+    padding: 0 !important;
+    max-width: none !important;
+  }
+  .card {
+    background: #fff !important;
+    border-color: #d4d4d8 !important;
+    box-shadow: none !important;
+    break-inside: avoid;
+  }
+  /* 深色主题变量下抽出的装饰光斑/渐变条不入纸 */
+  .pointer-events-none {
+    display: none !important;
+  }
+  main,
+  main * {
+    color: #18181b !important;
+  }
+}

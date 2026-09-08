@@ -167,6 +167,8 @@ export interface DailyReportView {
   channelStats?: { channel: string; count: number }[];
   /** 快照生成时刻（ISO；历史快照缺省） */
   generatedAt?: string;
+  /** 今日综述（content.overview；历史快照缺省时页面回退模板句） */
+  overview?: string;
 }
 
 function mapApiReport(date: string, data: any, articleMap: Map<string, ArticleWithScore>): DailyReportView {
@@ -197,6 +199,7 @@ function mapApiReport(date: string, data: any, articleMap: Map<string, ArticleWi
     articlesTotal: typeof data.articles_total === 'number' ? data.articles_total : undefined,
     channelStats: Array.isArray(data.channel_stats) ? data.channel_stats : undefined,
     generatedAt: typeof data.generated_at === 'string' ? data.generated_at : undefined,
+    overview: typeof data.overview === 'string' && data.overview ? data.overview : undefined,
   };
 }
 
@@ -476,6 +479,24 @@ export function eventById(id: string): EventWithScore | undefined {
 
 export function eventsForArticle(articleId: string): EventWithScore[] {
   return EVENTS_WITH_SCORE.filter((e) => e.articleIds.includes(articleId));
+}
+
+/** 按需拉取单个事件（/events/{id}）：列表窗口（limit=100）外的事件详情兜底。
+ *  成员文章用响应内嵌数据水合（_article_dict 自带 summary），不经全局文章缓存。 */
+export async function fetchEventById(id: string): Promise<EventWithScore | null> {
+  if (!apiMode) return null;
+  const rawId = id.startsWith('e') ? id.slice(1) : id;
+  try {
+    const raw = await fetchJSON(`/events/${rawId}`, 8000);
+    const articleMap = new Map<string, ArticleWithScore>(
+      (raw.articles ?? []).map(
+        (a: any) => [String(a.id), mapApiArticle(a)] as [string, ArticleWithScore]
+      )
+    );
+    return mapApiEvent(raw, articleMap);
+  } catch {
+    return null;
+  }
 }
 
 export interface DailyIssue {

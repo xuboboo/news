@@ -63,7 +63,8 @@ def truncate(text: str, limit: int = 60) -> str:
 def truncate_boundary(text: str, limit: int = 64) -> str:
     """展示用截断：超限时优先在句内最后一个逗号/顿号处收尾，避免"将会基…"半字硬切。
 
-    后半段（limit 的 40% 之后）找不到标点时退化为普通硬截断。
+    后半段（limit 的 40% 之后）找不到标点时退化为普通硬截断；
+    截点回退避开英文/数字单词中部（"共塑 Wi…" → "共塑 …"）。
     """
     text = (text or "").strip()
     if len(text) <= limit:
@@ -71,4 +72,9 @@ def truncate_boundary(text: str, limit: int = 64) -> str:
     cut = text.rfind("，", limit // 2, limit - 1)
     if cut <= 0:
         cut = text.rfind("、", limit // 2, limit - 1)
-    return (text[:cut] if cut > 0 else text[: limit - 1]) + "…"
+    if cut <= 0:
+        cut = limit - 1
+    # 回退避开 ASCII 单词中部
+    while cut > 0 and text[cut - 1].isascii() and text[cut].isascii() and text[cut - 1].isalnum():
+        cut -= 1
+    return text[:cut] + "…"

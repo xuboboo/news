@@ -1,5 +1,6 @@
-"""日报「行业变化」文案清洗（_clean_change_text / _dedupe_texts）单测：纯函数无 DB。"""
-from app.services.report_service import _clean_change_text, _dedupe_texts
+"""日报「行业变化」文案清洗与综述/markdown 渲染单测：纯函数无 DB。"""
+from app.services.report_push import render_report_markdown
+from app.services.report_service import _clean_change_text, _compose_overview, _dedupe_texts
 
 
 def test_strips_it_home_lede_prefix():
@@ -70,3 +71,59 @@ def test_dedupe_near_identical():
     assert len(out) == 2
     assert out[0].startswith("科技媒体")
     assert out[1].startswith("火狐")
+
+
+def test_overview_empty_when_no_articles():
+    assert _compose_overview([], [], 0) == ""
+
+
+def test_overview_lead_event_and_channels():
+    events = [
+        {"title": "微软发布 Win11 大版本更新", "articles_count": 3, "sources_count": 2},
+        {"title": "DeepSeek 新模型内测", "articles_count": 1, "sources_count": 1},
+    ]
+    channels = [
+        {"channel": "智能时代", "count": 26},
+        {"channel": "软件之家", "count": 8},
+    ]
+    text = _compose_overview(events, channels, 42)
+    assert text.startswith("今日最热「微软发布 Win11 大版本更新」，聚合 3 篇报道，2 家来源交叉报道。")
+    assert "「DeepSeek 新模型内测」" in text
+    assert "智能时代以 26 篇收录居首" in text
+    assert "软件之家 8 篇次之" in text
+
+
+def test_overview_single_event_no_rest():
+    events = [{"title": "某事件", "articles_count": 1, "sources_count": 1}]
+    text = _compose_overview(events, [], 5)
+    assert text == "今日最热「某事件」。"
+
+
+def test_render_markdown_sections():
+    content = {
+        "date": "2026-09-08",
+        "issue_no": 147,
+        "overview": "今日最热「A」。",
+        "articles_total": 42,
+        "top_events": [
+            {"title": "A", "hot_score": 100, "articles_count": 3, "sources_count": 2}
+        ],
+        "industry_changes": ["变化一"],
+        "quick_news": [{"title": "某文", "source": "IT之家"}],
+        "channel_stats": [{"channel": "智能时代", "count": 26}],
+        "generated_at": "2026-09-08T18:40:00+00:00",
+    }
+    md = render_report_markdown(content)
+    assert "## 华军软件园 · 科技日报 2026-09-08（第 147 期）" in md
+    assert "今日最热「A」。" in md
+    assert "共收录 **42** 篇报道" in md
+    assert "1. **A**（热度 100，3 篇/2 源）" in md
+    assert "- 变化一" in md
+    assert "- 某文（IT之家）" in md
+    assert "- 智能时代：26 篇" in md
+    assert "生成于" in md
+
+
+def test_render_markdown_minimal():
+    md = render_report_markdown({"date": "2026-09-01", "issue_no": 1})
+    assert "科技日报 2026-09-01" in md
