@@ -307,8 +307,9 @@ def report_daily(date: str | None = None, db: Session = Depends(get_db)):
 
 
 @router.get("/report/dates")
-def report_dates(db: Session = Depends(get_db)):
-    rows = db.query(DailyReport).order_by(DailyReport.date.desc()).all()
+def report_dates(limit: int = Query(60, ge=1, le=366), db: Session = Depends(get_db)):
+    """日报期号列表（新→旧）。limit 控制拉取规模，默认最近 60 期。"""
+    rows = db.query(DailyReport).order_by(DailyReport.date.desc()).limit(limit).all()
     return {"items": [{"date": r.date.isoformat(), "issue_no": r.issue_no} for r in rows]}
 
 

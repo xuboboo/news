@@ -58,3 +58,17 @@ def keyword_jaccard(a: str, b: str) -> float:
 def truncate(text: str, limit: int = 60) -> str:
     text = (text or "").strip()
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def truncate_boundary(text: str, limit: int = 64) -> str:
+    """展示用截断：超限时优先在句内最后一个逗号/顿号处收尾，避免"将会基…"半字硬切。
+
+    后半段（limit 的 40% 之后）找不到标点时退化为普通硬截断。
+    """
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    cut = text.rfind("，", limit // 2, limit - 1)
+    if cut <= 0:
+        cut = text.rfind("、", limit // 2, limit - 1)
+    return (text[:cut] if cut > 0 else text[: limit - 1]) + "…"

@@ -17,7 +17,7 @@ from app.models.article import Article
 from app.models.event import EventArticle, HotEvent
 from app.services import config_service
 from app.services.usage_service import extract_openai_usage, record_usage
-from app.utils.text import keyword_jaccard, truncate
+from app.utils.text import keyword_jaccard, truncate, truncate_boundary
 from app.utils.url_guard import assert_public_http_url
 
 
@@ -58,15 +58,19 @@ def _compose_summary(members: list[Article]) -> str:
 
 
 def _compose_impacts(members: list[Article]) -> list[str]:
-    """核心影响：从各成员摘要的核心信息中取首条事实（有摘要时）。"""
+    """核心影响：从各成员摘要的核心信息中取首条事实（有摘要时）。
+
+    上限 110（而非更紧的显示位截断）：行业变化/事件页都要在此之上再做
+    二次裁剪，写库阶段截太短会造成"期间透…"式的不可逆半句。
+    """
     impacts = []
     for a in members:
         if a.summary and a.summary.key_points:
-            impacts.append(truncate(a.summary.key_points[0], 64))
+            impacts.append(truncate_boundary(a.summary.key_points[0], 110))
         if len(impacts) >= 3:
             break
     if not impacts:
-        impacts = [truncate(a.title, 64) for a in members[:3]]
+        impacts = [truncate_boundary(a.title, 110) for a in members[:3]]
     return impacts
 
 

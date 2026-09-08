@@ -161,6 +161,12 @@ export interface DailyReportView {
   topArticles: ArticleWithScore[];
   /** 今日 AI 成本（后端日报 content.ai_cost；本地兜底模式无此字段） */
   aiCost?: { calls: number; tokens: number; cost: number };
+  /** 当日窗口文章总数（content.articles_total；历史快照缺省时回退收录条数） */
+  articlesTotal?: number;
+  /** 频道维度分布（content.channel_stats；历史快照缺省时回退 sourceStats） */
+  channelStats?: { channel: string; count: number }[];
+  /** 快照生成时刻（ISO；历史快照缺省） */
+  generatedAt?: string;
 }
 
 function mapApiReport(date: string, data: any, articleMap: Map<string, ArticleWithScore>): DailyReportView {
@@ -188,6 +194,9 @@ function mapApiReport(date: string, data: any, articleMap: Map<string, ArticleWi
     topArticles: (data.top_articles ?? [])
       .map((n: any) => articleMap.get(String(n.id)) ?? briefToArticle(n)) as ArticleWithScore[],
     aiCost: data.ai_cost ?? undefined,
+    articlesTotal: typeof data.articles_total === 'number' ? data.articles_total : undefined,
+    channelStats: Array.isArray(data.channel_stats) ? data.channel_stats : undefined,
+    generatedAt: typeof data.generated_at === 'string' ? data.generated_at : undefined,
   };
 }
 
@@ -297,15 +306,16 @@ function ensureReconnect(): void {
 }
 
 /** 拉取日报日期 + 最近 7 天日报缓存；失败静默（DailyReport 页可按需重试）。
- *  force=false 时 60s 内已成功加载过或在途中则跳过（启动与日报页挂载都会调用，避免重复全量拉取）。 */
+ *  force=false 时 minIntervalMs 内已成功加载过或在途中则跳过（启动与日报页挂载都会调用，
+ *  避免重复全量拉取；日报页传更长间隔，让 08:00 新生成的日报在常驻页面上低频自动出现）。 */
 let lastReportsLoad = 0;
 let loadingReports = false;
 /** 是否至少完整尝试过一次日报加载（无论成败）；日报页据此区分「加载中」与「确实无日报」 */
 export let reportsLoaded = false;
 
-export async function loadReports(force = false): Promise<void> {
+export async function loadReports(force = false, minIntervalMs = 60000): Promise<void> {
   if (!apiMode) return;
-  if (!force && (loadingReports || Date.now() - lastReportsLoad < 60000)) return;
+  if (!force && (loadingReports || Date.now() - lastReportsLoad < minIntervalMs)) return;
   loadingReports = true;
   try {
     const dates = await fetchJSON('/report/dates', 6000);

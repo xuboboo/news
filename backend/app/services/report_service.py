@@ -1,4 +1,6 @@
 """日报服务（PRD 第 7 节）：每日自动生成 / report_task 落库。"""
+import re
+from collections import defaultdict
 from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 
@@ -23,22 +25,65 @@ def issue_no_for(day: date_type) -> int:
     return max(1, (day - start).days + 1)
 
 
+# 「IT之家 9 月 8 日消息，」「快科技 9 月 9 日讯，」等媒体导语壳
+_LEDE_PREFIX_RE = re.compile(
+    r'^\S{0,12}\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:消息|讯|快讯)\s*[，,]?\s*'
+)
+# 「据韩媒 sedaily 消息，」「据IT之家小伙伴反馈，」等无日期转述壳
+_LEDE_JU_RE = re.compile(r'^据[^，。]{1,14}(?:消息|反馈|爆料)[，,]\s*')
+# 转述句式「（科技媒体 X 发布博文，）报道称/指出/表示…」——变化本体在连接词之后
+_REPORTING_CONNECTOR_RE = re.compile(r'(?:报道称|博文称|视频称|报告中称|指出|表示|透露|分享了)')
+_SENTENCE_SPLIT_RE = re.compile(r'[。！？]')
+
+
+def _clean_change_text(raw: object) -> str:
+    """行业变化文案清洗：剥离媒体导语壳 → 切断转述连接词 → 截取首句 → 限长。
+
+    事件 impacts / 文章 key_points 里存的是原报道导语（"IT之家 9 月 8 日消息，
+    科技媒体……发布博文，报道称……"），整条搬进「行业变化」栏目会整列同款开头；
+    剥壳后真正承载"变化"的是转述连接词之后的本体。
+    """
+    text = _LEDE_PREFIX_RE.sub('', str(raw or '').strip())
+    text = _LEDE_JU_RE.sub('', text)
+    if not text:
+        return ''
+    parts = _SENTENCE_SPLIT_RE.split(text, maxsplit=1)
+    first = parts[0] if parts and len(parts[0]) >= 8 else text
+    # 连接词切断只在首句内做：跨句的"表示/指出"会劫持本来完好的短标题
+    m = _REPORTING_CONNECTOR_RE.search(first[:60])
+    if m and m.end() < len(first):
+        candidate = first[m.end():].lstrip('，,：: ')
+        if len(candidate) >= 8:
+            first = candidate
+    if len(first) > 110:
+        # 超长时优先在句内最后一个逗号处截断，避免"将会基…"这类半字硬切
+        cut = first.rfind('，', 60, 109)
+        first = (first[:cut] if cut > 0 else first[:109]) + '…'
+    return first
+
+
+def _dedupe_texts(items: list[str]) -> list[str]:
+    """按去标点后的前 24 字符近似去重（同一事件的导语变体高度雷同）。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for it in items:
+        key = re.sub(r'\W+', '', it)[:24]
+        if key and key not in seen:
+            seen.add(key)
+            out.append(it)
+    return out
+
+
 def build_report(db: Session, day: date_type) -> dict:
     """构建日报内容（前端可直接渲染的结构）。"""
     day_start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
     day_end = day_start + timedelta(days=1)
 
-    def _in_day(dt: datetime) -> bool:
-        dt = _tz(dt)
-        return day_start <= dt < day_end
-
-    day_articles = [
-        a for a in db.query(Article)
-        .filter(Article.publish_time >= day_start - timedelta(hours=2),
-                Article.publish_time < day_end + timedelta(hours=2))
+    day_articles = (
+        db.query(Article)
+        .filter(Article.publish_time >= day_start, Article.publish_time < day_end)
         .all()
-        if _in_day(a.publish_time)
-    ]
+    )
 
     def with_score(a: Article):
         return a, hot_score(a.views, a.comments, a.shares, a.likes or 0, a.publish_time)
@@ -47,23 +92,43 @@ def build_report(db: Session, day: date_type) -> dict:
     max_raw = scored[0][1] if scored else 0
 
     # —— TOP 事件（当天有报道的事件）——
+    # 4 条集合查询替代逐事件 N+1（旧实现 = 1 + 2×事件总数 条查询）；
+    # articles_count / sources_count 仍按事件全量成员统计（口径不变）
+    day_ids = [a.id for a in day_articles]
+    events: list[HotEvent] = []
+    member_ids_by_ev: dict[int, list[int]] = defaultdict(list)
+    sources_by_ev: dict[int, set] = defaultdict(set)
+    if day_ids:
+        candidate_ids = [
+            row[0]
+            for row in db.query(EventArticle.event_id)
+            .filter(EventArticle.article_id.in_(day_ids))
+            .distinct()
+            .all()
+        ]
+        if candidate_ids:
+            links = (
+                db.query(EventArticle.event_id, EventArticle.article_id)
+                .filter(EventArticle.event_id.in_(candidate_ids))
+                .all()
+            )
+            for eid, aid in links:
+                member_ids_by_ev[eid].append(aid)
+            art_sources = dict(
+                db.query(Article.id, Article.source)
+                .filter(Article.id.in_({aid for _, aid in links}))
+                .all()
+            )
+            for eid, aid in links:
+                src = art_sources.get(aid)
+                if src:
+                    sources_by_ev[eid].add(src)
+            events = db.query(HotEvent).filter(HotEvent.id.in_(candidate_ids)).all()
+
     top_events = []
-    events = db.query(HotEvent).all()
     max_ev_raw = max((e.hot_score for e in events), default=0)
     for ev in events:
-        links = db.query(EventArticle).filter_by(event_id=ev.id).all()
-        member_ids = [lnk.article_id for lnk in links]
-        members = [a for a in day_articles if a.id in member_ids]
-        if not members:
-            continue
-        # 口径统一：articles_count 与 sources_count 都按事件全量成员统计
-        # （sources_count 原先只数当日成员，与 articles_count 口径不一致）
-        all_member_sources = {
-            row[0]
-            for row in db.query(Article.source)
-            .filter(Article.id.in_(member_ids))
-            .all()
-        }
+        member_ids = member_ids_by_ev.get(ev.id, [])
         top_events.append({
             "id": ev.id,
             "title": ev.title,
@@ -71,48 +136,57 @@ def build_report(db: Session, day: date_type) -> dict:
             "status": ev.status,
             "hot_score": round((ev.hot_score / max_ev_raw) * 100, 1) if max_ev_raw > 0 else round(ev.hot_score, 1),
             "articles_count": len(member_ids),
-            "sources_count": len(all_member_sources),
+            "sources_count": len(sources_by_ev.get(ev.id, set())),
         })
     top_events = sorted(top_events, key=lambda e: e["hot_score"], reverse=True)[:5]
 
-    # —— 热点速览 / TOP5 ——
-    def art_brief(a: Article) -> dict:
-        _, hs = with_score(a)
+    # —— 热点速览 / TOP5：热度口径与全站对齐（榜单页均为 0-100 归一化），
+    #     基准取当日最大原始分 ——
+    def art_brief(a: Article, hs: float) -> dict:
+        normalized = round((hs / max_raw) * 100, 1) if max_raw > 0 else round(hs, 1)
         return {
             "id": a.id,
             "title": a.title,
             "source": a.source,
             "channel": a.channel,
-            "hot_score": round(hs, 1),
+            "hot_score": normalized,
             "url": a.url,
             "publish_time": _tz(a.publish_time).isoformat(),
             "summary_short": a.summary.summary_short if a.summary else "",
             "tags": (a.summary.tags if a.summary else [])[:4],
         }
 
-    quick_news = [art_brief(a) for a, _ in scored[:8]]
-    top_articles = [art_brief(a) for a, _ in scored[:5]]
+    quick_news = [art_brief(a, hs) for a, hs in scored[:8]]
+    top_articles = [art_brief(a, hs) for a, hs in scored[:5]]
 
-    # —— 行业变化 ——
+    # —— 行业变化：top 事件核心影响首条，剥导语壳 / 截首句 / 近似去重 ——
+    ev_by_id = {ev.id: ev for ev in events}
     industry_changes = []
-    for ev_id in [e["id"] for e in top_events]:
-        ev = db.get(HotEvent, ev_id)
+    for e in top_events:
+        ev = ev_by_id.get(e["id"])
         if ev and ev.impacts:
-            industry_changes.append(str(ev.impacts[0]))
+            industry_changes.append(_clean_change_text(ev.impacts[0]))
     if not industry_changes:
         industry_changes = [
-            a.summary.key_points[0]
+            _clean_change_text(a.summary.key_points[0])
             for a, _ in scored[:4]
             if a.summary and a.summary.key_points
         ]
-    industry_changes = [str(x) for x in industry_changes][:5]
+    industry_changes = _dedupe_texts([x for x in industry_changes if x])[:5]
 
-    # —— 重点来源 ——
+    # —— 重点来源：source 粒度只有 IT之家/快科技 两档（四频道共用 source），
+    #     频道维度才有分布信息；source_stats 保留供旧快照/兼容 ——
     source_map: dict[str, int] = {}
+    channel_map: dict[str, int] = {}
     for a in day_articles:
         source_map[a.source] = source_map.get(a.source, 0) + 1
+        channel_map[a.channel] = channel_map.get(a.channel, 0) + 1
     source_stats = sorted(
         ({"source": k, "count": v} for k, v in source_map.items()),
+        key=lambda x: x["count"], reverse=True,
+    )
+    channel_stats = sorted(
+        ({"channel": k, "count": v} for k, v in channel_map.items()),
         key=lambda x: x["count"], reverse=True,
     )
 
@@ -122,11 +196,15 @@ def build_report(db: Session, day: date_type) -> dict:
     return {
         "date": day.isoformat(),
         "issue_no": issue_no_for(day),
+        # 快照生成时刻：重新生成会覆盖，前端据此展示"生成于"
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "top_events": top_events,
         "quick_news": quick_news,
         "industry_changes": industry_changes,
         "source_stats": source_stats,
+        "channel_stats": channel_stats,
         "top_articles": top_articles,
+        "articles_total": len(day_articles),
         "max_hot_score": max_raw,
         "ai_cost": ai_cost,
     }

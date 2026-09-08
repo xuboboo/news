@@ -73,7 +73,6 @@ export default function DailyReport() {
   useEffect(() => {
     if (!bootReady) return;
     void loadReports(false, 300000);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- bootReady/dataVer 变化触发
   }, [bootReady, dataVer]);
 
   // 渲染期直接读缓存（纯读取）；未命中时异步拉取，setState 仅出现在回调中
