@@ -41,10 +41,10 @@ docker compose up -d --build     # 一键上线全套服务
 
 | 频道 | 采集页面 |
 | --- | --- |
-| Win11之家 | win11.ithome.com（/tags/Win11/ 兜底） |
+| Win11之家 | win11.ithome.com（/tags/Win11/ 兜底页已 404，弃用） |
 | Win10之家 | win10.ithome.com（/tags/Win10/ 兜底） |
 | 软件之家 | soft.ithome.com（/tags/软件/ 已 404） |
-| 智能时代 | ithome.com/tags/AI/（官方 AI 标签页） |
+| 智能时代 | next.ithome.com（官方「智能时代」子站，2026-09 由 /tags/AI/ 标签页修正而来，不留标签页兜底以保口径纯粹） |
 
 ## 目录结构（PRD 第 4 节）
 

@@ -140,7 +140,7 @@ function SyncStatus() {
       ) : (
         <span className="chip bg-amber-500/10 text-amber-300 border border-amber-400/30">
           <AlertTriangle className="h-3 w-3" />
-          演示数据 · 后端未连接
+          后端未连接 · 自动重连中
         </span>
       )}
     </>
@@ -319,7 +319,7 @@ export default function Layout() {
             text={
               apiMode
                 ? `AI Worker · 已处理 ${summarized} 篇`
-                : `本地演示数据 · ${summarized} 篇`
+                : 'AI Worker · 未连接'
             }
             ok={apiMode}
           />

@@ -1,12 +1,12 @@
-import { ARTICLES as LOCAL_ARTICLES, EVENTS as LOCAL_EVENTS } from './data';
-import { Article, ArticleWithScore, HotEvent } from '../types';
+import { ArticleWithScore, HotEvent } from '../types';
 import { toDateKey } from '../utils/format';
 import { getAuthStatus, onAuthChange, setAnon } from '../auth';
 
 /**
  * API 层（对接后端 /api/v2，见 PRD 第 12 节）：
- * - 优先模式：从真实后端拉取数据并水合内存结构（nginx 反代 /api）
- * - 兜底模式：后端不可达时使用内置本地数据引擎（结构完全一致）
+ * - API 模式：从真实后端拉取数据并水合内存结构（nginx 反代 /api）
+ * - 兜底模式：后端不可达时保持空数据 + 15s 周期重连（2026-09 移除内置假数据：
+ *   演示文章与真实数据源口径不符，宁可空态也不展示编造内容；页面自带「暂无数据」空状态）
  *
  * 对应后端接口：
  *   GET /api/v2/articles/latest?limit=      → 最新/全量文章
@@ -18,35 +18,8 @@ import { getAuthStatus, onAuthChange, setAnon } from '../auth';
 const API_BASE: string = (import.meta as any).env?.VITE_API_BASE ?? '';
 export let apiMode = false;
 
-/** 应用引导状态：pending = 首屏骨架；ready = 数据就绪（API 或本地兜底） */
+/** 应用引导状态：pending = 首屏骨架；ready = 数据就绪（API 或空态兜底） */
 export let bootstrapState: 'pending' | 'ready' = 'pending';
-
-/** 热度衰减系数（每小时），HotScore = Engagement × TimeDecay */
-const DECAY_PER_HOUR = 0.0075;
-const COMMENT_WEIGHT = 4;
-const LIKE_WEIGHT = 2;
-const SHARE_WEIGHT = 6;
-
-function rawEngagement(a: Article): number {
-  return a.views + a.comments * COMMENT_WEIGHT + a.likes * LIKE_WEIGHT + a.shares * SHARE_WEIGHT;
-}
-
-// ———————————————————— 本地兜底引擎 ————————————————————
-
-function buildLocalArticles(): ArticleWithScore[] {
-  const now = Date.now();
-  const withRaw = LOCAL_ARTICLES.map((a) => {
-    const hours = a.publishOffsetMin / 60;
-    const publishTime = new Date(now - a.publishOffsetMin * 60000);
-    const raw = rawEngagement(a) * Math.exp(-DECAY_PER_HOUR * hours);
-    return { ...a, publishTime, rawScore: raw, hotScore: 0 };
-  });
-  const max = withRaw.length ? Math.max(...withRaw.map((a) => a.rawScore)) : 0;
-  withRaw.forEach((a) => {
-    a.hotScore = (a.rawScore / (max || 1)) * 100;
-  });
-  return withRaw;
-}
 
 export interface EventWithScore extends HotEvent {
   rawScore: number;
@@ -56,41 +29,10 @@ export interface EventWithScore extends HotEvent {
   lastTime: Date;
 }
 
-function buildLocalEvents(): EventWithScore[] {
-  const localArticles = buildLocalArticles();
-  const list = LOCAL_EVENTS.map((e) => {
-    const articles = e.articleIds
-      .map((id) => localArticles.find((a) => a.id === id))
-      .filter(Boolean) as ArticleWithScore[];
-    const sorted = [...articles].sort(
-      (x, y) => x.publishTime.getTime() - y.publishTime.getTime()
-    );
-    const rawScore = sorted.reduce((s, a) => s + a.rawScore, 0);
-    return {
-      ...e,
-      timeline: (e.timeline ?? []).map((t) => ({
-        time: new Date(Date.now() - t.offsetMin * 60000),
-        text: t.text,
-        source: t.source,
-      })),
-      articles: sorted,
-      rawScore,
-      hotScore: 0,
-      firstTime: sorted[0]?.publishTime ?? new Date(),
-      lastTime: sorted[sorted.length - 1]?.publishTime ?? new Date(),
-    };
-  });
-  const max = list.length ? Math.max(...list.map((e) => e.rawScore)) : 0;
-  list.forEach((e) => {
-    e.hotScore = (e.rawScore / (max || 1)) * 100;
-  });
-  return list.sort((x, y) => y.rawScore - x.rawScore);
-}
-
 // ———————————————————— 可变数据源（页面直接读取） ————————————————————
 
-export let ARTICLES_WITH_SCORE: ArticleWithScore[] = buildLocalArticles();
-export let EVENTS_WITH_SCORE: EventWithScore[] = buildLocalEvents();
+export let ARTICLES_WITH_SCORE: ArticleWithScore[] = [];
+export let EVENTS_WITH_SCORE: EventWithScore[] = [];
 
 const reportCache = new Map<string, any>();
 export let REPORT_DATES: string[] = [];
@@ -538,58 +480,31 @@ function friendlyDateLabel(key: string): string {
   return key === todayKey ? '今天' : key === yesterdayKey ? '昨天' : key.slice(5).replace('-', '/');
 }
 
-/** 可选日报日期：API 模式用后端返回（loadReports 完成前为空），本地模式从文章库推导 */
+/** 可选日报日期：来自后端返回（loadReports 完成前为空） */
 export function availableDates(): DailyIssue[] {
-  if (apiMode) {
-    return REPORT_DATES.map((key) => ({ key, label: friendlyDateLabel(key), offsetMin: 0 }));
-  }
-  const keys = new Set(ARTICLES_WITH_SCORE.map((a) => toDateKey(a.publishTime)));
-  return [...keys]
-    .sort((x, y) => (x < y ? 1 : -1))
-    .map((key) => ({ key, label: friendlyDateLabel(key), offsetMin: 0 }));
+  return REPORT_DATES.map((key) => ({ key, label: friendlyDateLabel(key), offsetMin: 0 }));
 }
 
-function deriveLocalReport(dateKey: string): DailyReportView {
-  const arts = ARTICLES_WITH_SCORE.filter((a) => toDateKey(a.publishTime) === dateKey);
-  const topArticles = [...arts].sort((a, b) => b.rawScore - a.rawScore).slice(0, 5);
-
-  const evs = EVENTS_WITH_SCORE.filter((e) =>
-    e.articles.some((a) => toDateKey(a.publishTime) === dateKey)
-  );
-  const topEvents = evs.slice(0, 5);
-
-  const industryChanges: string[] = [];
-  for (const e of topEvents) {
-    const member = e.articles.find(
-      (a) => a.industryChange && toDateKey(a.publishTime) === dateKey
-    );
-    if (member?.industryChange) industryChanges.push(member.industryChange);
-  }
-  if (industryChanges.length === 0) {
-    arts
-      .filter((a) => (a as any).industryChange)
-      .slice(0, 4)
-      .forEach((a) => industryChanges.push((a as any).industryChange));
-  }
-
-  const sourceMap = new Map<string, number>();
-  arts.forEach((a) => sourceMap.set(a.source, (sourceMap.get(a.source) ?? 0) + 1));
-  const sourceStats = [...sourceMap.entries()]
-    .map(([source, count]) => ({ source, count }))
-    .sort((a, b) => b.count - a.count);
-
-  const quickNews = [...arts].sort((a, b) => b.rawScore - a.rawScore).slice(0, 6);
-
-  return { date: dateKey, issueNo: 1, topEvents, quickNews, industryChanges, sourceStats, topArticles };
+/** 空日报视图：后端未连接时的兜底（页面渲染空态，不再展示本地推导的假数据） */
+function emptyReport(dateKey: string): DailyReportView {
+  return {
+    date: dateKey,
+    issueNo: 1,
+    topEvents: [],
+    quickNews: [],
+    industryChanges: [],
+    sourceStats: [],
+    topArticles: [],
+  };
 }
 
-/** 读取日报：API 模式仅命中缓存；本地模式实时推导。未命中返回 null（配合 fetchDailyReport 异步拉取）。 */
+/** 读取日报：API 模式仅命中缓存；未连接时返回空视图。未命中返回 null（配合 fetchDailyReport 异步拉取）。 */
 export function peekDailyReport(dateKey: string): DailyReportView | null {
   if (apiMode) return reportCache.get(dateKey) ?? null;
-  return deriveLocalReport(dateKey);
+  return emptyReport(dateKey);
 }
 
-/** 按需拉取日报：API 模式实时请求并写入缓存；本地模式同步推导。拉取失败返回 null。 */
+/** 按需拉取日报：API 模式实时请求并写入缓存。拉取失败返回 null。 */
 export async function fetchDailyReport(dateKey: string): Promise<DailyReportView | null> {
   if (apiMode) {
     try {
@@ -605,5 +520,5 @@ export async function fetchDailyReport(dateKey: string): Promise<DailyReportView
       return null;
     }
   }
-  return deriveLocalReport(dateKey);
+  return emptyReport(dateKey);
 }

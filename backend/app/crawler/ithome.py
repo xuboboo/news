@@ -1,11 +1,11 @@
 """IT之家体系采集服务（PRD 数据链路第一环：数据源 → 采集服务 → 文章数据库）。
 
 频道 → 页面映射（页面即频道真相，不做任何关键词归类）：
-- Win11之家：官方子站 win11.ithome.com（/tags/Win11/ 标签页兜底）
+- Win11之家：官方子站 win11.ithome.com（/tags/Win11/ 兜底页已 404，弃用）
 - Win10之家：官方子站 win10.ithome.com（/tags/Win10/ 标签页兜底）
 - 软件之家：官方子站 soft.ithome.com（/tags/软件/ 已 404，无兜底）
-- 智能时代：官方 AI 标签页 /tags/AI/ 与 ChatGPT 标签页 /tags/ChatGPT/
-  （IT之家无"智能时代"子站，取最接近的官方 AI 主题页）
+- 智能时代：官方子站 next.ithome.com（2026-09 口径修正：曾误用 /tags/AI/
+  标签页，导致频道内容与官方"智能时代"站对不上；不用标签页兜底，保口径纯粹）
 
 文章只从上述页面收录：出现在哪个页面就属于哪个频道；
 未出现在任何频道页面的文章一律不入库（2026-09 审计决策：废弃主站 RSS 全量抓取 + 关键词归类）。
@@ -41,7 +41,6 @@ except Exception:  # 极端精简镜像缺 tzdata 时的固定偏移兜底
 PAGE_SOURCES: dict[str, list[str]] = {
     "Win11之家": [
         "https://win11.ithome.com/",
-        "https://www.ithome.com/tags/Win11/",
     ],
     "Win10之家": [
         "https://win10.ithome.com/",
@@ -51,8 +50,7 @@ PAGE_SOURCES: dict[str, list[str]] = {
         "https://soft.ithome.com/",
     ],
     "智能时代": [
-        "https://www.ithome.com/tags/AI/",
-        "https://www.ithome.com/tags/ChatGPT/",
+        "https://next.ithome.com/",
     ],
 }
 
