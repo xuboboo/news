@@ -1,7 +1,7 @@
 """热点事件聚合算法（PRD 第 10 节）
 
 判定条件（同时满足才合并为同一事件）：
-1. Embedding 余弦相似度 > 0.85（与事件质心比较）
+1. Embedding 余弦相似度 > 生效阈值（默认 0.85，管理面板可热调）
 2. 标题关键词 Jaccard 相似度 ≥ 阈值（关键词层面）
 3. 发布时间在聚类时间窗内（默认 48 小时）
 
@@ -41,9 +41,19 @@ def _tz(t: datetime) -> datetime:
     return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
 
 
-def cluster_articles(items: List[ClusterItem]) -> List[Cluster]:
-    """贪心聚类：时间倒序处理，满足三条件（相似度/关键词/时间窗）才并入。"""
+def cluster_articles(
+    items: List[ClusterItem],
+    sim_threshold: Optional[float] = None,
+    keyword_threshold: Optional[float] = None,
+) -> List[Cluster]:
+    """贪心聚类：时间倒序处理，满足三条件（相似度/关键词/时间窗）才并入。
+
+    阈值未传时取 .env 静态配置；生产链路由 run_event_clustering 传入
+    运行时生效值（DB 覆盖 .env，管理面板热调）。
+    """
     s = get_settings()
+    sim_th = s.sim_threshold if sim_threshold is None else sim_threshold
+    kw_th = s.keyword_jaccard_threshold if keyword_threshold is None else keyword_threshold
     window = s.cluster_window_hours * 3600
     ordered = sorted(items, key=lambda m: _tz(m.publish_time), reverse=True)
 
@@ -59,7 +69,7 @@ def cluster_articles(items: List[ClusterItem]) -> List[Cluster]:
             sim = cosine(item.embedding, c.centroid)
             # 条件 2：标题关键词重合
             kw = keyword_jaccard(item.title, rep.title)
-            if sim > s.sim_threshold and kw >= s.keyword_jaccard_threshold:
+            if sim > sim_th and kw >= kw_th:
                 c.members.append(item)
                 c.centroid = centroid([m.embedding for m in c.members])
                 placed = True

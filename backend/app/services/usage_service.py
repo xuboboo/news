@@ -18,8 +18,10 @@ from app.models.usage import AiUsageLog, ModelPrice
 
 logger = logging.getLogger(__name__)
 
-# 降级 / 本地模型标识：非真实 API 调用，不计入 LLM 覆盖率分子
-LOCAL_MODELS = {"extractive-textrank-v1", "local-hash-256", "compose-facts"}
+# 降级 / 本地模型标识：非真实 API 调用，不计入 LLM 覆盖率分子。
+# extractive-textrank-v2 ↔ app/ai/summary.py；local-hash-256-v2 ↔ app/ai/embedding.py
+# 的 LOCAL_EMBED_MODEL（此处用字面量，反向 import 会循环依赖）——改名需两处同步。
+LOCAL_MODELS = {"extractive-textrank-v2", "local-hash-256-v2", "compose-facts"}
 
 # CSV 导出首行注释（对账口径说明）
 CSV_NOTE = "本地口径=纯token成本，不含阶梯折扣/赠送额度/代金券/税点，与供应商账单对账存在口径差异"

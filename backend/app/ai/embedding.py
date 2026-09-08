@@ -2,8 +2,11 @@
 
 两级实现：
 1. API 模式：配置 embedding_base_url 等后走 OpenAI 兼容 /embeddings 接口。
-2. 本地模式：字符级 n-gram 哈希向量化（256 维，L2 归一化）——确定性、可离线，
-   对同事件报道的标题/正文具有稳定词面相似度，支撑 pgvector 近邻检索。
+2. 本地模式（local-hash-256-v2）：字符级 n-gram 符号哈希向量化——md5 散列落桶 +
+   ±1 符号位（Weinberger 2009，碰撞误差期望抵消）+ sublinear TF（1+ln 频次压缩）+
+   L2 归一化。确定性、可离线，对同事件报道的标题/正文具有稳定词面相似度，
+   支撑 pgvector 近邻检索；相对 v1（无符号累加），无关文本的相似度不再被
+   碰撞系统性抬高，聚类判别力更好（量程整体下移，必要时热调 sim_threshold）。
 
 安全/一致性：API 模式默认严格（EMBEDDING_STRICT=true）——调用失败或返回维度
 与 EMBED_DIM 不一致时记录 api_fail 并抛 EmbeddingError（由任务层重试），
@@ -13,6 +16,7 @@ import hashlib
 import math
 import re
 import time
+from collections import Counter
 from typing import List, Optional
 
 import httpx
@@ -22,6 +26,10 @@ from app.services.usage_service import extract_openai_usage, record_usage
 from app.utils.url_guard import assert_public_http_url
 
 _TOKEN = re.compile(r"[\u4e00-\u9fffA-Za-z0-9]+")
+
+# 本地哈希向量的记账名（ai_usage_log.model）。usage_service.LOCAL_MODELS 按字面
+# 引用此名——两处需同步修改（不可反向 import，会循环依赖）。
+LOCAL_EMBED_MODEL = "local-hash-256-v2"
 
 
 class EmbeddingError(RuntimeError):
@@ -38,11 +46,13 @@ def _ngrams(text: str, n_range=(1, 2, 3)) -> List[str]:
 
 
 def _hash_vec(text: str, dim: int) -> List[float]:
-    """n-gram 哈希向量化：md5 散列落桶 + 频次累加 + L2 归一化。"""
+    """n-gram 哈希向量化 v2：符号哈希（±1 抵消碰撞偏置）+ sublinear TF + L2 归一化。"""
+    counts = Counter(_ngrams(text))
     vec = [0.0] * dim
-    for g in _ngrams(text):
+    for g, c in counts.items():
         h = int(hashlib.md5(g.encode("utf-8")).hexdigest(), 16)
-        vec[h % dim] += 1.0
+        sign = 1.0 if h & 1 else -1.0
+        vec[h % dim] += sign * (1.0 + math.log(c))
     norm = math.sqrt(sum(v * v for v in vec)) or 1.0
     return [v / norm for v in vec]
 
@@ -63,7 +73,7 @@ def embed(
     - API 配置启用且成功 → status=success（仅输入 token）；
     - API 配置启用但失败（连接/非 200/维度不符）→ status=api_fail；
       strict 模式（默认）抛 EmbeddingError 交任务层重试；非 strict 静默回退本地哈希；
-    - API 未配置 → 记 model=local-hash-256、cost=0（与抽取式摘要同理，非 api_fail）。
+    - API 未配置 → 记 model=local-hash-256-v2、cost=0（与抽取式摘要同理，非 api_fail）。
 
     cfg: 运行时生效配置 (base_url, api_key, model)，由调用方从配置服务读取；
     未传时回退 .env 静态配置。
@@ -132,7 +142,7 @@ def embed(
     # API 未配置：本地哈希回退落一条 cost=0 的账（status=success，非 api_fail）
     record_usage(
         task_type="embedding",
-        model="local-hash-256",
+        model=LOCAL_EMBED_MODEL,
         status="success",
         article_id=article_id,
         trigger=trigger,

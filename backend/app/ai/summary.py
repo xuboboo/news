@@ -3,10 +3,12 @@
 两级实现：
 1. LLM 模式：配置 llm_base_url / llm_api_key / llm_model 后走 OpenAI 兼容接口，
    Prompt 按 PRD 要求输出 {"summary","points","tags"}，客观、不增加观点、保留事实。
-2. 抽取式兜底：未配置 LLM 时使用 TextRank 式抽取算法（词频+位置+标题相关性打分），
+2. 抽取式兜底（extractive-textrank-v2）：真 TextRank——句子相似图（Mihalcea-Tarau
+   重叠度）上跑 PageRank，混合标题相关覆盖率与导语位置权重，MMR 去冗余选 5 句，
    同样产出三要素，保证流水线闭环可运行。
 """
 import json
+import math
 import re
 import time
 from dataclasses import dataclass, field
@@ -162,34 +164,99 @@ def _summarize_by_llm(
         return None
 
 
+def _pagerank(sim: List[List[float]], d: float = 0.85, iters: int = 30) -> List[float]:
+    """加权 PageRank（TextRank 句子重要度）；悬挂节点均匀分摊。n≤40，微秒级。"""
+    n = len(sim)
+    if n == 0:
+        return []
+    out = [sum(row) for row in sim]
+    rank = [1.0 / n] * n
+    for _ in range(iters):
+        nxt = [(1.0 - d) / n] * n
+        dangling = d * sum(r for r, o in zip(rank, out) if o <= 0) / n
+        for i in range(n):
+            if out[i] <= 0:
+                continue
+            w = d * rank[i] / out[i]
+            row = sim[i]
+            for j in range(n):
+                if row[j] > 0:
+                    nxt[j] += w * row[j]
+        for j in range(n):
+            nxt[j] += dangling
+        rank = nxt
+    return rank
+
+
+def _mmr_select(scores: List[float], word_sets: List[set], k: int = 5, lam: float = 0.7) -> List[int]:
+    """MMR 选句：λ·相关性 − (1−λ)·与已选句的最大词集 Jaccard，抑制近重复句挤占要点。"""
+
+    def _jac(a: set, b: set) -> float:
+        return len(a & b) / len(a | b) if a | b else 0.0
+
+    cand = set(range(len(scores)))
+    picked: List[int] = []
+    while cand and len(picked) < k:
+        best_i, best_v = None, -1.0
+        for i in cand:
+            red = max((_jac(word_sets[i], word_sets[p]) for p in picked), default=0.0)
+            v = lam * scores[i] - (1.0 - lam) * red
+            if v > best_v:
+                best_i, best_v = i, v
+        picked.append(best_i)
+        cand.remove(best_i)
+    return picked
+
+
 def _summarize_extractive(title: str, content: str) -> SummaryResult:
-    """抽取式摘要：句子打分 = 关键词覆盖 × 位置权重，取 TopN 作为核心信息。"""
+    """抽取式摘要 v2：TextRank 句子重要度 × 标题相关覆盖率 × 导语位置权重，
+    MMR 去冗余后取 Top5 按原文顺序输出。"""
     text = (content or "").strip() or title
-    sents = [s for s in split_sentences(text) if not is_boilerplate(s)]
+    sents = [s for s in split_sentences(text) if not is_boilerplate(s)][:40]
     kws = extract_keywords(f"{title}。{text}", 12)
     title_kws = set(extract_keywords(title, 6))
+    ref = title_kws | set(kws)
 
-    scored: List[tuple] = []
-    for i, sent in enumerate(sents[:40]):
-        words = set(extract_keywords(sent, 20))
-        overlap = len(words & (title_kws | set(kws))) / max(1, len(kws))
-        pos_weight = 1.25 if i < 3 else 1.0  # 导语位置加权
-        scored.append((overlap * pos_weight, i, sent))
-    scored.sort(reverse=True)
+    word_sets = [set(extract_keywords(s, 20)) for s in sents]
+    n = len(sents)
 
-    # 取打分最高的 5 句，按原文顺序输出为核心信息
-    key_points = [truncate(sent, 70) for _, _, sent in sorted(scored[:5], key=lambda t: t[1])]
+    # 覆盖率用 precision 语义（分母 = 句子自身关键词数）：长句不再天然占优
+    cov = [len(w & ref) / len(w) if w else 0.0 for w in word_sets]
+
+    # TextRank：句子相似图（重叠度按词数对数归一，Mihalcea-Tarau 2004）上跑 PageRank
+    sim = [[0.0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            ov = len(word_sets[i] & word_sets[j])
+            if ov and word_sets[i] and word_sets[j]:
+                denom = math.log(len(word_sets[i])) + math.log(len(word_sets[j]))
+                if denom > 0:
+                    sim[i][j] = sim[j][i] = ov / denom
+    rank = _pagerank(sim)
+    max_rank = max(rank, default=0.0)
+    rank = [r / max_rank if max_rank > 0 else 0.0 for r in rank]
+
+    pos_w = [1.25 if i < 3 else 1.0 for i in range(n)]  # 导语位置加权
+    scores = [(0.7 * rank[i] + 0.3 * cov[i]) * pos_w[i] for i in range(n)]
+
+    picked = _mmr_select(scores, word_sets, k=5)
+    key_points = [truncate(sents[i], 70) for i in sorted(picked)]
     if not key_points:
         key_points = [truncate(title, 70)]
 
     lead = sents[0] if sents else title
     summary_short = truncate(lead, 60)
+    summary_long = (
+        truncate("。".join(sents[i] for i in sorted(picked)), 400)
+        if picked
+        else truncate(text, 400)
+    )
 
     tags = kws[:4] if kws else []
     return SummaryResult(
         summary_short=summary_short,
-        summary_long=truncate(text, 400),
-        key_points=key_points[:5],
+        summary_long=summary_long,
+        key_points=key_points,
         tags=tags,
-        model="extractive-textrank-v1",
+        model="extractive-textrank-v2",
     )

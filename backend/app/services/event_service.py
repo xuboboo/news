@@ -13,9 +13,9 @@ from sqlalchemy.orm import Session
 
 from app.ai.embedding import cosine
 from app.ai.event_cluster import ClusterItem, cluster_articles, event_time_range, event_title_for
-from app.core.config import get_settings
 from app.models.article import Article
 from app.models.event import EventArticle, HotEvent
+from app.services import config_service
 from app.services.usage_service import extract_openai_usage, record_usage
 from app.utils.text import truncate
 from app.utils.url_guard import assert_public_http_url
@@ -145,8 +145,10 @@ def _llm_event_summary(
 
 def run_event_clustering(db: Session) -> dict:
     """对近期已向量化文章执行聚类并增量更新事件库。返回统计。"""
-    s = get_settings()
-    since = datetime.now(timezone.utc) - timedelta(hours=s.cluster_lookback_hours)
+    # 阈值/回看窗读运行时生效值（管理面板可热调，DB 覆盖 .env）
+    sim_threshold = float(config_service.get_effective(db, "sim_threshold"))
+    lookback_hours = int(config_service.get_effective(db, "cluster_lookback_hours"))
+    since = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
 
     articles = (
         db.query(Article)
@@ -168,7 +170,7 @@ def run_event_clustering(db: Session) -> dict:
         )
         for a in articles
     ]
-    clusters = cluster_articles(items)
+    clusters = cluster_articles(items, sim_threshold=sim_threshold)
     article_map = {a.id: a for a in articles}
 
     updated = created = 0
@@ -185,7 +187,7 @@ def run_event_clustering(db: Session) -> dict:
                 (cosine(list(m.embedding), ev_vec) for m in cluster.members),
                 default=0.0,
             )
-            if sim > s.sim_threshold:
+            if sim > sim_threshold:
                 target_event = ev
                 break
 

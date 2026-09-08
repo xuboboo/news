@@ -108,11 +108,33 @@ started/finished/耗时/成败/错误摘要；逐篇 summary/embedding 任务不
    Prompt 按 PRD 第 7 节要求（客观、不增加观点、保留事实）输出
    `{"summary","points","tags"}`；事件总结与核心影响同样由 LLM 交叉聚合生成。
 2. **内置算法模式**（当前运行状态，未配置 LLM 时自动生效）：
-   - 摘要：TextRank 式抽取算法（jieba 关键词 + 句子打分），真实 NLP 处理
-   - 向量：字符级 n-gram 哈希向量化（256 维 L2 归一），确定性可离线
-   - 聚类：Embedding 余弦 > 0.85 + 标题关键词 Jaccard + 48h 时间窗（PRD 第 10 节）
+   - 摘要：`extractive-textrank-v2`——真 TextRank（句子相似图 PageRank）× 标题相关
+     覆盖率 × 导语位置权重，MMR 去冗余选 5 句按原文顺序输出
+   - 向量：`local-hash-256-v2`——字符级 n-gram 符号哈希（±1 抵消碰撞偏置）+
+     sublinear TF，256 维 L2 归一，确定性可离线
+   - 聚类：Embedding 余弦 > sim_threshold + 标题关键词 Jaccard + 48h 时间窗
+     （PRD 第 10 节）；sim_threshold 支持管理面板热调（DB 覆盖 .env，聚类实时读取）
 
 两模式对上层完全透明，配置 LLM 后无需改任何代码。
+
+### 本地算法 v1 → v2 迁移 runbook
+
+v2 相对 v1 的量程变化：符号哈希消除了碰撞导致的相似度虚高，无关文本对从
+0.3-0.5 回落到 0-0.2，同事件对亦整体下移——**0.85 的旧阈值大概率偏严**。
+未配置 Embedding API（本地哈希即主链路）时，代码升级后必须执行：
+
+```bash
+docker compose up -d --build backend worker ai-worker beat crawler   # 1. 新代码生效（5 个 Python 服务共用同一镜像）
+docker compose exec backend python scripts/repair_data.py   # 2. 全量重写摘要(v2)+重嵌向量(v2)+重聚类+重建日报
+docker compose exec backend python scripts/sim_report.py    # 3. 看相似度分布与建议阈值
+# 4. 按报告在管理面板热调 sim_threshold（如 0.85 → 0.75），再跑一遍 repair_data.py 重聚类
+```
+
+`sim_report.py` 以现有事件成员对为正例、随机文章对为负例输出分位数分布与
+建议起点。⚠️ 实测（2026-09）：同站新闻底噪高（随机对 p50≈0.78），0.80 会
+过合并（无关文章混入事件），**保持 0.85 精确率优先**；若调低，务必人工抽查
+多成员事件的一致性——误合并需 TRUNCATE `event`/`event_article` 后重跑
+repair_data.py 才能拆散（增量聚类只合并不拆分）。前台抽查热榜/最新页摘要与事件聚合质量收尾。
 
 ## 数据真实性说明
 
