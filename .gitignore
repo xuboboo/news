@@ -23,3 +23,6 @@ logs/
 
 # 主题视觉验收临时截图
 .tmp-theme-shots/
+
+# TypeScript 增量构建产物（tsc --noEmit 也会写）
+frontend/tsconfig.tsbuildinfo

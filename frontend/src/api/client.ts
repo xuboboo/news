@@ -27,6 +27,10 @@ export interface EventWithScore extends HotEvent {
   articles: ArticleWithScore[];
   firstTime: Date;
   lastTime: Date;
+  /** 事件全量成员数（后端 articles_count；成员滚出文章窗口时 ≠ articles.length） */
+  articlesCount: number;
+  /** 事件全量成员的去重来源数（后端 sources_count；缺省时页面回退本地计算） */
+  sourcesCount?: number;
 }
 
 // ———————————————————— 可变数据源（页面直接读取） ————————————————————
@@ -144,6 +148,10 @@ function mapApiEvent(ev: any, articleMap: Map<string, ArticleWithScore>): EventW
       (x: { time: Date }, y: { time: Date }) => y.time.getTime() - x.time.getTime()
     ),
     articles: sorted,
+    // 后端口径（event_article 全量成员统计）优先；成员文章滚出「最近 400 篇」
+    // 窗口时 articles 数组会缩水，直接取 length 会把「12 篇报道」显示成「3 篇」
+    articlesCount: typeof ev.articles_count === 'number' ? ev.articles_count : sorted.length,
+    sourcesCount: typeof ev.sources_count === 'number' ? ev.sources_count : undefined,
     rawScore: ev.hot_score ?? 0,
     hotScore: ev.hot_score ?? 0,
     firstTime: sorted[0]?.publishTime ?? new Date(),

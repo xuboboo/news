@@ -1,0 +1,27 @@
+# 本地附加服务（compose 自动合并 override）：真语义向量服务，供事件聚类使用。
+# 与主 docker-compose.yml 分离，避免多会话并行开发时的编辑冲突。
+# 后端 .env 对应配置：
+#   EMBED_DIM=384（fastembed 的 bge-small-zh-v1.5 ONNX 实际输出维度）
+#   EMBEDDING_BASE_URL=http://embedding:80/v1
+#   EMBEDDING_API_KEY=local-embedding
+#   EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
+#   ALLOW_PRIVATE_AI_URLS=true
+services:
+  embedding:
+    build: ./embedding-server
+    environment:
+      # 国内网络：HF 官方站不稳，模型经镜像站下载后缓存于卷，重启不重下
+      HF_ENDPOINT: https://hf-mirror.com
+    volumes:
+      - embedding-models:/cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:80/health', timeout=3)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      # 首启需下载模型，健康判定放宽
+      start_period: 300s
+
+volumes:
+  embedding-models:

@@ -10,7 +10,6 @@ from app.services.taskrun_service import record_task_run
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("crawler-loop")
 
-
 def main():
     s = get_settings()
     logger.info("crawler loop started, interval=%s min", s.crawler_interval_minutes)
@@ -50,6 +49,12 @@ def main():
                                 for aid in result["new_ids"]:
                                     summary_task.delay(aid)
                                 logger.info("dispatched %s summary tasks", len(result["new_ids"]))
+                            # 孤儿自愈：补派历史滞留 pending（幂等，见 summary_service.repair_pending_summaries）
+                            from app.services.summary_service import repair_pending_summaries
+
+                            repaired = repair_pending_summaries(db)
+                            if repaired:
+                                logger.info("repaired %s stuck-pending articles", len(repaired))
                         finally:
                             db.close()
                 finally:

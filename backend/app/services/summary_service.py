@@ -1,4 +1,6 @@
 """摘要服务：文章 → article_summary 表（PRD 第 5 节流程的落库实现）。"""
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -59,3 +61,29 @@ def generate_summary(db: Session, article_id: int, trigger: str = "auto") -> Art
         db.commit()
     db.refresh(summary)
     return summary
+
+
+def repair_pending_summaries(
+    db: Session, older_than_minutes: int = 30, limit: int = 200
+) -> list[int]:
+    """孤儿自愈：找出长时间停留在 pending 的文章并补派摘要任务，返回补派 id 列表。
+
+    场景：摘要任务的派发发生在采集入库之后——进程在两者之间中断（重启/崩溃）
+    就会留下永不自处理的 pending 文章（2026-09-09 实测 28 篇滞留约 2 小时，
+    直到 broker 因 worker 重连重投递才自愈）。generate_summary 为 upsert 语义，
+    补派幂等；每轮采集触发一次，30 分钟阈值天然限频。
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)
+    ids = [
+        row[0]
+        for row in db.query(Article.id)
+        .filter(Article.ai_status == "pending", Article.created_at <= cutoff)
+        .limit(limit)
+        .all()
+    ]
+    if ids:
+        from app.tasks.tasks import summary_task  # 延迟导入避免循环依赖
+
+        for aid in ids:
+            summary_task.delay(aid)
+    return ids

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Newspaper, Clock3 } from 'lucide-react';
 import { EVENTS_WITH_SCORE, FRESH_EVENT_IDS } from '../api/client';
@@ -8,19 +8,28 @@ import { HeatBar, Loading, PageHeader, RankBadge } from '../components/common';
 import { SOURCE_COLORS, SOURCE_FALLBACK_COLOR } from '../constants/sourceColors';
 import { fullTime, formatScore, timeAgo } from '../utils/format';
 
+const STATUS_FILTERS = ['全部', '发酵中', '持续关注', '已平息', '多来源聚合'] as const;
+
 export default function Events() {
   const bootReady = useBootstrapReady();
   const navigate = useNavigate();
   const dataVer = useDataVersion();
+  const [statusFilter, setStatusFilter] = useState<string>('全部');
   useTick(); // 相对时间自动跳动（驱动 timeAgo 重渲染）
 
   usePageTitle('热点事件');
 
-  // dataVer：后台同步后重新排序（依赖数组处的豁免注释）
+  // dataVer：后台同步后重新排序（依赖数组处的豁免注释）；
+  // 「多来源聚合」滤掉单报道事件（本地降级模式下占大头，单独看聚合结果更聚焦）
   const events = useMemo(
-    () => [...EVENTS_WITH_SCORE].sort((a, b) => b.hotScore - a.hotScore),
+    () =>
+      EVENTS_WITH_SCORE.filter((e) => {
+        if (statusFilter === '全部') return true;
+        if (statusFilter === '多来源聚合') return e.articlesCount >= 2;
+        return e.status === statusFilter;
+      }).sort((a, b) => b.hotScore - a.hotScore),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVer 变化触发重算
-    [dataVer]
+    [dataVer, statusFilter]
   );
 
   if (!bootReady) return <Loading />;
@@ -29,13 +38,41 @@ export default function Events() {
     <div>
       <PageHeader
         title="热点事件"
-        description="Embedding 相似度 + 标题关键词 + 实体识别 + 时间窗口聚类 · 相似度 > 0.85 合并为同一事件"
+        description="Embedding 相似度 + 标题关键词 + 时间窗口三重门槛聚类 · 阈值可在管理面板热调"
       />
+
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        {STATUS_FILTERS.map((s) => {
+          const n =
+            s === '全部'
+              ? EVENTS_WITH_SCORE.length
+              : s === '多来源聚合'
+                ? EVENTS_WITH_SCORE.filter((e) => e.articlesCount >= 2).length
+                : EVENTS_WITH_SCORE.filter((e) => e.status === s).length;
+          const active = statusFilter === s;
+          return (
+            <button
+              key={s}
+              onClick={() => setStatusFilter(s)}
+              className={`chip px-3 py-1.5 text-xs border transition-colors cursor-pointer ${
+                active
+                  ? 'bg-accent/15 text-accent border-accent/40'
+                  : 'bg-radar-card text-slate-400 border-radar-border hover:text-slate-200'
+              }`}
+            >
+              {s} · {n}
+            </button>
+          );
+        })}
+      </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         {events.map((e, idx) => {
           const sources = new Set(e.articles.map((a) => a.source));
           const lastArticle = e.articles[e.articles.length - 1];
+          // 后端全量口径优先：成员滚出「最近 400 篇」窗口时 articles 数组会缩水
+          const articleCount = e.articlesCount ?? e.articles.length;
+          const sourceCount = e.sourcesCount ?? sources.size;
           return (
             <div
               key={e.id}
@@ -62,7 +99,7 @@ export default function Events() {
                   </div>
                   <div className="flex items-center gap-3 text-xs text-slate-500">
                     <span className="inline-flex items-center gap-1">
-                      <Newspaper className="h-3 w-3" /> {sources.size} 家来源 · {e.articles.length} 篇报道
+                      <Newspaper className="h-3 w-3" /> {sourceCount} 家来源 · {articleCount} 篇报道
                     </span>
                     <span className="inline-flex items-center gap-1">
                       <Clock3 className="h-3 w-3" />{' '}

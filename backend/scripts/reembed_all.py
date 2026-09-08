@@ -18,7 +18,7 @@ from app.tasks.tasks import embedding_task  # noqa: E402
 def main() -> None:
     db = new_session()
     try:
-        ids = [row for row in db.query(Article.id).scalars().all()]
+        ids = [row[0] for row in db.query(Article.id).all()]
     finally:
         db.close()
     print(f"re-embed all: dispatching {len(ids)} embedding_task (trigger=manual_repair)")

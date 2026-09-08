@@ -40,6 +40,12 @@ def crawler_task(trigger: str = "auto"):
                 run.detail = format_detail(result)
                 for article_id in result["new_ids"]:
                     summary_task.delay(article_id)
+                # 孤儿自愈：补派历史滞留 pending（幂等，见 summary_service.repair_pending_summaries）
+                from app.services.summary_service import repair_pending_summaries
+
+                repaired = repair_pending_summaries(db)
+                if repaired:
+                    run.detail += f" ｜ 补派 pending {len(repaired)} 篇"
                 return result
             finally:
                 db.close()
@@ -132,16 +138,29 @@ def embedding_task(article_id: int, trigger: str = "auto"):
 
 @celery_app.task(name="event_task")
 def event_task(trigger: str = "auto"):
-    """事件聚合任务：聚类近期文章 → 增量更新事件库 → 重算热度。"""
-    with record_task_run("event", trigger=trigger) as run:
-        db = new_session()
-        try:
-            stats = run_event_clustering(db)
-            recompute_event_scores(db)
-            run.detail = str(stats)
-            return stats
-        finally:
-            db.close()
+    """事件聚合任务：聚类近期文章 → 事件间二阶段合并 → 重算热度。
+
+    lock:event 与手动触发互斥：聚类/合并非原子读改写，并发会产生重复事件；
+    单 worker 串行下是双保险，扩多 worker 后是正确性前提。
+    """
+    from app.utils.lock import LOCK_EVENT, LOCK_EVENT_TTL_MS, acquire_lock, release_lock
+
+    if not acquire_lock(LOCK_EVENT, LOCK_EVENT_TTL_MS):
+        with record_task_run("event", trigger=trigger) as run:
+            run.detail = "skipped: another event clustering is running"
+        return {"skipped": True}
+    try:
+        with record_task_run("event", trigger=trigger) as run:
+            db = new_session()
+            try:
+                stats = run_event_clustering(db)
+                recompute_event_scores(db)
+                run.detail = str(stats)
+                return stats
+            finally:
+                db.close()
+    finally:
+        release_lock(LOCK_EVENT)
 
 
 @celery_app.task(name="report_task")
@@ -167,8 +186,13 @@ def report_task(date_str: str | None = None, trigger: str = "auto"):
 
 @celery_app.task(name="auth_cleanup_task")
 def auth_cleanup_task():
-    """每周清理：物理删除过期/已吊销会话 + 超过保留期的审计日志。"""
+    """每周清理：物理删除过期/已吊销会话 + 超过保留期的审计日志 + 超保留期的任务运行记录。
+
+    task_run 以每 10-15 分钟一行的频率增长（event/stats/crawler），不清理会无限膨胀；
+    运维排查一般只看近期，保留 90 天足够。
+    """
     from app.auth import sessions as session_store
+    from app.models.task_run import TaskRun
     from app.services import audit_service, config_service
 
     db = new_session()
@@ -179,8 +203,19 @@ def auth_cleanup_task():
         except Exception:
             days = 180
         audits_deleted = audit_service.purge_older_than(db, days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+        task_runs_deleted = (
+            db.query(TaskRun).filter(TaskRun.started_at < cutoff).delete(synchronize_session=False)
+        )
         db.commit()
-        logger.info("auth_cleanup: sessions=%s audit_logs=%s", sessions_deleted, audits_deleted)
-        return {"sessions_deleted": sessions_deleted, "audit_deleted": audits_deleted}
+        logger.info(
+            "auth_cleanup: sessions=%s audit_logs=%s task_runs=%s",
+            sessions_deleted, audits_deleted, task_runs_deleted,
+        )
+        return {
+            "sessions_deleted": sessions_deleted,
+            "audit_deleted": audits_deleted,
+            "task_runs_deleted": task_runs_deleted,
+        }
     finally:
         db.close()

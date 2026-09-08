@@ -76,6 +76,9 @@ export default function EventDetail() {
   }));
   const timeline = [...event.timeline].sort((a, b) => a.time.getTime() - b.time.getTime());
   const articles = [...event.articles].sort((a, b) => b.hotScore - a.hotScore);
+  // 后端全量口径优先：成员滚出「最近 400 篇」窗口时 articles 数组会缩水
+  const articleCount = event.articlesCount ?? event.articles.length;
+  const sourceCount = event.sourcesCount ?? sources.size;
 
   return (
     <div>
@@ -94,7 +97,7 @@ export default function EventDetail() {
               <div className="flex items-center gap-2.5 mb-2.5">
                 <EventStatusTag status={event.status} />
                 <span className="text-xs text-slate-500 inline-flex items-center gap-1">
-                  <Newspaper className="h-3.5 w-3.5" /> {sources.size} 家媒体 · {event.articles.length} 篇报道
+                  <Newspaper className="h-3.5 w-3.5" /> {sourceCount} 家媒体 · {articleCount} 篇报道
                 </span>
                 <span className="text-xs text-slate-500 inline-flex items-center gap-1">
                   <Clock3 className="h-3.5 w-3.5" /> {event.articles.length > 0 ? `${fullTime(event.firstTime)} 起` : '—'}
@@ -122,7 +125,7 @@ export default function EventDetail() {
           <section className="rounded-xl border border-cyan-400/15 bg-cyan-400/[0.04] p-5">
             <div className="flex items-center gap-2 mb-3">
               <AiBadge label="AI 事件总结" />
-              <span className="text-[11px] text-slate-500">基于 {event.articles.length} 篇报道交叉聚合</span>
+              <span className="text-[11px] text-slate-500">基于 {articleCount} 篇报道交叉聚合</span>
             </div>
             <p className="text-sm text-slate-200 leading-relaxed">{event.summary}</p>
             <div className="mt-4 pt-4 border-t border-radar-border">
@@ -144,7 +147,7 @@ export default function EventDetail() {
           <section className="card p-5">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-semibold text-slate-200">相关报道</h2>
-              <span className="text-xs text-slate-500">多来源关联 · Embedding 相似度高于 0.85</span>
+              <span className="text-xs text-slate-500">多来源关联 · 聚类阈值可在管理面板热调</span>
             </div>
             <div className="divide-y divide-radar-border">
               {articles.length === 0 && (

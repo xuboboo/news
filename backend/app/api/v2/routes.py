@@ -11,7 +11,7 @@ from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.algorithms.hot_score import hot_score, hot_score_expr
@@ -270,12 +270,44 @@ def article_summary(article_id: int, db: Session = Depends(get_db)):
 # ———————————————————— 热点事件（PRD 12）————————————————————
 
 @router.get("/events")
-def events_list(limit: int = Query(30, le=100), db: Session = Depends(get_db)):
-    events = db.query(HotEvent).order_by(HotEvent.hot_score.desc()).limit(limit).all()
+def events_list(
+    limit: int = Query(30, le=200),
+    offset: int = Query(0, ge=0),
+    status: str | None = None,
+    q: str | None = None,
+    min_members: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """事件列表：热度降序 + 过滤/分页。
+
+    total 为库内符合条件的真实总数（旧实现返回 len(当前页)，前端无法据此判断
+    是否还有更多事件）；status/q/min_members 供事件页过滤与「只看多来源聚合」
+    视图使用；offset 配合 limit 翻页（超过 top-N 的已平息事件不再不可达）。
+    """
+    query = db.query(HotEvent)
+    if status and status != "全部":
+        query = query.filter(HotEvent.status == status)
+    if q:
+        query = query.filter(HotEvent.title.ilike(f"%{_escape_like(q)}%", escape="\\"))
+    if min_members > 0:
+        query = query.filter(
+            HotEvent.id.in_(
+                select(EventArticle.event_id)
+                .group_by(EventArticle.event_id)
+                .having(func.count(EventArticle.article_id) >= min_members)
+            )
+        )
+    total = query.count()
+    events = (
+        query.order_by(HotEvent.hot_score.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     base_raw = _max_raw(db)
     return {
         "items": _events_payload(db, events, base_raw, with_articles=True),
-        "total": len(events),
+        "total": total,
     }
 
 

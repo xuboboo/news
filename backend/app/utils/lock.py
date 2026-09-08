@@ -22,6 +22,13 @@ LOCK_STATS = "stats"
 # 最坏轮次 = 批次 50 × 2 请求 × 8s 超时 + 间隔 ≈ 14min ≪ 30min；TTL 仅兜底进程崩溃
 LOCK_STATS_TTL_MS = 30 * 60 * 1000
 
+LOCK_EVENT = "event"
+# 聚类 + 事件间二阶段合并非原子读改写，beat(每10min) 与手动触发并发会产生重复
+# 事件；单 worker 串行下是双保险，扩多 worker 后是正确性前提。
+# 最坏轮次 = 全量 LLM 重算（60s/次 × 新增成员事件数），TTL 与 visibility_timeout
+# 同口径放宽到 4h，仅兜底进程崩溃
+LOCK_EVENT_TTL_MS = 4 * 60 * 60 * 1000
+
 
 def _client() -> "redis_lib.Redis":
     return redis_lib.Redis.from_url(
