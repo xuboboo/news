@@ -269,7 +269,7 @@ def generate_daily_report(db: Session, day: date_type | None = None) -> DailyRep
         db.add(row)
     db.commit()
     db.refresh(row)
-    # 生成/重算后按配置推送（env 配置，默认关；失败不影响已落库的日报）
-    if push_enabled():
-        push_report(content)
+    # 生成/重算后按配置推送（面板/env 双通道，默认关；失败不影响已落库的日报）
+    if push_enabled(db):
+        push_report(db, content)
     return row

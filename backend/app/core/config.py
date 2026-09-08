@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     audit_retention_days: int = 180      # 审计日志保留天数（beat 每周清理超期行）
     enable_docs: bool = True             # 是否公开 /docs /redoc /openapi.json（公网部署建议 false）
 
+    # —— 日报 Webhook 推送（面板可热调；.env 仅作默认值，留空 = 该通道关闭） ——
+    report_push_enabled: bool = False
+    report_push_wecom_webhook_url: str = ""
+    report_push_feishu_webhook_url: str = ""
+    report_push_feishu_secret: str = ""  # 飞书机器人开启「签名校验」时必填，未开启留空
+
     # —— 安全 ——
     cors_origins: str = "http://localhost,http://127.0.0.1"  # 允许跨域的前端来源（逗号分隔）
     allow_private_ai_urls: bool = False  # 允许 LLM/Embedding 地址指向私网（仅内网部署）

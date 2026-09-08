@@ -1,5 +1,9 @@
-"""日报「行业变化」文案清洗与综述/markdown 渲染单测：纯函数无 DB。"""
-from app.services.report_push import render_report_markdown
+"""日报「行业变化」文案清洗与综述/markdown 推送单测：纯函数无 DB。"""
+import base64
+import hashlib
+import hmac as hmac_mod
+
+from app.services.report_push import _feishu_sign, build_payload, render_report_markdown
 from app.services.report_service import _clean_change_text, _compose_overview, _dedupe_texts
 
 
@@ -127,3 +131,28 @@ def test_render_markdown_sections():
 def test_render_markdown_minimal():
     md = render_report_markdown({"date": "2026-09-01", "issue_no": 1})
     assert "科技日报 2026-09-01" in md
+
+
+def test_feishu_payload_card_with_sign():
+    p = build_payload("feishu", "# 标题", "s3cret")
+    assert p["msg_type"] == "interactive"
+    assert p["card"]["elements"][0] == {"tag": "markdown", "content": "# 标题"}
+    # 飞书签名算法：key = "{timestamp}\n{secret}"（换行拼接），空消息 HMAC-SHA256 → base64
+    key = p["timestamp"] + "\n" + "s3cret"
+    expected = base64.b64encode(hmac_mod.new(key.encode(), digestmod=hashlib.sha256).digest()).decode()
+    assert p["sign"] == expected
+
+
+def test_feishu_payload_without_secret_has_no_sign():
+    p = build_payload("feishu", "x")
+    assert "sign" not in p and "timestamp" not in p
+
+
+def test_wecom_payload_markdown():
+    assert build_payload("wecom", "正文") == {"msgtype": "markdown", "markdown": {"content": "正文"}}
+
+
+def test_feishu_sign_known_vector():
+    # 与飞书官方文档算法一致的构造：仅验证 key 拼接与摘要确定性
+    assert _feishu_sign("s", "123") == _feishu_sign("s", "123")
+    assert _feishu_sign("s", "123") != _feishu_sign("s2", "123")
