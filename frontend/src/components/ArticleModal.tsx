@@ -1,4 +1,4 @@
-import { X, Eye, MessageSquare, Share2, ExternalLink, Link2, Zap } from 'lucide-react';
+import { X, Eye, MessageSquare, Share2, ThumbsUp, ExternalLink, Link2, Zap } from 'lucide-react';
 import { useRef } from 'react';
 import { ArticleWithScore, EventStatus } from '../types';
 import {
@@ -85,16 +85,28 @@ export default function ArticleModal({
 
         <div className="px-6 py-5 space-y-5">
           {/* 元信息 */}
+          {/* 元信息：互动芯片有值才显示（阅读/分享暂无公开数据源恒为 0） */}
           <div className="flex items-center gap-5 text-xs text-slate-500">
-            <span className="inline-flex items-center gap-1.5">
-              <Eye className="h-3.5 w-3.5" /> {formatCount(article.views)}
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <MessageSquare className="h-3.5 w-3.5" /> {formatCount(article.comments)}
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <Share2 className="h-3.5 w-3.5" /> {formatCount(article.shares)}
-            </span>
+            {article.views > 0 && (
+              <span className="inline-flex items-center gap-1.5">
+                <Eye className="h-3.5 w-3.5" /> {formatCount(article.views)}
+              </span>
+            )}
+            {article.comments > 0 && (
+              <span className="inline-flex items-center gap-1.5">
+                <MessageSquare className="h-3.5 w-3.5" /> {formatCount(article.comments)}
+              </span>
+            )}
+            {article.likes > 0 && (
+              <span className="inline-flex items-center gap-1.5">
+                <ThumbsUp className="h-3.5 w-3.5" /> {formatCount(article.likes)}
+              </span>
+            )}
+            {article.shares > 0 && (
+              <span className="inline-flex items-center gap-1.5">
+                <Share2 className="h-3.5 w-3.5" /> {formatCount(article.shares)}
+              </span>
+            )}
           </div>
 
           {/* AI 摘要 */}

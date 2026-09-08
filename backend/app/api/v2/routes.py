@@ -49,7 +49,8 @@ def _summary_dict(s: ArticleSummary | None) -> dict | None:
 
 def _article_dict(a: Article, event_ids: dict[int, list[int]] | None = None, max_raw: float = 0) -> dict:
     views, comments, shares = a.views or 0, a.comments or 0, a.shares or 0
-    raw = hot_score(views, comments, shares, a.publish_time)
+    likes = a.likes or 0
+    raw = hot_score(views, comments, shares, likes, a.publish_time)
     hs = round((raw / max_raw) * 100, 1) if max_raw > 0 else round(raw, 1)
     return {
         "id": a.id,
@@ -61,6 +62,7 @@ def _article_dict(a: Article, event_ids: dict[int, list[int]] | None = None, max
         "views": views,
         "comments": comments,
         "shares": shares,
+        "likes": likes,
         "hot_score": hs,
         "ai_status": a.ai_status,
         "summary": _summary_dict(a.summary if hasattr(a, "summary") else None),
@@ -82,7 +84,7 @@ def _max_raw(db: Session) -> float:
 def _page_max_raw(articles: list[Article]) -> float:
     """max_raw 兜底：近 120h 无数据时用当页最大原始分，维持 0-100 归一化语义。"""
     return max(
-        (hot_score(a.views or 0, a.comments or 0, a.shares or 0, a.publish_time) for a in articles),
+        (hot_score(a.views or 0, a.comments or 0, a.shares or 0, a.likes or 0, a.publish_time) for a in articles),
         default=0.0,
     )
 
@@ -92,8 +94,8 @@ def _event_links(db: Session, article_ids: list[int]) -> dict[int, list[int]]:
         return {}
     links = db.query(EventArticle).filter(EventArticle.article_id.in_(article_ids)).all()
     out: dict[int, list[int]] = {}
-    for l in links:
-        out.setdefault(l.article_id, []).append(l.event_id)
+    for lnk in links:
+        out.setdefault(lnk.article_id, []).append(lnk.event_id)
     return out
 
 
@@ -107,7 +109,7 @@ def _events_payload(db: Session, events: list[HotEvent], max_raw: float, with_ar
         if event_ids
         else []
     )
-    art_ids = sorted({l.article_id for l in links})
+    art_ids = sorted({lnk.article_id for lnk in links})
     members_by_event: dict[int, list[Article]] = {eid: [] for eid in event_ids}
     if art_ids:
         members_map = {
@@ -117,15 +119,15 @@ def _events_payload(db: Session, events: list[HotEvent], max_raw: float, with_ar
             .filter(Article.id.in_(art_ids))
             .all()
         }
-        for l in links:
-            a = members_map.get(l.article_id)
+        for lnk in links:
+            a = members_map.get(lnk.article_id)
             if a is not None:
-                members_by_event[l.event_id].append(a)
+                members_by_event[lnk.event_id].append(a)
 
     max_event_raw = float(db.query(func.max(HotEvent.hot_score)).scalar() or 0.0)
     count_by_event: dict[int, int] = {}
-    for l in links:
-        count_by_event[l.event_id] = count_by_event.get(l.event_id, 0) + 1
+    for lnk in links:
+        count_by_event[lnk.event_id] = count_by_event.get(lnk.event_id, 0) + 1
     payload = []
     for ev in events:
         members = sorted(members_by_event[ev.id], key=lambda x: _tz(x.publish_time))
@@ -335,6 +337,15 @@ def trigger_events(request: Request, db: Session = Depends(get_db), _: None = De
 
     task = event_task.delay(trigger="manual")
     _audit_trigger(request, db, "admin.trigger_events", task.id)
+    return {"queued": True, "task_id": task.id}
+
+
+@router.post("/admin/stats")
+def trigger_stats_poll(request: Request, db: Session = Depends(get_db), _: None = Depends(require_admin)):
+    from app.tasks.tasks import stats_task
+
+    task = stats_task.delay(trigger="manual")
+    _audit_trigger(request, db, "admin.trigger_stats", task.id)
     return {"queued": True, "task_id": task.id}
 
 

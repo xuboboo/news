@@ -41,7 +41,7 @@ def build_report(db: Session, day: date_type) -> dict:
     ]
 
     def with_score(a: Article):
-        return a, hot_score(a.views, a.comments, a.shares, a.publish_time)
+        return a, hot_score(a.views, a.comments, a.shares, a.likes or 0, a.publish_time)
 
     scored = sorted(map(with_score, day_articles), key=lambda p: p[1], reverse=True)
     max_raw = scored[0][1] if scored else 0
@@ -52,7 +52,7 @@ def build_report(db: Session, day: date_type) -> dict:
     max_ev_raw = max((e.hot_score for e in events), default=0)
     for ev in events:
         links = db.query(EventArticle).filter_by(event_id=ev.id).all()
-        member_ids = [l.article_id for l in links]
+        member_ids = [lnk.article_id for lnk in links]
         members = [a for a in day_articles if a.id in member_ids]
         if not members:
             continue

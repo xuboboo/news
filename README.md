@@ -30,7 +30,7 @@
 
 | 模块 | 说明 |
 | --- | --- |
-| 🔥 **热榜中心** | `HotScore = Engagement × TimeDecay`，纯算法热度、无人工权重；互动数据缺失时自动降级为时间衰减主导 |
+| 🔥 **热榜中心** | `HotScore = Engagement × TimeDecay`，纯算法热度、无人工权重；Engagement = 阅读 + 评论×4 + 点赞×2 + 分享×6，零互动时自动降级为时间衰减主导 |
 | 📰 **最新资讯** | 按发布时间倒序的实时资讯流，支持频道筛选与关键词检索 |
 | 🤖 **AI 摘要** | 一句话摘要 + 3~5 条核心信息 + 标签提取；支持任意 **OpenAI 兼容 LLM**，未配置时自动降级为内置 TextRank 抽取式摘要，双模式对上层透明 |
 | 🧩 **热点事件聚合** | Embedding 余弦相似度 > 0.85 + 标题关键词（jieba）+ 48h 时间窗，多来源报道归并为一个事件，附事件时间线与相关报道 |
@@ -194,7 +194,7 @@ AUDIT_EMAIL=... AUDIT_PASSWORD=... ADMIN_TOKEN=... python backend/scripts/audit_
 
 - 多来源扩展：极客公园、少数派、36氪、爱范儿、InfoQ
 - 周报与趋势分析
-- 接入互动数据源后 HotScore 恢复 `Engagement × TimeDecay` 全量形态
+- 阅读数/分享数数据源（IT之家 hitcount 为只写接口，暂无公开读取通道）
 
 ---
 

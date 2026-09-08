@@ -1,6 +1,6 @@
-"""Celery 任务（PRD 第 11 节）：summary_task / embedding_task / event_task / report_task / crawler_task
+"""Celery 任务（PRD 第 11 节）：summary_task / embedding_task / event_task / report_task / crawler_task / stats_task
 
-粗粒度任务（crawler / event / report）统一用 record_task_run 埋点，
+粗粒度任务（crawler / event / report / stats）统一用 record_task_run 埋点，
 供管理面板"任务执行记录"展示；逐篇 summary/embedding 不记录。
 """
 import logging
@@ -55,6 +55,47 @@ def crawler_task(trigger: str = "auto"):
                 db.close()
     finally:
         release_lock(LOCK_CRAWLER)
+
+
+@celery_app.task(name="stats_task")
+def stats_task(trigger: str = "auto"):
+    """互动数据轮询：评论数/点赞数按分层节奏更新文章（见 crawler/stats.py）。
+
+    beat 每 15 分钟与管理面板手动触发双入口，lock:stats 互斥；
+    system_setting.stats_poll_enabled 可在面板热停（关闭时不产生 task_run 记录）。
+    """
+    from app.crawler.stats import poll_due_articles
+    from app.services import config_service
+    from app.utils.lock import LOCK_STATS, LOCK_STATS_TTL_MS, acquire_lock, release_lock
+
+    db = new_session()
+    try:
+        enabled = config_service.get_effective(db, "stats_poll_enabled")
+    finally:
+        db.close()
+    if not enabled:
+        logger.info("stats_task skipped: disabled by config")
+        return {"skipped": True, "reason": "disabled"}
+
+    if not acquire_lock(LOCK_STATS, LOCK_STATS_TTL_MS):
+        with record_task_run("stats", trigger=trigger) as run:
+            run.detail = "skipped: another stats poll is running"
+        return {"skipped": True}
+    try:
+        with record_task_run("stats", trigger=trigger) as run:
+            db = new_session()
+            try:
+                r = poll_due_articles(db)
+                run.detail = "轮询 %d · 成功 %d · 失败 %d · 放弃 %d" % (
+                    r["polled"], r["ok"], r["failed"], r["gave_up"],
+                )
+                if r["aborted_backoff"]:
+                    run.detail += " ｜ 目标域名限流提前收尾"
+                return r
+            finally:
+                db.close()
+    finally:
+        release_lock(LOCK_STATS)
 
 
 @celery_app.task(name="summary_task")

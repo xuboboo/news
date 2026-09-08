@@ -15,7 +15,7 @@ import httpx
 import redis as redis_lib
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.auth import sessions as session_store
@@ -373,6 +373,22 @@ def admin_status(db: Session = Depends(get_db)):
             if last_run
             else None,
             "interval_minutes": config_service.get_effective(db, "crawler_interval_minutes"),
+        },
+        "stats_poll": {
+            "enabled": stats_enabled,
+            "due_now": due_now,
+            "pending_backfill": pending_backfill,
+            "gave_up": gave_up,
+            "polled_24h": polled_24h,
+            "last_run": {
+                "status": last_stats_run.status,
+                "trigger": last_stats_run.trigger,
+                "started_at": last_stats_run.started_at.isoformat() if last_stats_run.started_at else None,
+                "duration_ms": last_stats_run.duration_ms,
+                "detail": last_stats_run.detail,
+            }
+            if last_stats_run
+            else None,
         },
         "stats": s,
         "last_failed_task": {

@@ -32,7 +32,7 @@ def main() -> int:
         for aid in sample:
             a = db.get(Article, aid)
             sql_val = db.query(hot_score_expr(Article)).filter(Article.id == aid).scalar()
-            py_val = hot_score(a.views or 0, a.comments or 0, a.shares or 0, a.publish_time)
+            py_val = hot_score(a.views or 0, a.comments or 0, a.shares or 0, a.likes or 0, a.publish_time)
             # 两次取值间隔数毫秒，衰减差异可忽略
             if sql_val is None or abs(float(sql_val) - py_val) > TOLERANCE:
                 bad += 1

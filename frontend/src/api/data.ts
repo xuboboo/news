@@ -11,7 +11,7 @@ export const ARTICLES: Article[] = [
     channel: 'Win11之家',
     source: 'IT之家',
     publishOffsetMin: 45,
-    views: 152000, comments: 1240, shares: 3210,
+    views: 152000, comments: 1240, shares: 3210, likes: 506,
     industryChange: 'Windows 系统迭代从「功能补丁」转向「AI 原生入口」，桌面搜索成为微软 AI 战略的新落点。',
     summary: {
       summary_short: '微软开始向全球用户推送 Windows 11 25H2 正式版，重点升级开始菜单与系统级 AI 文件搜索。',
@@ -31,7 +31,7 @@ export const ARTICLES: Article[] = [
     channel: 'Win11之家',
     source: 'IT之家',
     publishOffsetMin: 150,
-    views: 48000, comments: 210, shares: 900,
+    views: 48000, comments: 210, shares: 900, likes: 160,
     industryChange: '企业级 Windows 部署策略松动，IT 管理窗口期延长，降低大型机构升级成本。',
     summary: {
       summary_short: '微软公布了 25H2 的分阶段推送计划，企业用户最长可将部署延后至明年。',
@@ -50,7 +50,7 @@ export const ARTICLES: Article[] = [
     channel: '软件之家',
     source: 'IT之家',
     publishOffsetMin: 180,
-    views: 67000, comments: 430, shares: 1500,
+    views: 67000, comments: 430, shares: 1500, likes: 223,
     summary: {
       summary_short: 'Windows 11 记事本获得 AI 摘要功能，可对长文档一键生成要点总结。',
       key_points: [
@@ -68,7 +68,7 @@ export const ARTICLES: Article[] = [
     channel: 'Win11之家',
     source: '少数派',
     publishOffsetMin: 780,
-    views: 36000, comments: 210, shares: 540,
+    views: 36000, comments: 210, shares: 540, likes: 120,
     summary: {
       summary_short: '媒体对多款五年内设备实测 25H2 升级，性能与兼容性表现平稳。',
       key_points: [
@@ -86,7 +86,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'IT之家',
     publishOffsetMin: 300,
-    views: 210000, comments: 2800, shares: 6500,
+    views: 210000, comments: 2800, shares: 6500, likes: 700,
     industryChange: '大模型竞争进入"性价比"阶段，头部厂商开始以降价与速度而非参数规模争夺开发者。',
     summary: {
       summary_short: 'OpenAI 发布新一代旗舰模型 GPT-5.2，推理速度提升一倍，API 价格下调四成。',
@@ -106,7 +106,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'IT之家',
     publishOffsetMin: 210,
-    views: 88000, comments: 760, shares: 2100,
+    views: 88000, comments: 760, shares: 2100, likes: 293,
     summary: {
       summary_short: '多家媒体实测 GPT-5.2，编程、数学与长上下文任务均较上一代明显进步。',
       key_points: [
@@ -124,7 +124,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: '极客公园',
     publishOffsetMin: 240,
-    views: 55000, comments: 320, shares: 1100,
+    views: 55000, comments: 320, shares: 1100, likes: 183,
     summary: {
       summary_short: '极客公园整理 GPT-5.2 发布会要点，奥特曼称低成本高速推理将开启智能普及拐点。',
       key_points: [
@@ -142,7 +142,7 @@ export const ARTICLES: Article[] = [
     channel: '软件之家',
     source: 'IT之家',
     publishOffsetMin: 360,
-    views: 132000, comments: 1800, shares: 4200,
+    views: 132000, comments: 1800, shares: 4200, likes: 440,
     industryChange: '消费级 GPU 竞争焦点从像素转向神经网络渲染，AI 超分技术成为画质新标准。',
     summary: {
       summary_short: 'RTX 60 系列规格曝光，采用 Rubin 架构，光追性能据称较 RTX 50 系提升 3 倍。',
@@ -162,7 +162,7 @@ export const ARTICLES: Article[] = [
     channel: '软件之家',
     source: 'IT之家',
     publishOffsetMin: 480,
-    views: 61000, comments: 380, shares: 1300,
+    views: 61000, comments: 380, shares: 1300, likes: 203,
     summary: {
       summary_short: 'RTX 6080 公版散热设计曝光，改用双风扇方案，整卡功耗约 450W。',
       key_points: [
@@ -180,7 +180,7 @@ export const ARTICLES: Article[] = [
     channel: '软件之家',
     source: '爱范儿',
     publishOffsetMin: 420,
-    views: 39000, comments: 210, shares: 780,
+    views: 39000, comments: 210, shares: 780, likes: 130,
     summary: {
       summary_short: '爱范儿梳理 Rubin 架构技术细节与行业影响，汇总 DLSS 5 与竞品最新传闻。',
       key_points: [
@@ -198,7 +198,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'IT之家',
     publishOffsetMin: 540,
-    views: 285000, comments: 3600, shares: 9800,
+    views: 285000, comments: 3600, shares: 9800, likes: 950,
     industryChange: '屏下 Face ID 量产落地，全面屏形态进入终局；苹果用中杯定价对冲安卓旗舰价格上探。',
     summary: {
       summary_short: '苹果发布 iPhone 18 系列，搭载 A20 芯片，屏下 Face ID 首次商用，国行起售价 5999 元。',
@@ -218,7 +218,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: '少数派',
     publishOffsetMin: 480,
-    views: 72000, comments: 540, shares: 1900,
+    views: 72000, comments: 540, shares: 1900, likes: 240,
     summary: {
       summary_short: '少数派放出一批 iPhone 18 Pro 实拍图，边框更窄，长焦与夜景表现提升明显。',
       key_points: [
@@ -236,7 +236,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: '36氪',
     publishOffsetMin: 600,
-    views: 44000, comments: 180, shares: 620,
+    views: 44000, comments: 180, shares: 620, likes: 146,
     summary: {
       summary_short: 'iPhone 18 供应链备货量上调，多家分析师认为新一轮换机潮有望启动。',
       key_points: [
@@ -254,7 +254,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'IT之家',
     publishOffsetMin: 720,
-    views: 176000, comments: 2200, shares: 5600,
+    views: 176000, comments: 2200, shares: 5600, likes: 586,
     industryChange: '开源模型与闭源差距进一步收窄，推理成本下降将加速 AI 在中小企业落地。',
     summary: {
       summary_short: 'DeepSeek 开源 V4 大模型，采用全新 MoE 架构，训练成本较 V3 降低六成。',
@@ -274,7 +274,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'IT之家',
     publishOffsetMin: 540,
-    views: 51000, comments: 290, shares: 980,
+    views: 51000, comments: 290, shares: 980, likes: 170,
     summary: {
       summary_short: 'DeepSeek V4 开源首日下载量破 50 万，社区已涌现多个量化与微调版本。',
       key_points: [
@@ -292,7 +292,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: '少数派',
     publishOffsetMin: 660,
-    views: 63000, comments: 410, shares: 1700,
+    views: 63000, comments: 410, shares: 1700, likes: 210,
     summary: {
       summary_short: '少数派发布 DeepSeek V4 本地部署教程，量化后 16GB 显存即可流畅运行。',
       key_points: [
@@ -310,7 +310,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'IT之家',
     publishOffsetMin: 840,
-    views: 198000, comments: 2500, shares: 7300,
+    views: 198000, comments: 2500, shares: 7300, likes: 660,
     industryChange: '国产旗舰供应链成熟度提升，卫星通信从卖点变为高端机标配。',
     summary: {
       summary_short: '华为 Mate 80 系列全渠道开售，首销日销量突破 40 万台，多个版本售罄。',
@@ -330,7 +330,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'IT之家',
     publishOffsetMin: 600,
-    views: 58000, comments: 350, shares: 1200,
+    views: 58000, comments: 350, shares: 1200, likes: 193,
     summary: {
       summary_short: '华为宣布 Mate 80 首批售罄，将追加产能并于下周开启第二轮开售。',
       key_points: [
@@ -348,7 +348,7 @@ export const ARTICLES: Article[] = [
     channel: 'Win10之家',
     source: 'IT之家',
     publishOffsetMin: 960,
-    views: 43000, comments: 560, shares: 890,
+    views: 43000, comments: 560, shares: 890, likes: 143,
     summary: {
       summary_short: '数据机构统计显示，Win10 停售一周年后存量用户迁移 Win11 的比例已突破 68%。',
       key_points: [
@@ -366,7 +366,7 @@ export const ARTICLES: Article[] = [
     channel: 'Win10之家',
     source: 'IT之家',
     publishOffsetMin: 1320,
-    views: 39000, comments: 470, shares: 610,
+    views: 39000, comments: 470, shares: 610, likes: 130,
     summary: {
       summary_short: '微软为 Win10 推送新补丁，将出现全屏 Win11 升级引导，用户可策略关闭。',
       key_points: [
@@ -384,7 +384,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'IT之家',
     publishOffsetMin: 1020,
-    views: 121000, comments: 1600, shares: 4400,
+    views: 121000, comments: 1600, shares: 4400, likes: 403,
     industryChange: '无图端到端智驾成为行业默认路线，高精地图方案加速退出历史舞台。',
     summary: {
       summary_short: '小米汽车向全系推送端到端智驾版本，取消高精地图依赖，全国可用。',
@@ -403,7 +403,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: '极客公园',
     publishOffsetMin: 900,
-    views: 47000, comments: 260, shares: 850,
+    views: 47000, comments: 260, shares: 850, likes: 156,
     summary: {
       summary_short: '极客公园对小米端到端智驾进行城区实测，零接管达成率达 92%。',
       key_points: [
@@ -421,7 +421,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'InfoQ',
     publishOffsetMin: 1080,
-    views: 36000, comments: 150, shares: 540,
+    views: 36000, comments: 150, shares: 540, likes: 120,
     industryChange: '先进制程竞争形成"三强"格局，英特尔重回代工牌桌。',
     summary: {
       summary_short: '英特尔宣布 18A 制程进入量产，首批芯片面向数据中心，2027 扩展至消费级。',
@@ -440,7 +440,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'IT之家',
     publishOffsetMin: 1200,
-    views: 54000, comments: 220, shares: 760,
+    views: 54000, comments: 220, shares: 760, likes: 180,
     summary: {
       summary_short: '台积电 2nm 制程量产时点提前一个季度，苹果 M6 系列芯片锁定首发产能。',
       key_points: [
@@ -458,7 +458,7 @@ export const ARTICLES: Article[] = [
     channel: '软件之家',
     source: 'IT之家',
     publishOffsetMin: 1560,
-    views: 32000, comments: 140, shares: 420,
+    views: 32000, comments: 140, shares: 420, likes: 106,
     summary: {
       summary_short: 'Edge 130 稳定版发布，新增 AI 历史搜索，多标签内存占用显著下降。',
       key_points: [
@@ -476,7 +476,7 @@ export const ARTICLES: Article[] = [
     channel: 'Win10之家',
     source: 'IT之家',
     publishOffsetMin: 1680,
-    views: 71000, comments: 480, shares: 1600,
+    views: 71000, comments: 480, shares: 1600, likes: 236,
     industryChange: '企业安全补丁优先级被提至最高，零日漏洞在野利用频率持续走高。',
     summary: {
       summary_short: '微软发布 10 月补丁日更新，修复 62 个安全漏洞，其中 2 个已被在野利用。',
@@ -495,7 +495,7 @@ export const ARTICLES: Article[] = [
     channel: 'Win10之家',
     source: 'IT之家',
     publishOffsetMin: 1800,
-    views: 28000, comments: 390, shares: 650,
+    views: 28000, comments: 390, shares: 650, likes: 93,
     summary: {
       summary_short: '微软澄清 Win10 LTSC 2021 支持政策，2027 年前仍将提供安全更新。',
       key_points: [
@@ -513,7 +513,7 @@ export const ARTICLES: Article[] = [
     channel: '软件之家',
     source: 'IT之家',
     publishOffsetMin: 1920,
-    views: 156000, comments: 2100, shares: 6100,
+    views: 156000, comments: 2100, shares: 6100, likes: 520,
     industryChange: '桌面端 IM 全面重构为跨平台统一架构，多端体验差距加速抹平。',
     summary: {
       summary_short: '微信 Windows 版 4.0 开启内测，采用全新跨平台架构，支持多账号同时登录。',
@@ -533,7 +533,7 @@ export const ARTICLES: Article[] = [
     channel: '软件之家',
     source: 'IT之家',
     publishOffsetMin: 1620,
-    views: 44000, comments: 230, shares: 780,
+    views: 44000, comments: 230, shares: 780, likes: 146,
     summary: {
       summary_short: '腾讯确认微信 4.0 公测时间为本月中旬，届时所有用户可直接升级。',
       key_points: [
@@ -551,7 +551,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'IT之家',
     publishOffsetMin: 2160,
-    views: 49000, comments: 280, shares: 920,
+    views: 49000, comments: 280, shares: 920, likes: 163,
     summary: {
       summary_short: '谷歌发布安卓 17 首个开发者预览，AI 相册编辑与跨设备协同为主要更新。',
       key_points: [
@@ -569,7 +569,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'IT之家',
     publishOffsetMin: 2400,
-    views: 94000, comments: 820, shares: 2800,
+    views: 94000, comments: 820, shares: 2800, likes: 313,
     industryChange: '可回收重型火箭进入常态化运营，商业航天成本曲线持续下移。',
     summary: {
       summary_short: 'SpaceX 星舰完成第十一次试飞，助推器回收成功且载荷创历史新高。',
@@ -588,7 +588,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: '36氪',
     publishOffsetMin: 2640,
-    views: 66000, comments: 310, shares: 1100,
+    views: 66000, comments: 310, shares: 1100, likes: 220,
     industryChange: 'AI 订阅付费进入规模化盈利阶段，个人与企业订阅双轮驱动。',
     summary: {
       summary_short: 'OpenAI 披露 ChatGPT 付费会员突破 3000 万，年化收入增长明显。',
@@ -607,7 +607,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'InfoQ',
     publishOffsetMin: 2760,
-    views: 87000, comments: 540, shares: 2200,
+    views: 87000, comments: 540, shares: 2200, likes: 290,
     industryChange: 'AI 编程从「辅助补全」进入「智能体协作」，软件开发流程开始重构。',
     summary: {
       summary_short: 'Cursor 2.0 发布，多智能体协作与后台任务成为核心能力。',
@@ -626,7 +626,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'IT之家',
     publishOffsetMin: 2880,
-    views: 77000, comments: 410, shares: 1400,
+    views: 77000, comments: 410, shares: 1400, likes: 256,
     summary: {
       summary_short: '联发科发布天玑 9600，采用 3nm 工艺，AI 基准跑分登顶。',
       key_points: [
@@ -644,7 +644,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: '少数派',
     publishOffsetMin: 3120,
-    views: 31000, comments: 120, shares: 380,
+    views: 31000, comments: 120, shares: 380, likes: 103,
     summary: {
       summary_short: '供应链消息称 Vision Pro 2 最早明年春季发布，将换装 M6 芯片并减重。',
       key_points: [
@@ -662,7 +662,7 @@ export const ARTICLES: Article[] = [
     channel: '软件之家',
     source: 'IT之家',
     publishOffsetMin: 3240,
-    views: 41000, comments: 180, shares: 560,
+    views: 41000, comments: 180, shares: 560, likes: 136,
     summary: {
       summary_short: '金山办公发布 WPS AI 3.0，表格智能分析支持自然语言查询与自动图表。',
       key_points: [
@@ -680,7 +680,7 @@ export const ARTICLES: Article[] = [
     channel: '软件之家',
     source: 'IT之家',
     publishOffsetMin: 3360,
-    views: 36000, comments: 150, shares: 470,
+    views: 36000, comments: 150, shares: 470, likes: 120,
     summary: {
       summary_short: 'QQ 音乐推出 AI 歌单功能，可按心情、场景自动生成个性化曲目。',
       key_points: [
@@ -698,7 +698,7 @@ export const ARTICLES: Article[] = [
     channel: '智能时代',
     source: 'IT之家',
     publishOffsetMin: 3480,
-    views: 52000, comments: 240, shares: 830,
+    views: 52000, comments: 240, shares: 830, likes: 173,
     summary: {
       summary_short: '苹果推送 iOS 26.2 公测版，重点优化液态玻璃动效与续航表现。',
       key_points: [

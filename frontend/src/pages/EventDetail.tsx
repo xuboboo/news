@@ -151,7 +151,9 @@ export default function EventDetail() {
                         <SourceBadge source={a.source} size="sm" />
                         <ChannelTag channel={a.channel} />
                         <span>{fullTime(a.publishTime)}</span>
-                        <span>{formatCount(a.views)} 阅读</span>
+                        {a.views > 0 && <span>{formatCount(a.views)} 阅读</span>}
+                        {a.comments > 0 && <span>{formatCount(a.comments)} 评论</span>}
+                        {a.likes > 0 && <span>{formatCount(a.likes)} 点赞</span>}
                       </div>
                     </div>
                     <div className="text-right shrink-0 w-14">

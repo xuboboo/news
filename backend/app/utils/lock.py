@@ -16,6 +16,10 @@ LOCK_CRAWLER = "crawler"
 # 采集单轮理论耗时 ≪ 30min（每源限流 + 每篇 15s 超时）；TTL 仅兜底进程崩溃
 LOCK_CRAWLER_TTL_MS = 30 * 60 * 1000
 
+LOCK_STATS = "stats"
+# 最坏轮次 = 批次 50 × 2 请求 × 8s 超时 + 间隔 ≈ 14min ≪ 30min；TTL 仅兜底进程崩溃
+LOCK_STATS_TTL_MS = 30 * 60 * 1000
+
 
 def _client() -> "redis_lib.Redis":
     return redis_lib.Redis.from_url(

@@ -24,10 +24,11 @@ export let bootstrapState: 'pending' | 'ready' = 'pending';
 /** 热度衰减系数（每小时），HotScore = Engagement × TimeDecay */
 const DECAY_PER_HOUR = 0.0075;
 const COMMENT_WEIGHT = 4;
+const LIKE_WEIGHT = 2;
 const SHARE_WEIGHT = 6;
 
 function rawEngagement(a: Article): number {
-  return a.views + a.comments * COMMENT_WEIGHT + a.shares * SHARE_WEIGHT;
+  return a.views + a.comments * COMMENT_WEIGHT + a.likes * LIKE_WEIGHT + a.shares * SHARE_WEIGHT;
 }
 
 // ———————————————————— 本地兜底引擎 ————————————————————
@@ -136,6 +137,7 @@ function mapApiArticle(a: any): ArticleWithScore {
     views: a.views ?? 0,
     comments: a.comments ?? 0,
     shares: a.shares ?? 0,
+    likes: a.likes ?? 0,
     summary: a.summary
       ? {
           summary_short: a.summary.summary_short ?? '',
@@ -171,6 +173,7 @@ function briefToArticle(brief: any): ArticleWithScore {
     views: 0,
     comments: 0,
     shares: 0,
+    likes: 0,
     summary: {
       summary_short: brief.summary_short ?? '',
       key_points: [],

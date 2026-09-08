@@ -25,6 +25,8 @@ export interface Article {
   views: number;
   comments: number;
   shares: number;
+  /** 点赞（IT之家「有价值」打分数，crawler/stats.py 轮询） */
+  likes: number;
   summary: ArticleSummary;
   /** 对行业变化的描述（用于科技日报） */
   industryChange?: string;

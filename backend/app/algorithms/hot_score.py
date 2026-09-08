@@ -1,6 +1,6 @@
 """热度算法（PRD 3.1）：HotScore = Engagement × TimeDecay
 
-Engagement = views + comments × COMMENT_WEIGHT + shares × SHARE_WEIGHT
+Engagement = views + comments × COMMENT_WEIGHT + likes × LIKE_WEIGHT + shares × SHARE_WEIGHT
 TimeDecay  = e^(−λ × 距发布小时数)
 
 不加入人工权重、不加入华军偏好。
@@ -16,9 +16,14 @@ from sqlalchemy import case, func
 from app.core.config import get_settings
 
 
-def raw_engagement(views: int, comments: int, shares: int) -> float:
+def raw_engagement(views: int, comments: int, shares: int, likes: int = 0) -> float:
     s = get_settings()
-    return (views or 0) + (comments or 0) * s.comment_weight + (shares or 0) * s.share_weight
+    return (
+        (views or 0)
+        + (comments or 0) * s.comment_weight
+        + (likes or 0) * s.like_weight
+        + (shares or 0) * s.share_weight
+    )
 
 
 def time_decay(publish_time: datetime, now: datetime | None = None) -> float:
@@ -30,12 +35,15 @@ def time_decay(publish_time: datetime, now: datetime | None = None) -> float:
     return math.exp(-s.decay_per_hour * hours)
 
 
-def hot_score(views: int, comments: int, shares: int, publish_time: datetime, now: datetime | None = None) -> float:
-    engagement = raw_engagement(views, comments, shares)
+def hot_score(
+    views: int, comments: int, shares: int, likes: int, publish_time: datetime,
+    now: datetime | None = None,
+) -> float:
+    engagement = raw_engagement(views, comments, shares, likes)
     decay = time_decay(publish_time, now)
     if engagement <= 0:
         # 来源未公开互动数据时的降级策略：以时间衰减为主导的真实热度
-        # （IT之家公开互动接口已下线，views/comments/shares 字段保留，待数据源接入后自动生效）
+        # （评论/点赞由 crawler/stats.py 轮询，阅读/分享无公开数据源恒为 0）
         return decay * 100.0
     return engagement * decay
 
@@ -51,6 +59,7 @@ def hot_score_expr(model):
     engagement = (
         func.coalesce(model.views, 0)
         + func.coalesce(model.comments, 0) * s.comment_weight
+        + func.coalesce(model.likes, 0) * s.like_weight
         + func.coalesce(model.shares, 0) * s.share_weight
     )
     hours = func.extract("epoch", func.now() - model.publish_time) / 3600.0

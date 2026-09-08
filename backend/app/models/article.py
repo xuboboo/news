@@ -28,6 +28,13 @@ class Article(Base):
     views = Column(BigInteger, default=0)
     comments = Column(BigInteger, default=0)
     shares = Column(BigInteger, default=0)
+    likes = Column(BigInteger, default=0)                      # 「有价值」点赞数（IT之家文章价值打分）
+    # 互动数据轮询状态（crawler/stats.py）：
+    # 待采集/回填 = polled_at IS NULL 且 next_poll_at IS NULL；到期 = next_poll_at <= now；
+    # 停采终态（超 14 天窗或连续失败放弃）= next_poll_at IS NULL 且 polled_at 非空
+    stats_polled_at = Column(DateTime(timezone=True))
+    stats_next_poll_at = Column(DateTime(timezone=True), index=True)
+    stats_fail_count = Column(Integer, default=0)
     embedding = Column(Vector(get_settings().embed_dim))
     # AI 处理状态：pending → summarized → embedded → clustered
     ai_status = Column(String(16), default="pending", index=True)

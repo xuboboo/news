@@ -19,6 +19,14 @@ def main():
         logger.info("pgvector extension ready")
     Base.metadata.create_all(engine)
     logger.info("tables created")
+    # 存量库升级：create_all 只建新表不加列，新增列在此幂等补齐（与 app/main.py init_db 保持一致）
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE article ADD COLUMN IF NOT EXISTS likes BIGINT NOT NULL DEFAULT 0"))
+        conn.execute(text("ALTER TABLE article ADD COLUMN IF NOT EXISTS stats_polled_at TIMESTAMPTZ NULL"))
+        conn.execute(text("ALTER TABLE article ADD COLUMN IF NOT EXISTS stats_next_poll_at TIMESTAMPTZ NULL"))
+        conn.execute(text("ALTER TABLE article ADD COLUMN IF NOT EXISTS stats_fail_count INTEGER NOT NULL DEFAULT 0"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_article_stats_next_poll_at ON article (stats_next_poll_at)"))
+    logger.info("column migration done")
 
 
 if __name__ == "__main__":

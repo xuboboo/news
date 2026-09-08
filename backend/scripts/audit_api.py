@@ -100,6 +100,8 @@ if LOGGED_IN:
     aid = (call("取一篇文章ID", "/articles/latest?limit=1") or {}).get("items", [{}])[0].get("id")
     d = call("文章详情", f"/article/{aid}")
     check("详情含原文URL", d and d.get("url", "").startswith("http"))
+    check("详情含互动四字段", d and all(k in d for k in ("views", "comments", "shares", "likes")),
+          f"likes={d.get('likes') if d else None}")
     d = call("AI摘要(PRD 12)", f"/article/{aid}/summary")
     check("摘要三要素齐全", d and d.get("summary") and len(d.get("points", [])) >= 1 and len(d.get("tags", [])) >= 1,
           f"points={len(d.get('points', []))} tags={len(d.get('tags', []))}")
@@ -177,6 +179,32 @@ if ADMIN_TOKEN:
         check("敏感键 raw 不回传明文", not leak, f"泄漏字段: {leak}")
     except Exception as exc:
         check("admin config JSON 可解析", False, str(exc))
+
+    # 4b) 数字型覆盖的写入与清除（回归：空串清除曾因 int('') 400）
+    _hdr = {"X-Admin-Token": ADMIN_TOKEN, "Content-Type": "application/json",
+            "X-Requested-With": "XMLHttpRequest"}
+    try:
+        env_val = json.loads(call_with_headers(
+            "读默认值", "/admin/config", headers={"X-Admin-Token": ADMIN_TOKEN})[1]
+        )["config"]["stats_poll_batch"]["value"]
+        s, body, _ = call_with_headers(
+            "设置数字覆盖", "/admin/config", headers=_hdr,
+            method="PUT", body=json.dumps({"stats_poll_batch": "7"}),
+        )
+        after_set = json.loads(body) if s == 200 else {}
+        check("设置数字覆盖 → db 生效", s == 200 and after_set.get("updated") == ["stats_poll_batch"]
+              and after_set["config"]["stats_poll_batch"]["value"] == "7"
+              and after_set["config"]["stats_poll_batch"]["source"] == "db", f"status={s}")
+        s, body, _ = call_with_headers(
+            "空串清除数字覆盖", "/admin/config", headers=_hdr,
+            method="PUT", body=json.dumps({"stats_poll_batch": ""}),
+        )
+        after_clear = json.loads(body) if s == 200 else {}
+        check("空串清除覆盖 → 回落 env", s == 200 and after_clear.get("updated") == ["stats_poll_batch"]
+              and after_clear["config"]["stats_poll_batch"]["source"] == "env"
+              and after_clear["config"]["stats_poll_batch"]["value"] == env_val, f"status={s}")
+    except Exception as exc:
+        check("config 覆盖写入/清除用例", False, str(exc))
 
     # 5) SSRF 拦截：私网地址必须 400
     s, body, _ = call_with_headers(

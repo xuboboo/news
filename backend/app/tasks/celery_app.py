@@ -30,8 +30,13 @@ celery_app.conf.update(
         "summary_task": {"queue": "ai"},
         "embedding_task": {"queue": "ai"},
     },
-        # 定时任务（采集由常驻 crawler 服务循环执行，此处不再重复调度）
+        # 定时任务（文章采集由常驻 crawler 服务循环执行，此处不再重复调度）
         beat_schedule={
+            # 互动数据轮询（评论/点赞）：独立于采集循环，与 stats_task 面板手动触发共用 lock:stats
+            "stats-poll-every-15min": {
+                "task": "stats_task",
+                "schedule": crontab(minute="*/15"),
+            },
             "event-cluster-every-10min": {
                 "task": "event_task",
                 "schedule": crontab(minute="*/10"),

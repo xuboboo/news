@@ -45,6 +45,13 @@ def init_db() -> None:
             text("CREATE INDEX IF NOT EXISTS idx_article_title_trgm ON article USING gin (title gin_trgm_ops)")
         )
     Base.metadata.create_all(engine)
+    # 存量库升级：create_all 只建新表不加列，新增列在此幂等补齐（须在 create_all 之后，新库才有表）
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE article ADD COLUMN IF NOT EXISTS likes BIGINT NOT NULL DEFAULT 0"))
+        conn.execute(text("ALTER TABLE article ADD COLUMN IF NOT EXISTS stats_polled_at TIMESTAMPTZ NULL"))
+        conn.execute(text("ALTER TABLE article ADD COLUMN IF NOT EXISTS stats_next_poll_at TIMESTAMPTZ NULL"))
+        conn.execute(text("ALTER TABLE article ADD COLUMN IF NOT EXISTS stats_fail_count INTEGER NOT NULL DEFAULT 0"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_article_stats_next_poll_at ON article (stats_next_poll_at)"))
 
 
 def bootstrap_admin() -> None:
@@ -104,7 +111,7 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.version,
     lifespan=lifespan,
-    description="华军资讯雷达 V2.0 — 科技情报分析平台后端（FastAPI + PostgreSQL/pgvector + Redis + Celery）",
+    description="华军软件园资讯雷达系统 V2.0 后端（FastAPI + PostgreSQL/pgvector + Redis + Celery）",
 )
 
 app.add_middleware(

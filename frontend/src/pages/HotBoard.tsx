@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Flame, Radar, Bot, TrendingUp, ChevronDown, MessageSquare, Share2, Eye } from 'lucide-react';
+import { Flame, Radar, Bot, TrendingUp, ChevronDown, MessageSquare, Share2, Eye, ThumbsUp } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ARTICLES_WITH_SCORE, FRESH_ARTICLE_IDS } from '../api/client';
 import { activateOnKey, useBootstrapReady, useDataVersion, usePageTitle, useTick } from '../utils/hooks';
@@ -205,15 +205,27 @@ export default function HotBoard() {
                     <ChannelTag channel={a.channel} />
                     <SourceBadge source={a.source} size="sm" />
                     <span>{timeAgo(a.publishTime)}</span>
-                    <span className="inline-flex items-center gap-1">
-                      <Eye className="h-3 w-3" /> {formatCount(a.views)}
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      <MessageSquare className="h-3 w-3" /> {formatCount(a.comments)}
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      <Share2 className="h-3 w-3" /> {formatCount(a.shares)}
-                    </span>
+                    {/* 互动芯片：有值才显示（阅读/分享暂无公开数据源恒为 0） */}
+                    {a.views > 0 && (
+                      <span className="inline-flex items-center gap-1">
+                        <Eye className="h-3 w-3" /> {formatCount(a.views)}
+                      </span>
+                    )}
+                    {a.comments > 0 && (
+                      <span className="inline-flex items-center gap-1">
+                        <MessageSquare className="h-3 w-3" /> {formatCount(a.comments)}
+                      </span>
+                    )}
+                    {a.likes > 0 && (
+                      <span className="inline-flex items-center gap-1">
+                        <ThumbsUp className="h-3 w-3" /> {formatCount(a.likes)}
+                      </span>
+                    )}
+                    {a.shares > 0 && (
+                      <span className="inline-flex items-center gap-1">
+                        <Share2 className="h-3 w-3" /> {formatCount(a.shares)}
+                      </span>
+                    )}
                   </div>
                 </div>
 

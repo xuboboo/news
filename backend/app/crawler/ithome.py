@@ -13,7 +13,7 @@
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
@@ -66,6 +66,9 @@ _BACKOFF_MAX_SECONDS = 2 * 3600         # 上限 2 小时
 # 14 天而非 72h：慢更频频道（如 Win10之家）最新文章常在数天前，
 # 窗口太紧会导致整频道长期为空；更早的旧文仍会被拒。
 _PAGE_MAX_AGE_HOURS = 24 * 14
+
+# 新文章首次互动数据轮询延迟（crawler/stats.py）：刚发布无互动，立即采必为 0
+STATS_FIRST_POLL_DELAY_MINUTES = 45
 
 # 页面链接近期检查缓存（进程内 TTL）：避免每轮采集重复抓取同一批旧文
 _LINK_CHECK_TTL_SECONDS = 2 * 3600
@@ -129,7 +132,7 @@ def _insert_article(db: Session, article: Article, new_ids: list[int]) -> None:
     new_ids.append(article.id)
 
 
-def _fetch(url: str) -> httpx.Response | None:
+def _fetch(url: str, timeout: float = 15) -> httpx.Response | None:
     """带源级退避的抓取：403/429 后自动暂停该域名（30min 起指数递增，上限 2h）。"""
     host = urlsplit(url).netloc
     now_ts = time.time()
@@ -138,7 +141,7 @@ def _fetch(url: str) -> httpx.Response | None:
         logger.info("backoff skip %s（剩约 %d 分钟）", host, int((until - now_ts) / 60))
         return None
     try:
-        resp = httpx.get(url, headers={"User-Agent": UA}, timeout=15, follow_redirects=True)
+        resp = httpx.get(url, headers={"User-Agent": UA}, timeout=timeout, follow_redirects=True)
     except Exception as exc:
         logger.warning("fetch failed %s: %s", url, exc)
         return None
@@ -158,11 +161,21 @@ def _fetch(url: str) -> httpx.Response | None:
     return resp
 
 
-def fetch_stats(news_id: str | None) -> tuple[int, int, int]:
-    """互动数据占位：站点公开统计接口已下线（实测 404）。
-    入库一律写 0，热度算法自动降级为时间衰减主导（见 hot_score.py）；
-    未来接入新数据源后在 _ingest_page_channel 内恢复调用。"""
-    return 0, 0, 0
+def _decode_response(resp: httpx.Response) -> str:
+    """响应体解码：先按声明编码，失败时依次回退 utf-8 / gb18030。
+
+    IT之家部分接口（如 dyn.ithome.com/grade）正文含中文，个别历史端点为 gb2312，
+    httpx 自动推断不可靠时由这里兜底，保证含中文的正则可匹配。
+    """
+    raw = resp.content or b""
+    for enc in (resp.charset_encoding, "utf-8", "gb18030"):
+        if not enc:
+            continue
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", errors="ignore")
 
 
 # 文章页内的发布时间文本，如「2026/9/6 18:51」（北京时间）
@@ -273,6 +286,9 @@ def _ingest_page_channel(
             views=0,
             comments=0,
             shares=0,
+            likes=0,
+            # 互动数据（评论/点赞）由 crawler/stats.py 按分层节奏轮询，发布后延迟首采
+            stats_next_poll_at=published + timedelta(minutes=STATS_FIRST_POLL_DELAY_MINUTES),
             ai_status="pending",
         )
         before = len(new_ids)

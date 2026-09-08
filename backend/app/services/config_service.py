@@ -16,6 +16,9 @@ ALLOWED_KEYS: dict[str, type] = {
     "embedding_api_key": str,
     "embedding_model": str,
     "crawler_interval_minutes": int,
+    # —— 互动数据轮询 ——
+    "stats_poll_enabled": bool,
+    "stats_poll_batch": int,
     "sim_threshold": float,
     "cluster_lookback_hours": int,
     "admin_token": str,
@@ -87,22 +90,24 @@ def set_overrides(db: Session, data: dict[str, str]) -> list[str]:
     """写入 DB 覆盖，返回成功处理的 key 列表；非法 key/值抛 ValueError。
 
     语义：值非空 → 写入覆盖（立即生效）；值为空串 → 删除覆盖（回落 .env 默认值）。
+    空串判断必须先于类型转换——int('')/float('') 会抛错，导致数字键永远无法清除覆盖。
     """
     updated: list[str] = []
     for key, value in (data or {}).items():
         if key not in ALLOWED_KEYS:
             raise ValueError(f"unknown config key: {key}")
-        clean = _coerce(key, value)
+        raw = "" if value is None else str(value).strip()
         row = db.get(SystemSetting, key)
-        if clean == "":
+        if raw == "":
             if row is not None:
                 db.delete(row)
                 updated.append(key)
-        elif row is None:
-            db.add(SystemSetting(key=key, value=clean))
-            updated.append(key)
         else:
-            row.value = clean
+            clean = _coerce(key, raw)
+            if row is None:
+                db.add(SystemSetting(key=key, value=clean))
+            else:
+                row.value = clean
             updated.append(key)
     db.commit()
     return updated

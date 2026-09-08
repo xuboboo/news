@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    app_name: str = "华军资讯雷达 API"
+    app_name: str = "华军软件园资讯雷达系统 API"
     version: str = "2.0.0"
 
     # —— 基础设施 ——
@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     # —— 热度算法：HotScore = Engagement × TimeDecay ——
     decay_per_hour: float = 0.0075
     comment_weight: int = 4
+    like_weight: int = 2
     share_weight: int = 6
 
     # —— 事件聚合（PRD：相似度 > 0.85 + 标题关键词 + 实体 + 发布时间）——
@@ -61,6 +62,10 @@ class Settings(BaseSettings):
     # —— 爬虫 ——
     crawler_interval_minutes: int = 30
     crawl_limit_per_feed: int = 30
+
+    # —— 互动数据轮询（crawler/stats.py；总开关与批次可在管理面板热调）——
+    stats_poll_enabled: bool = True
+    stats_poll_batch: int = 50
 
     # —— 日报 ——
     report_issue_epoch: str = "2026-04-15"  # 第 1 期基准日
