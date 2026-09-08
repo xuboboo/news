@@ -2,9 +2,12 @@
 
 record_usage 使用独立数据库会话落账：业务事务成败不影响已发生的调用计量，
 记账自身失败也只记日志、绝不向调用方抛异常（不阻塞采集 / AI 流水线）。
-费用在入库时按 model_price 当时单价计算：cost = token/1M × 单价（人民币元，6 位小数），
+费用在入库时按 model_price 当时单价计算（人民币元，6 位小数）：
+    cost = (prompt - cached)/1M × 输入价 + cached/1M × 缓存价 + completion/1M × 输出价
+未配置缓存价的模型缓存部分按输入价全价计（口径退化为"全量输入价"）；
 无价目记录的模型记 token、cost=0。
 """
+import inspect
 import logging
 from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
@@ -24,7 +27,11 @@ logger = logging.getLogger(__name__)
 LOCAL_MODELS = {"extractive-textrank-v2", "local-hash-256-v2", "compose-facts"}
 
 # CSV 导出首行注释（对账口径说明）
-CSV_NOTE = "本地口径=纯token成本，不含阶梯折扣/赠送额度/代金券/税点，与供应商账单对账存在口径差异"
+CSV_NOTE = (
+    "本地口径=纯token成本，不含阶梯折扣/赠送额度/代金券/税点；"
+    "缓存命中输入按 model_price.price_cache 计（未配置则按输入价全价计，会高于供应商账单），"
+    "与供应商账单对账存在口径差异"
+)
 
 CSV_HEADERS = [
     "id", "created_at", "task_type", "trigger", "model", "status",
@@ -33,29 +40,56 @@ CSV_HEADERS = [
     "latency_ms", "cost", "error",
 ]
 
+# 明细流水允许的过滤值（API 层校验用）
+LOG_TASK_TYPES = ("summary", "event_summary", "embedding", "report")
+LOG_STATUSES = ("success", "parse_fail", "api_fail")
+
 
 def extract_openai_usage(body: dict) -> dict:
-    """从 OpenAI 兼容响应体提取 usage 四项；缺失字段记 0。"""
+    """从 OpenAI 兼容响应体提取 usage 四项；缺失字段记 0。
+
+    兼容两种缓存字段风格：
+    - OpenAI / 智谱：usage.prompt_tokens_details.cached_tokens
+    - DeepSeek：usage.prompt_cache_hit_tokens（prompt 拆 hit/miss 两段，二者之和=prompt）
+    cached 一律钳制到 [0, prompt]，防御异常供应商返回。
+    """
     u = (body or {}).get("usage") or {}
     details = u.get("prompt_tokens_details") or {}
     prompt = int(u.get("prompt_tokens") or 0)
     completion = int(u.get("completion_tokens") or 0)
+    cached = int(details.get("cached_tokens") or 0) or int(u.get("prompt_cache_hit_tokens") or 0)
+    cached = max(0, min(cached, prompt))
     return {
         "prompt_tokens": prompt,
         "completion_tokens": completion,
-        "cached_tokens": int(details.get("cached_tokens") or 0),
+        "cached_tokens": cached,
         "total_tokens": int(u.get("total_tokens") or (prompt + completion)),
     }
 
 
-def calc_cost(db: Session, model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    """按价目表计算费用（元，6 位小数）；无价目记录 → 0。"""
+def calc_cost(
+    db: Session,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cached_tokens: int = 0,
+) -> float:
+    """按价目表计算费用（元，6 位小数）；无价目记录 → 0。
+
+    缓存命中部分按 price_cache 计价（未配置则回落输入价=全价口径）；
+    cached 钳制到 [0, prompt]，防止脏数据把输入段算成负数。
+    """
     price = db.get(ModelPrice, model)
     if not price:
         return 0.0
+    prompt = max(0, int(prompt_tokens or 0))
+    completion = max(0, int(completion_tokens or 0))
+    cached = max(0, min(int(cached_tokens or 0), prompt))
+    price_cache = float(price.price_cache) if price.price_cache is not None else float(price.price_input)
     cost = (
-        prompt_tokens / 1_000_000 * float(price.price_input)
-        + completion_tokens / 1_000_000 * float(price.price_output)
+        (prompt - cached) / 1_000_000 * float(price.price_input)
+        + cached / 1_000_000 * price_cache
+        + completion / 1_000_000 * float(price.price_output)
     )
     return round(cost, 6)
 
@@ -66,6 +100,7 @@ def record_usage(
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
     cached_tokens: int = 0,
+    total_tokens: int = 0,
     latency_ms: int = 0,
     status: str = "success",
     error: str | None = None,
@@ -73,10 +108,15 @@ def record_usage(
     event_id: int | None = None,
     trigger: str = "auto",
 ) -> None:
-    """落一条 AI 调用流水（独立会话/事务；失败仅记日志，不影响业务）。"""
+    """落一条 AI 调用流水（独立会话/事务；失败仅记日志，不影响业务）。
+
+    total_tokens：调用方以 **usage 展开传入 extract_openai_usage 的四项时，
+    优先采用服务端返回值；≤0 时回退 prompt+completion 自算。
+    """
     try:
         db = new_session()
         try:
+            total = int(total_tokens or 0) or (int(prompt_tokens or 0) + int(completion_tokens or 0))
             db.add(AiUsageLog(
                 task_type=task_type,
                 trigger=trigger,
@@ -86,17 +126,27 @@ def record_usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 cached_tokens=cached_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
+                total_tokens=total,
                 latency_ms=int(latency_ms or 0),
                 status=status,
                 error=(str(error)[:2000] if error else None),
-                cost=calc_cost(db, model, prompt_tokens, completion_tokens),
+                cost=calc_cost(db, model, prompt_tokens, completion_tokens, cached_tokens),
             ))
             db.commit()
         finally:
             db.close()
     except Exception:
         logger.exception("record_usage failed (task_type=%s model=%s)", task_type, model)
+
+
+def assert_record_usage_compatible() -> None:
+    """签名回归哨兵：extract_openai_usage 的返回键必须能被 record_usage 接受。
+
+    历史教训：extract 曾返回 total_tokens 而 record_usage 无此参数，所有
+    **usage 展开调用在传参阶段即 TypeError（P0，详见 tests/test_usage.py）。
+    """
+    usage = extract_openai_usage({"usage": {"prompt_tokens": 1, "completion_tokens": 1}})
+    inspect.signature(record_usage).bind(task_type="summary", model="m", **usage)
 
 
 # ———————————————————— 价目表 CRUD ————————————————————
@@ -106,18 +156,30 @@ def list_prices(db: Session) -> list[ModelPrice]:
     return db.query(ModelPrice).order_by(ModelPrice.model).all()
 
 
-def upsert_price(db: Session, model: str, price_input: float, price_output: float) -> ModelPrice:
-    """新增 / 更新某模型单价（每百万 token，元）。调价只影响之后的新记录。"""
+def upsert_price(
+    db: Session,
+    model: str,
+    price_input: float,
+    price_output: float,
+    price_cache: float | None = None,
+) -> tuple[ModelPrice, bool]:
+    """新增 / 更新某模型单价（每百万 token，元）。调价只影响之后的新记录。
+
+    price_cache=None 表示清掉缓存价（回落输入价全价口径）。
+    返回 (行, 是否新建)——供 API 区分"新增"与"改价"（提示语 + 审计 detail）。
+    """
     row = db.get(ModelPrice, model)
+    created = row is None
     if row is None:
         row = ModelPrice(model=model, price_input=price_input, price_output=price_output)
         db.add(row)
     else:
         row.price_input = price_input
         row.price_output = price_output
+    row.price_cache = price_cache
     db.commit()
     db.refresh(row)
-    return row
+    return row, created
 
 
 def price_dict(p: ModelPrice) -> dict:
@@ -125,8 +187,18 @@ def price_dict(p: ModelPrice) -> dict:
         "model": p.model,
         "price_input": float(p.price_input),
         "price_output": float(p.price_output),
+        "price_cache": float(p.price_cache) if p.price_cache is not None else None,
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,
     }
+
+
+def csv_safe_cell(value) -> str:
+    """CSV 公式注入防护：以 = + - @ 或制表/回车开头的单元格加 ' 前缀，
+    防 Excel/WPS 当公式执行（OWASP CSV Injection 惯例）。非字符串原样转 str。"""
+    s = "" if value is None else str(value)
+    if s[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + s
+    return s
 
 
 # ———————————————————— 聚合查询（供 API / 日报） ————————————————————
@@ -160,8 +232,18 @@ def _group_stats(q, col) -> list[dict]:
     ]
 
 
-def usage_summary(db: Session, period: str = "today") -> dict:
-    """用量/成本看板聚合：总量、分组、覆盖率、失败数、近 30 天按日趋势。"""
+def usage_summary(
+    db: Session,
+    period: str = "today",
+    include_daily: bool = True,
+    include_groups: bool = True,
+) -> dict:
+    """用量/成本看板聚合：总量、分组、覆盖率、失败数、近 30 天按日趋势。
+
+    include_daily / include_groups：today/month 等短周期请求可关掉 30 天日趋势
+    与分组统计（前端仅 30d 视图消费），避免一次刷新重复全表扫描。
+    关闭时对应键返回空列表（响应形状不变，前端类型稳定）。
+    """
     now = datetime.now(timezone.utc)
     start, period = _period_start(period, now)
 
@@ -170,6 +252,7 @@ def usage_summary(db: Session, period: str = "today") -> dict:
     totals = q.with_entities(
         func.coalesce(func.sum(AiUsageLog.total_tokens), 0),
         func.coalesce(func.sum(AiUsageLog.cost), 0),
+        func.coalesce(func.sum(AiUsageLog.cached_tokens), 0),
     ).one()
 
     # LLM 覆盖率 = LLM 摘要成功数 / 总摘要数（降级与失败都拉低覆盖率）
@@ -192,34 +275,23 @@ def usage_summary(db: Session, period: str = "today") -> dict:
         .scalar() or 0
     )
 
-    # 近 30 天按日趋势（UTC 日界，与 today 口径一致）
-    utc_day = func.date(func.timezone("UTC", AiUsageLog.created_at))
-    daily_rows = (
-        db.query(
-            utc_day,
-            func.count(),
-            func.coalesce(func.sum(AiUsageLog.total_tokens), 0),
-            func.coalesce(func.sum(AiUsageLog.cost), 0),
+    daily: list[dict] = []
+    if include_daily:
+        # 近 30 天按日趋势（UTC 日界，与 today 口径一致；func.timezone 为 PG 专用）
+        utc_day = func.date(func.timezone("UTC", AiUsageLog.created_at))
+        daily_rows = (
+            db.query(
+                utc_day,
+                func.count(),
+                func.coalesce(func.sum(AiUsageLog.total_tokens), 0),
+                func.coalesce(func.sum(AiUsageLog.cost), 0),
+            )
+            .filter(AiUsageLog.created_at >= now - timedelta(days=30))
+            .group_by(utc_day)
+            .order_by(utc_day)
+            .all()
         )
-        .filter(AiUsageLog.created_at >= now - timedelta(days=30))
-        .group_by(utc_day)
-        .order_by(utc_day)
-        .all()
-    )
-
-    return {
-        "period": period,
-        "start": start.isoformat(),
-        "total_calls": total_calls,
-        "total_tokens": int(totals[0] or 0),
-        "total_cost": round(float(totals[1] or 0), 6),
-        "by_task_type": _group_stats(q, AiUsageLog.task_type),
-        "by_model": _group_stats(q, AiUsageLog.model),
-        "summary_total": summary_total,
-        "llm_coverage": round(llm_ok / summary_total * 100, 1) if summary_total else 0,
-        "embedding_api_fail": embedding_api_fail,
-        "event_summary_calls_24h": int(event_calls_24h),
-        "daily": [
+        daily = [
             {
                 "date": str(r[0]),
                 "calls": int(r[1]),
@@ -227,7 +299,22 @@ def usage_summary(db: Session, period: str = "today") -> dict:
                 "cost": round(float(r[3] or 0), 6),
             }
             for r in daily_rows
-        ],
+        ]
+
+    return {
+        "period": period,
+        "start": start.isoformat(),
+        "total_calls": total_calls,
+        "total_tokens": int(totals[0] or 0),
+        "total_cost": round(float(totals[1] or 0), 6),
+        "total_cached": int(totals[2] or 0),
+        "by_task_type": _group_stats(q, AiUsageLog.task_type) if include_groups else [],
+        "by_model": _group_stats(q, AiUsageLog.model) if include_groups else [],
+        "summary_total": summary_total,
+        "llm_coverage": round(llm_ok / summary_total * 100, 1) if summary_total else 0,
+        "embedding_api_fail": embedding_api_fail,
+        "event_summary_calls_24h": int(event_calls_24h),
+        "daily": daily,
     }
 
 
@@ -251,11 +338,21 @@ def usage_day_summary(db: Session, day: date_type) -> dict:
     }
 
 
-def usage_logs(db: Session, page: int = 1, page_size: int = 50) -> dict:
-    """流水明细分页（倒序），联 article 取标题。"""
+def usage_logs(
+    db: Session,
+    page: int = 1,
+    page_size: int = 50,
+    task_type: str | None = None,
+    status: str | None = None,
+) -> dict:
+    """流水明细分页（倒序），联 article 取标题；支持按任务类型/状态过滤。"""
     page = max(1, page)
     page_size = max(1, min(page_size, 200))
     q = db.query(AiUsageLog).order_by(AiUsageLog.id.desc())
+    if task_type:
+        q = q.filter(AiUsageLog.task_type == task_type)
+    if status:
+        q = q.filter(AiUsageLog.status == status)
     total = q.count()
     rows = q.offset((page - 1) * page_size).limit(page_size).all()
 

@@ -41,4 +41,5 @@ class ModelPrice(Base):
     model = Column(String(64), primary_key=True)
     price_input = Column(Numeric(12, 4), nullable=False, default=0)   # 每百万 token 输入单价（元）
     price_output = Column(Numeric(12, 4), nullable=False, default=0)  # 每百万 token 输出单价（元；embedding 为 0）
+    price_cache = Column(Numeric(12, 4), nullable=True)               # 缓存命中输入单价（元）；NULL=按输入价全价计
     updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)

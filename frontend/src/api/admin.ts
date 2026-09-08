@@ -195,6 +195,8 @@ export interface UsageSummary {
   total_calls: number;
   total_tokens: number;
   total_cost: number;
+  /** 缓存命中的输入 token 合计（按缓存价/输入价计，见价目表 price_cache） */
+  total_cached: number;
   by_task_type: UsageGroup[];
   by_model: UsageGroup[];
   summary_total: number;
@@ -204,8 +206,24 @@ export interface UsageSummary {
   daily: UsageDaily[];
 }
 
-export const getUsageSummary = (period: UsagePeriod) =>
-  request<UsageSummary>(`/usage/summary?period=${period}`);
+export interface UsageSummaryOpts {
+  /** 近 30 天按日趋势（仅 30d 视图消费；短周期请求关闭可省一次全窗口扫描） */
+  daily?: boolean;
+  /** 按任务/模型分组（同上） */
+  groups?: boolean;
+}
+
+export const getUsageSummary = (period: UsagePeriod, opts?: UsageSummaryOpts) => {
+  const qs = new URLSearchParams({ period });
+  if (opts?.daily === false) qs.set('daily', '0');
+  if (opts?.groups === false) qs.set('groups', '0');
+  return request<UsageSummary>(`/usage/summary?${qs.toString()}`);
+};
+
+export interface UsageLogFilters {
+  task_type?: string;
+  status?: string;
+}
 
 export interface UsageLogItem {
   id: number;
@@ -233,13 +251,19 @@ export interface UsageLogsPage {
   page_size: number;
 }
 
-export const getUsageLogs = (page = 1, pageSize = 50) =>
-  request<UsageLogsPage>(`/usage/logs?page=${page}&page_size=${pageSize}`);
+export const getUsageLogs = (page = 1, pageSize = 50, filters?: UsageLogFilters) => {
+  const qs = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  if (filters?.task_type) qs.set('task_type', filters.task_type);
+  if (filters?.status) qs.set('status', filters.status);
+  return request<UsageLogsPage>(`/usage/logs?${qs.toString()}`);
+};
 
 export interface ModelPriceItem {
   model: string;
   price_input: number;
   price_output: number;
+  /** 缓存命中输入单价；null = 按输入价全价计 */
+  price_cache: number | null;
   updated_at: string | null;
 }
 
@@ -249,15 +273,22 @@ export const upsertUsagePrice = (item: {
   model: string;
   price_input: number;
   price_output: number;
+  /** null = 清除缓存价（回落输入价全价口径） */
+  price_cache: number | null;
 }) =>
-  request<{ ok: boolean; item: ModelPriceItem }>('/usage/prices', {
+  request<{ ok: boolean; created: boolean; item: ModelPriceItem }>('/usage/prices', {
     method: 'POST',
     body: JSON.stringify(item),
   });
 
-/** 导出流水 CSV：会话 Cookie 同源自动携带，fetch + blob 触发浏览器下载 */
-export async function exportUsageCsv(): Promise<void> {
-  const resp = await fetch(`${API_BASE}/api/v2/admin/usage/export`, {
+/** 导出流水 CSV：会话 Cookie 同源自动携带，fetch + blob 触发浏览器下载。
+ * range 可选（含端点、UTC 日界），不传 = 全量导出。 */
+export async function exportUsageCsv(range?: { start?: string; end?: string }): Promise<void> {
+  const qs = new URLSearchParams();
+  if (range?.start) qs.set('start', range.start);
+  if (range?.end) qs.set('end', range.end);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  const resp = await fetch(`${API_BASE}/api/v2/admin/usage/export${suffix}`, {
     cache: 'no-store',
     credentials: 'same-origin',
   });
@@ -280,7 +311,8 @@ export async function exportUsageCsv(): Promise<void> {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `ai-usage-${new Date().toISOString().slice(0, 10)}.csv`;
+  const scope = range?.start || range?.end ? `-${range.start ?? 'begin'}-${range.end ?? 'now'}` : '';
+  a.download = `ai-usage${scope}-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -316,6 +348,9 @@ export interface ManagedUser {
   tenant_id: number;
   tenant_name: string | null;
   must_change_password: boolean;
+  /** 登录失败锁定：true = 锁定中（locked_until 前无法登录） */
+  locked: boolean;
+  locked_until: string | null;
   last_login_at: string | null;
   created_by: string;
   created_at: string | null;
@@ -369,6 +404,10 @@ export const resetUserPassword = (id: number, password: string) =>
     body: JSON.stringify({ password }),
   });
 
+/** 解除登录失败锁定（清零失败计数与锁定时间），不动密码与会话 */
+export const unlockUser = (id: number) =>
+  request<{ ok: boolean; locked: boolean }>(`/users/${id}/unlock`, { method: 'POST' });
+
 // ———————————————————— 审计日志 ————————————————————
 
 export interface AuditLogItem {
@@ -388,17 +427,54 @@ export const getAuditLogs = (params: {
   user_id?: number;
   tenant_id?: number;
   q?: string;
+  ip?: string;
+  time_from?: string;
+  time_to?: string;
   page?: number;
   page_size?: number;
 }) => {
+  const qs = auditLogQs(params);
+  return request<{ items: AuditLogItem[]; total: number }>(`/audit-logs?${qs.toString()}`);
+};
+
+/** 列表与导出共用的筛选参数序列化 */
+function auditLogQs(params: {
+  action?: string; user_id?: number; tenant_id?: number; q?: string;
+  ip?: string; time_from?: string; time_to?: string; page?: number; page_size?: number;
+}) {
   const qs = new URLSearchParams();
   if (params.action) qs.set('action', params.action);
   if (params.user_id != null) qs.set('user_id', String(params.user_id));
   if (params.tenant_id != null) qs.set('tenant_id', String(params.tenant_id));
   if (params.q) qs.set('q', params.q);
-  qs.set('page', String(params.page ?? 1));
-  qs.set('page_size', String(params.page_size ?? 50));
-  return request<{ items: AuditLogItem[]; total: number }>(`/audit-logs?${qs.toString()}`);
+  if (params.ip) qs.set('ip', params.ip);
+  if (params.time_from) qs.set('time_from', params.time_from);
+  if (params.time_to) qs.set('time_to', params.time_to);
+  if (params.page != null) qs.set('page', String(params.page));
+  if (params.page_size != null) qs.set('page_size', String(params.page_size));
+  return qs;
+}
+
+/** CSV 导出：走流式响应下载为文件（GET 不需要 CSRF 头，Cookie 同源自动携带） */
+export const exportAuditLogs = async (params: {
+  action?: string; q?: string; ip?: string; time_from?: string; time_to?: string;
+}): Promise<void> => {
+  const resp = await fetch(`${API_BASE}/api/v2/admin/audit-logs/export?${auditLogQs(params).toString()}`, {
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+  });
+  if (resp.status === 401) setAnon();
+  if (!resp.ok) throw httpError(resp.status, `导出失败（HTTP ${resp.status}）`);
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `audit-logs-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 };
 
 export const getAuditActions = () =>

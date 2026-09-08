@@ -1,7 +1,8 @@
 /**
  * 成本看板页：Token 用量与成本计费总览。
  * 数据源：/api/v2/admin/usage/*（见 backend/app/api/v2/admin.py 的 usage 端点组）。
- * 鉴权复用运维监控页保存的 Token（localStorage）；未登录时提示先去 /admin 登录。
+ * 鉴权：HttpOnly 会话 Cookie（同源自动携带），与运维监控页共享登录态；
+ * 未登录（401）时提示先去 /admin 登录。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -22,6 +23,7 @@ import { usePageTitle } from '../utils/hooks';
 import {
   ModelPriceItem,
   UsageGroup,
+  UsageLogFilters,
   UsageLogItem,
   UsageSummary,
   exportUsageCsv,
@@ -38,10 +40,19 @@ const TASK_LABELS: Record<string, string> = {
   report: '日报',
 };
 
+const STATUS_LABELS: Record<string, string> = {
+  success: '成功',
+  parse_fail: '解析失败',
+  api_fail: 'API 失败',
+};
+
 const PAGE_SIZE = 50;
 
+/** 成本显示：<0.01 元用 4 位小数，避免常用口径下全显示 ¥0.00 */
 function fmtMoney(cost: number | undefined): string {
-  return `¥${(cost ?? 0).toFixed(2)}`;
+  const v = cost ?? 0;
+  if (v > 0 && v < 0.01) return `¥${v.toFixed(4)}`;
+  return `¥${v.toFixed(2)}`;
 }
 
 function fmtTokens(n: number | undefined): string {
@@ -59,6 +70,15 @@ function fmtTime(iso: string | null): string {
 function fmtDuration(ms: number | null): string {
   if (ms == null) return '—';
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+}
+
+/** UTC 日期串（趋势分桶按 UTC 日界，与后端口径一致） */
+function utcToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function isoDaysAgo(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 }
 
 function StatusChip({ status }: { status: string }) {
@@ -83,6 +103,8 @@ function StatusChip({ status }: { status: string }) {
   );
 }
 
+type ExportRange = 'all' | '7d' | '30d';
+
 export default function Usage() {
   usePageTitle('成本看板');
   const [summaryToday, setSummaryToday] = useState<UsageSummary | null>(null);
@@ -91,9 +113,13 @@ export default function Usage() {
   const [logs, setLogs] = useState<UsageLogItem[]>([]);
   const [logTotal, setLogTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [filters, setFilters] = useState<UsageLogFilters>({});
+  // refresh 的 useCallback 依赖为空，经 ref 读取最新过滤条件，避免刷新后列表与筛选器不一致
+  const filtersRef = useRef<UsageLogFilters>({});
+  const [exportRange, setExportRange] = useState<ExportRange>('all');
   const [prices, setPrices] = useState<ModelPriceItem[]>([]);
-  const [priceEdits, setPriceEdits] = useState<Record<string, { in: string; out: string }>>({});
-  const [newPrice, setNewPrice] = useState({ model: '', in: '', out: '0' });
+  const [priceEdits, setPriceEdits] = useState<Record<string, { in: string; out: string; cache: string }>>({});
+  const [newPrice, setNewPrice] = useState({ model: '', in: '', out: '0', cache: '' });
   const [loading, setLoading] = useState(true);
   const [needAuth, setNeedAuth] = useState(false);
   const [error, setError] = useState('');
@@ -122,16 +148,18 @@ export default function Usage() {
     if (initial) setLoading(true);
     else setBusy('refresh');
     try {
-      const [today, month, d30, logPage, priceList] = await Promise.all([
-        getUsageSummary('today'),
-        getUsageSummary('month'),
+      // today/month 只需总量与覆盖率；日趋势/分组仅 30d 视图消费，关闭以免重复扫描
+      // （明细在 Promise.all 之后单独拉取，以套用当前过滤条件）
+      const [today, month, d30, priceList] = await Promise.all([
+        getUsageSummary('today', { daily: false, groups: false }),
+        getUsageSummary('month', { daily: false, groups: false }),
         getUsageSummary('30d'),
-        getUsageLogs(1, PAGE_SIZE),
         getUsagePrices(),
       ]);
       setSummaryToday(today);
       setSummaryMonth(month);
       setSummary30d(d30);
+      const logPage = await getUsageLogs(1, PAGE_SIZE, filtersRef.current);
       setLogs(logPage.items ?? []);
       setLogTotal(logPage.total ?? 0);
       setPage(1);
@@ -156,10 +184,10 @@ export default function Usage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadLogs = async (p: number) => {
+  const loadLogs = async (p: number, f: UsageLogFilters = filters) => {
     setBusy('logs');
     try {
-      const r = await getUsageLogs(p, PAGE_SIZE);
+      const r = await getUsageLogs(p, PAGE_SIZE, f);
       setLogs(r.items ?? []);
       setLogTotal(r.total ?? 0);
       setPage(p);
@@ -170,11 +198,22 @@ export default function Usage() {
     }
   };
 
+  const changeFilter = (patch: Partial<UsageLogFilters>) => {
+    const next = { ...filters, ...patch };
+    filtersRef.current = next;
+    setFilters(next);
+    void loadLogs(1, next); // 过滤条件变化回到第 1 页
+  };
+
   const doExport = async () => {
     setBusy('export');
     try {
-      await exportUsageCsv();
-      flash(true, 'CSV 已开始下载（含对账口径注释行）');
+      const range =
+        exportRange === 'all'
+          ? undefined
+          : { start: isoDaysAgo(exportRange === '7d' ? 6 : 29), end: utcToday() };
+      await exportUsageCsv(range);
+      flash(true, exportRange === 'all' ? 'CSV 已开始下载（全量，含对账口径注释行）' : `CSV 已开始下载（近 ${exportRange === '7d' ? '7' : '30'} 天）`);
     } catch (e: any) {
       flash(false, `导出失败：${e?.message ?? e}`);
     } finally {
@@ -182,31 +221,42 @@ export default function Usage() {
     }
   };
 
-  const savePrice = async (model: string, pin: string, pout: string): Promise<boolean> => {
+  const savePrice = async (
+    model: string,
+    pin: string,
+    pout: string,
+    pcache: string
+  ): Promise<boolean> => {
     if (!model.trim()) return false;
-    // 前端校验：单价必须是有限非负数值，避免静默无操作或发出非法请求
+    // 前端校验：单价必须是有限非负数值；缓存价留空 = 清除（按输入价全价计）
     const pinN = Number(pin);
     const poutN = Number(pout);
+    const pcacheN = pcache === '' ? null : Number(pcache);
     if (pin === '' || pout === '' || !Number.isFinite(pinN) || !Number.isFinite(poutN) || pinN < 0 || poutN < 0) {
-      flash(false, `价目无效：「${model.trim()}」的单价需为非负数值`);
+      flash(false, `价目无效：「${model.trim()}」的输入/输出单价需为非负数值`);
+      return false;
+    }
+    if (pcacheN !== null && (!Number.isFinite(pcacheN) || pcacheN < 0)) {
+      flash(false, `价目无效：「${model.trim()}」的缓存单价需为非负数值或留空`);
       return false;
     }
     setBusy(`price-${model}`);
     try {
-      await upsertUsagePrice({
+      const r = await upsertUsagePrice({
         model: model.trim(),
         price_input: pinN,
         price_output: poutN,
+        price_cache: pcacheN,
       });
-      const r = await getUsagePrices();
-      setPrices(r.items ?? []);
+      const list = await getUsagePrices();
+      setPrices(list.items ?? []);
       setPriceEdits((m) => {
         if (!(model in m)) return m;
         const rest = { ...m };
         delete rest[model];
         return rest;
       });
-      flash(true, `价目已保存：${model.trim()}`);
+      flash(true, `价目已${r.created ? '新增' : '更新'}：${model.trim()}`);
       return true;
     } catch (e: any) {
       flash(false, `保存失败：${e?.message ?? e}`);
@@ -232,9 +282,9 @@ export default function Usage() {
         <div className="card px-5 py-6 max-w-md mx-auto mt-16 text-sm text-slate-300 flex items-start gap-3">
           <ShieldAlert className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
           <div>
-            需要管理员 Token。请先在
+            需要平台超管权限。请先在
             <Link to="/admin" className="text-accent hover:underline mx-1">运维监控页</Link>
-            登录（Token 保存在本地，登录后本页自动可用）。
+            登录（登录会话保存在 HttpOnly Cookie 中，登录后本页自动可用）。
           </div>
         </div>
       </div>
@@ -242,7 +292,9 @@ export default function Usage() {
   }
 
   const totalPages = Math.max(1, Math.ceil(logTotal / PAGE_SIZE));
-  const daily = summary30d?.daily ?? [];
+  const todayStr = utcToday();
+  // 后端按日期升序返回；倒序展示让最新数据首屏可见，今天高亮
+  const daily = [...(summary30d?.daily ?? [])].reverse();
   const dailyMax = Math.max(1, ...daily.map((d) => d.tokens));
 
   return (
@@ -280,7 +332,12 @@ export default function Usage() {
 
       {/* ———— 顶部卡 ———— */}
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard icon={<Coins className="h-4 w-4" />} label="今日成本" value={fmtMoney(summaryToday?.total_cost)} sub={`${summaryToday?.total_calls ?? 0} 次调用 · ${fmtTokens(summaryToday?.total_tokens)} tokens`} />
+        <StatCard
+          icon={<Coins className="h-4 w-4" />}
+          label="今日成本"
+          value={fmtMoney(summaryToday?.total_cost)}
+          sub={`${summaryToday?.total_calls ?? 0} 次调用 · ${fmtTokens(summaryToday?.total_tokens)} tokens${(summaryToday?.total_cached ?? 0) > 0 ? ` · 缓存命中 ${fmtTokens(summaryToday?.total_cached)}` : ''}`}
+        />
         <StatCard icon={<Coins className="h-4 w-4" />} label="本月累计成本" value={fmtMoney(summaryMonth?.total_cost)} sub={`${summaryMonth?.total_calls ?? 0} 次调用 · ${fmtTokens(summaryMonth?.total_tokens)} tokens`} />
         <StatCard icon={<Tag className="h-4 w-4" />} label="今日调用数" value={String(summaryToday?.total_calls ?? 0)} sub={`摘要 ${summaryToday?.summary_total ?? 0} 次 · 覆盖率 ${summaryToday?.llm_coverage ?? 0}%`} />
         <StatCard icon={<Tag className="h-4 w-4" />} label="本月调用数" value={String(summaryMonth?.total_calls ?? 0)} sub={`Embedding 失败 ${summaryMonth?.embedding_api_fail ?? 0} 次`} />
@@ -291,7 +348,7 @@ export default function Usage() {
         <div className="card px-4 py-3.5">
           <div className="text-xs text-slate-400">LLM 摘要覆盖率</div>
           <div className="text-xl font-semibold text-slate-100 mt-1 tabular-nums">{summaryToday?.llm_coverage ?? 0}%</div>
-          <div className="text-[11px] text-slate-500 mt-0.5">LLM 成功 {summaryToday?.summary_total ?? 0} 次摘要中的占比（降级/失败拉低覆盖率）</div>
+          <div className="text-[11px] text-slate-500 mt-0.5">今日共 {summaryToday?.summary_total ?? 0} 次摘要中真实 LLM 成功的占比（降级/失败拉低覆盖率）</div>
         </div>
         <div className="card px-4 py-3.5">
           <div className="text-xs text-slate-400">Embedding API 失败</div>
@@ -310,15 +367,17 @@ export default function Usage() {
         <div className="card p-4 lg:col-span-2">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-slate-300">近 30 天 Token / 成本趋势</h2>
-            <span className="text-[11px] text-slate-500">条形按 token 归一化</span>
+            <span className="text-[11px] text-slate-500">最新在上 · 条形按 token 归一化</span>
           </div>
           {daily.length === 0 ? (
             <p className="text-xs text-slate-500 py-6 text-center">暂无调用记录（流水线跑起来后自动积累）</p>
           ) : (
             <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
               {daily.map((d) => (
-                <div key={d.date} className="flex items-center gap-2.5 text-[11px]">
-                  <span className="text-slate-500 w-20 shrink-0 tabular-nums">{d.date.slice(5)}</span>
+                <div key={d.date} className={`flex items-center gap-2.5 text-[11px] ${d.date === todayStr ? 'text-accent' : ''}`}>
+                  <span className={`${d.date === todayStr ? 'text-accent font-medium' : 'text-slate-500'} w-20 shrink-0 tabular-nums`}>
+                    {d.date.slice(5)}{d.date === todayStr ? ' ·今天' : ''}
+                  </span>
                   <div className="flex-1 h-2.5 rounded bg-radar-border/60 overflow-hidden">
                     <div
                       className="h-full rounded bg-gradient-to-r from-accent/70 to-cyan-300"
@@ -344,7 +403,7 @@ export default function Usage() {
       <section className="space-y-3">
         <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
           <Coins className="h-4 w-4 text-accent" /> 模型价目（每百万 token，元）
-          <span className="text-[11px] font-normal text-slate-500">调价只影响之后的新记录，历史账单锁定</span>
+          <span className="text-[11px] font-normal text-slate-500">缓存价留空 = 缓存命中按输入价全价计 · 调价只影响之后的新记录，历史账单锁定 · 变更留审计</span>
         </h2>
         <div className="card overflow-hidden">
           <div className="overflow-x-auto">
@@ -354,6 +413,7 @@ export default function Usage() {
                   <th className="text-left font-medium px-4 py-2.5">模型</th>
                   <th className="text-left font-medium px-2 py-2.5">输入单价</th>
                   <th className="text-left font-medium px-2 py-2.5">输出单价</th>
+                  <th className="text-left font-medium px-2 py-2.5">缓存价</th>
                   <th className="text-left font-medium px-2 py-2.5">更新时间</th>
                   <th className="text-right font-medium px-4 py-2.5">操作</th>
                 </tr>
@@ -361,7 +421,7 @@ export default function Usage() {
               <tbody>
                 {prices.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-4 py-6 text-center text-slate-500">
+                    <td colSpan={6} className="px-4 py-6 text-center text-slate-500">
                       暂无价目记录（未配置价的模型照记 token、cost=0）
                     </td>
                   </tr>
@@ -373,15 +433,18 @@ export default function Usage() {
                     <tr key={p.model} className="border-b border-radar-border/50 hover:bg-radar-panel/50">
                       <td className="px-4 py-2 text-slate-200 font-mono">{p.model}</td>
                       <td className="px-2 py-2">
-                        <PriceInput value={edit ? edit.in : String(p.price_input)} onChange={(v) => setPriceEdits((m) => ({ ...m, [p.model]: { in: v, out: m[p.model]?.out ?? String(p.price_output) } }))} ariaLabel={`编辑 ${p.model} 输入单价`} />
+                        <PriceInput value={edit ? edit.in : String(p.price_input)} onChange={(v) => setPriceEdits((m) => ({ ...m, [p.model]: { in: v, out: m[p.model]?.out ?? String(p.price_output), cache: m[p.model]?.cache ?? (p.price_cache == null ? '' : String(p.price_cache)) } }))} ariaLabel={`编辑 ${p.model} 输入单价`} />
                       </td>
                       <td className="px-2 py-2">
-                        <PriceInput value={edit ? edit.out : String(p.price_output)} onChange={(v) => setPriceEdits((m) => ({ ...m, [p.model]: { in: m[p.model]?.in ?? String(p.price_input), out: v } }))} ariaLabel={`编辑 ${p.model} 输出单价`} />
+                        <PriceInput value={edit ? edit.out : String(p.price_output)} onChange={(v) => setPriceEdits((m) => ({ ...m, [p.model]: { in: m[p.model]?.in ?? String(p.price_input), out: v, cache: m[p.model]?.cache ?? (p.price_cache == null ? '' : String(p.price_cache)) } }))} ariaLabel={`编辑 ${p.model} 输出单价`} />
+                      </td>
+                      <td className="px-2 py-2">
+                        <PriceInput value={edit ? edit.cache : p.price_cache == null ? '' : String(p.price_cache)} onChange={(v) => setPriceEdits((m) => ({ ...m, [p.model]: { in: m[p.model]?.in ?? String(p.price_input), out: m[p.model]?.out ?? String(p.price_output), cache: v } }))} ariaLabel={`编辑 ${p.model} 缓存命中单价（留空按输入价）`} placeholder="按输入价" />
                       </td>
                       <td className="px-2 py-2 text-slate-500 whitespace-nowrap">{fmtTime(p.updated_at)}</td>
                       <td className="px-4 py-2 text-right">
                         <button
-                          onClick={() => savePrice(p.model, edit?.in ?? String(p.price_input), edit?.out ?? String(p.price_output))}
+                          onClick={() => savePrice(p.model, edit?.in ?? String(p.price_input), edit?.out ?? String(p.price_output), edit?.cache ?? (p.price_cache == null ? '' : String(p.price_cache)))}
                           disabled={!changed || busy === `price-${p.model}`}
                           className="chip bg-accent/90 hover:bg-accent text-white border border-accent/50 disabled:opacity-40 disabled:cursor-not-allowed"
                         >
@@ -413,13 +476,16 @@ export default function Usage() {
                   <td className="px-2 py-2">
                     <PriceInput value={newPrice.out} onChange={(v) => setNewPrice((s) => ({ ...s, out: v }))} ariaLabel="新增模型输出单价" />
                   </td>
+                  <td className="px-2 py-2">
+                    <PriceInput value={newPrice.cache} onChange={(v) => setNewPrice((s) => ({ ...s, cache: v }))} ariaLabel="新增模型缓存单价（留空按输入价）" placeholder="按输入价" />
+                  </td>
                   <td className="px-2 py-2 text-slate-500">—</td>
                   <td className="px-4 py-2 text-right">
                     <button
                       onClick={async () => {
-                        const ok = await savePrice(newPrice.model.trim(), newPrice.in, newPrice.out);
+                        const ok = await savePrice(newPrice.model.trim(), newPrice.in, newPrice.out, newPrice.cache);
                         // 仅成功后清空表单，失败保留输入供修正
-                        if (ok) setNewPrice({ model: '', in: '', out: '0' });
+                        if (ok) setNewPrice({ model: '', in: '', out: '0', cache: '' });
                       }}
                       disabled={!newPrice.model.trim() || newPrice.in === '' || busy === `price-${newPrice.model.trim()}`}
                       className="chip bg-accent/90 hover:bg-accent text-white border border-accent/50 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -436,9 +502,43 @@ export default function Usage() {
 
       {/* ———— 明细分页表 ———— */}
       <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-300">调用流水明细（共 {logTotal} 条）</h2>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <h2 className="text-sm font-semibold text-slate-300">
+            调用流水明细（共 {logTotal} 条{filters.task_type || filters.status ? ' · 已过滤' : ''}）
+          </h2>
           <div className="flex items-center gap-2">
+            <select
+              value={filters.task_type ?? ''}
+              onChange={(e) => changeFilter({ task_type: e.target.value || undefined })}
+              aria-label="按任务类型过滤"
+              className="chip bg-radar-card border border-radar-border text-slate-300 outline-none focus:border-accent cursor-pointer"
+            >
+              <option value="">全部任务</option>
+              {Object.entries(TASK_LABELS).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </select>
+            <select
+              value={filters.status ?? ''}
+              onChange={(e) => changeFilter({ status: e.target.value || undefined })}
+              aria-label="按状态过滤"
+              className="chip bg-radar-card border border-radar-border text-slate-300 outline-none focus:border-accent cursor-pointer"
+            >
+              <option value="">全部状态</option>
+              {Object.entries(STATUS_LABELS).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </select>
+            <select
+              value={exportRange}
+              onChange={(e) => setExportRange(e.target.value as ExportRange)}
+              aria-label="导出范围"
+              className="chip bg-radar-card border border-radar-border text-slate-300 outline-none focus:border-accent cursor-pointer"
+            >
+              <option value="all">导出全部</option>
+              <option value="7d">导出近 7 天</option>
+              <option value="30d">导出近 30 天</option>
+            </select>
             <button
               onClick={doExport}
               disabled={busy === 'export'}
@@ -470,7 +570,7 @@ export default function Usage() {
                 {logs.length === 0 && (
                   <tr>
                     <td colSpan={10} className="px-4 py-8 text-center text-slate-500">
-                      暂无流水记录
+                      {filters.task_type || filters.status ? '当前过滤条件下暂无记录' : '暂无流水记录'}
                     </td>
                   </tr>
                 )}
@@ -561,10 +661,12 @@ function PriceInput({
   value,
   onChange,
   ariaLabel,
+  placeholder,
 }: {
   value: string;
   onChange: (v: string) => void;
   ariaLabel: string;
+  placeholder?: string;
 }) {
   return (
     <input
@@ -572,7 +674,8 @@ function PriceInput({
       onChange={(e) => onChange(e.target.value)}
       inputMode="decimal"
       aria-label={ariaLabel}
-      className="w-20 px-2 py-1 rounded bg-radar-panel border border-radar-border text-slate-200 outline-none focus:border-accent tabular-nums"
+      placeholder={placeholder}
+      className="w-20 px-2 py-1 rounded bg-radar-panel border border-radar-border text-slate-200 outline-none focus:border-accent tabular-nums placeholder:text-slate-600"
     />
   );
 }
