@@ -52,6 +52,7 @@ const FIELD_LABELS: Record<string, string> = {
   crawler_interval_minutes: '采集间隔（分钟）',
   sim_threshold: '事件聚合相似度阈值',
   keyword_jaccard_threshold: '标题关键词 Jaccard 阈值',
+  high_band_kw_floor: '高位带关键词重合下限（跨来源佐证）',
   cluster_lookback_hours: '聚合回看窗口（小时）',
   admin_token: '管理后门 Token',
   session_ttl_hours: '会话有效期（小时）',
@@ -87,6 +88,7 @@ const NUMERIC_RULES: Record<string, { min: number; max: number }> = {
   crawler_interval_minutes: { min: 1, max: 1440 },
   sim_threshold: { min: 0, max: 1 },
   keyword_jaccard_threshold: { min: 0, max: 1 },
+  high_band_kw_floor: { min: 0, max: 1 },
   cluster_lookback_hours: { min: 1, max: 720 },
   session_ttl_hours: { min: 1, max: 8760 },
   session_idle_hours: { min: 0, max: 8760 },
@@ -123,6 +125,7 @@ const GROUPS: { title: string; hint: string; keys: string[] }[] = [
       'crawler_interval_minutes',
       'sim_threshold',
       'keyword_jaccard_threshold',
+      'high_band_kw_floor',
       'cluster_lookback_hours',
     ],
   },
@@ -546,7 +549,7 @@ export default function Admin() {
                 {statsPoll.enabled === false
                   ? '已热停：热度回退纯时间衰减，不再产生轮询记录'
                   : statsPoll.last_run
-                  ? `最近一轮 ${fmtTime(statsPoll.last_run.started_at)} · ${statsPoll.last_run.status === 'success' ? '成功' : statsPoll.last_run.status === 'failed' ? '失败' : '运行中'}`
+                  ? `最近一轮 ${fmtTime(statsPoll.last_run.started_at)} · ${statsPoll.last_run.status === 'success' ? '成功' : statsPoll.last_run.status === 'failed' ? '失败' : statsPoll.last_run.status === 'degraded' ? '降级' : '运行中'}`
                   : '尚无轮询记录'}
               </span>
             </div>
@@ -800,6 +803,8 @@ export default function Admin() {
                           <span className="text-emerald-300 flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" />成功</span>
                         ) : r.status === 'failed' ? (
                           <span className="text-red-400 flex items-center gap-1"><XCircle className="h-3.5 w-3.5" />失败</span>
+                        ) : r.status === 'degraded' ? (
+                          <span className="text-amber-300 flex items-center gap-1" title={r.detail ?? ''}><AlertTriangle className="h-3.5 w-3.5" />降级</span>
                         ) : skipped ? (
                           <span className="text-amber-300 flex items-center gap-1" title={r.detail ?? ''}><AlertTriangle className="h-3.5 w-3.5" />跳过</span>
                         ) : (

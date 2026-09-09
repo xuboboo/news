@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Flame, Radar, Bot, TrendingUp, ChevronDown, MessageSquare, Share2, Eye, ThumbsUp } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ARTICLES_WITH_SCORE, FRESH_ARTICLE_IDS } from '../api/client';
+import { ARTICLES_WITH_SCORE, FRESH_ARTICLE_IDS, aiSummaryText, fetchHotBoard, type HotWindow } from '../api/client';
 import { activateOnKey, useBootstrapReady, useDataVersion, usePageTitle, useTick } from '../utils/hooks';
 import { ArticleWithScore } from '../types';
 import ArticleModal from '../components/ArticleModal';
@@ -16,15 +16,15 @@ import {
   StatCard,
   TagChip,
 } from '../components/common';
-import { formatCount, formatScore, minutesAgo, timeAgo } from '../utils/format';
+import { formatCount, formatScore, timeAgo } from '../utils/format';
 
-/** 热榜时间窗口：与后端 /hot/board 的 120h 语义对齐并暴露给用户切换 */
-const WINDOWS = [
-  { key: '24h', label: '近24小时', mins: 24 * 60 },
-  { key: '3d', label: '近3天', mins: 3 * 24 * 60 },
-  { key: '7d', label: '近7天', mins: 7 * 24 * 60 },
-  { key: 'all', label: '全部', mins: Infinity },
-] as const;
+/** 热榜时间窗口：与后端 /hot/board 的窗口参数一一对应（归一化/排序在服务端完成） */
+const WINDOWS: { key: HotWindow; label: string }[] = [
+  { key: '24h', label: '近24小时' },
+  { key: '3d', label: '近3天' },
+  { key: '7d', label: '近7天' },
+  { key: 'all', label: '全部' },
+];
 
 /** 默认时间窗口：近 24 小时（URL 无 win 参数或参数非法时生效） */
 const DEFAULT_WIN = '24h';
@@ -42,7 +42,7 @@ export default function HotBoard() {
   const channelParam = searchParams.get('channel') ?? '全部';
   const channel = channels.includes(channelParam) ? channelParam : '全部';
   const winParam = searchParams.get('win') ?? DEFAULT_WIN;
-  const winKey = WINDOWS.some((w) => w.key === winParam) ? winParam : DEFAULT_WIN;
+  const winKey = (WINDOWS.some((w) => w.key === winParam) ? winParam : DEFAULT_WIN) as HotWindow;
 
   const setFilter = (key: 'channel' | 'win', value: string) => {
     const next = new URLSearchParams(searchParams);
@@ -56,21 +56,36 @@ export default function HotBoard() {
   const [selected, setSelected] = useState<ArticleWithScore | null>(null);
   const bootReady = useBootstrapReady();
   const navigate = useNavigate();
-  const tick = useTick(); // 相对时间自动跳动
+  useTick(); // 相对时间自动跳动（触发重渲染即可，无需值）
 
   usePageTitle('热榜中心');
 
-  const win = WINDOWS.find((w) => w.key === winKey) ?? WINDOWS[0];
+  // ———— 服务端榜单：窗口/频道/排序/归一化全部由 /hot/board 完成，页面只渲染 ————
+  // 换窗/换频道时保留旧列表就地刷新（stale-while-revalidate），首拉为 loading
+  const [board, setBoard] = useState<{
+    status: 'loading' | 'ok' | 'error';
+    items: ArticleWithScore[];
+    total: number;
+  }>({ status: 'loading', items: [], total: 0 });
 
-  const filtered = useMemo(() => {
-    const list = ARTICLES_WITH_SCORE.filter(
-      (a) =>
-        (channel === '全部' || a.channel === channel) &&
-        minutesAgo(a.publishTime) <= win.mins
-    );
-    return [...list].sort((a, b) => b.hotScore - a.hotScore);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVer/tick 变化触发重算
-  }, [channel, win, dataVer, tick]);
+  useEffect(() => {
+    let cancelled = false;
+    fetchHotBoard(winKey, channel)
+      .then((r) => {
+        if (!cancelled) setBoard({ status: 'ok', items: r.items, total: r.total });
+      })
+      .catch(() => {
+        if (!cancelled)
+          setBoard((prev) => (prev.items.length ? prev : { status: 'error', items: [], total: 0 }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [channel, winKey, dataVer]);
+
+  const boardLoading = board.status === 'loading';
+  const win = WINDOWS.find((w) => w.key === winKey) ?? WINDOWS[0];
+  const filtered = board.items;
 
   const summaryCoverage =
     filtered.length > 0
@@ -93,16 +108,15 @@ export default function HotBoard() {
     <div>
       <PageHeader
         title="热榜中心"
-        description="实时热度榜 · HotScore = Engagement × TimeDecay · 可按时间窗口与频道切换"
+        description="服务端热度榜 · HotScore = Engagement × TimeDecay · 可按时间窗口与频道切换"
       />
-
       {/* 概览 */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
         <StatCard
           icon={<Flame className="h-5 w-5" />}
           label="在榜文章"
-          value={`${filtered.length} 篇`}
-          sub={`${win.label}窗口 · 覆盖 ${new Set(filtered.map((a) => a.channel)).size} 个频道`}
+          value={`${board.total} 篇`}
+          sub={`${win.label}窗口 · 展示 TOP ${filtered.length}`}
         />
         <StatCard
           icon={<TrendingUp className="h-5 w-5" />}
@@ -155,11 +169,23 @@ export default function HotBoard() {
             {w.label}
           </button>
         ))}
-        <span className="ml-auto text-xs text-slate-500">共 {filtered.length} 篇在榜</span>
+        <span className="ml-auto text-xs text-slate-500">共 {board.total} 篇在榜</span>
       </div>
 
-      {/* 热榜列表 */}
-      {filtered.length === 0 ? (
+      {/* 热榜列表（服务端数据） */}
+      {boardLoading && filtered.length === 0 ? (
+        <Loading />
+      ) : board.status === 'error' && filtered.length === 0 ? (
+        <div className="card py-16 text-center">
+          <div className="text-sm text-amber-300/90 mb-4">热榜加载失败 · 正在自动重试</div>
+          <button
+            onClick={() => setSearchParams(searchParams, { replace: true })}
+            className="chip bg-accent/15 text-accent border border-accent/40 px-4 py-2 cursor-pointer hover:bg-accent/25"
+          >
+            立即重试
+          </button>
+        </div>
+      ) : filtered.length === 0 ? (
         <div className="card py-16 text-center">
           <div className="text-sm text-slate-500 mb-4">当前筛选条件下暂无在榜文章</div>
           <button
@@ -259,7 +285,7 @@ export default function HotBoard() {
                     <span className="text-[11px] text-slate-500">一句话摘要</span>
                   </div>
                   <p className="text-sm text-slate-300 leading-relaxed mb-2.5">
-                    {a.summary.summary_short || 'AI 摘要生成中…'}
+                    {aiSummaryText(a)}
                   </p>
                   {a.summary.tags.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">

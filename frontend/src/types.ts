@@ -35,6 +35,10 @@ export interface Article {
   /** 点赞（IT之家「有价值」打分数，crawler/stats.py 轮询） */
   likes: number;
   summary: ArticleSummary;
+  /** 关联热点事件 ID（后端 event_ids 全量关联，数字串；缺省 = 旧快照数据） */
+  eventIds?: string[];
+  /** AI 处理状态（后端 ai_status）：pending 处理中 / summarized 已总结 / clustered 已聚类 */
+  aiStatus?: string;
   /** 对行业变化的描述（用于科技日报） */
   industryChange?: string;
 }

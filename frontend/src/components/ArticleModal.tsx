@@ -23,7 +23,7 @@ export default function ArticleModal({
   // 按.id 重查最新数据：后台 60s 刷新后父页面 state 里的对象快照会过期
   // （阅读数/摘要不更新甚至文章已滚出列表），以最新数据为准
   const article = ARTICLES_WITH_SCORE.find((a) => a.id === propArticle.id) ?? propArticle;
-  const relatedEvents = eventsForArticle(article.id);
+  const relatedEvents = eventsForArticle(article);
   const s = article.summary;
   const hasSummary = s.summary_short.trim() !== '' || s.key_points.length > 0;
   const dialogRef = useModalA11y(onClose);

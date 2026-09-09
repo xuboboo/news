@@ -84,6 +84,11 @@ function mapApiArticle(a: any): ArticleWithScore {
     comments: a.comments ?? 0,
     shares: a.shares ?? 0,
     likes: a.likes ?? 0,
+    // 后端全量事件关联（2026-09-09 审计：旧映射丢弃此字段，靠事件缓存反推，
+    // 事件列表窗口（limit=100）外的关联会静默丢失）
+    eventIds: (a.event_ids ?? []).map((id: number) => String(id)),
+    // AI 处理状态：区分「处理中 / 已生成 / 未生成」，失败不再永远显示"生成中"
+    aiStatus: a.ai_status ?? 'pending',
     summary: a.summary
       ? {
           summary_short: a.summary.summary_short ?? '',
@@ -96,6 +101,12 @@ function mapApiArticle(a: any): ArticleWithScore {
     rawScore: a.hot_score ?? 0,
     hotScore: a.hot_score ?? 0,
   };
+}
+
+/** AI 摘要三态文案：有摘要展示摘要；pending 显示处理中；其余（失败/缺失）显示未生成。 */
+export function aiSummaryText(a: Pick<ArticleWithScore, 'summary' | 'aiStatus'>): string {
+  if (a.summary.summary_short) return a.summary.summary_short;
+  return a.aiStatus === 'pending' ? 'AI 摘要处理中…' : '暂无 AI 摘要';
 }
 
 function mapApiTimeline(t: any): { time: Date; text: string; source?: string } {
@@ -120,6 +131,8 @@ function briefToArticle(brief: any): ArticleWithScore {
     comments: 0,
     shares: 0,
     likes: 0,
+    eventIds: [],
+    aiStatus: brief.summary_short ? 'summarized' : 'pending',
     summary: {
       summary_short: brief.summary_short ?? '',
       key_points: [],
@@ -422,8 +435,16 @@ export async function refreshFromApi(): Promise<boolean> {
         .map((e) => e.id)
         .filter((id) => prevEventIds.length > 0 && !prevEventIds.includes(id))
     );
-    ARTICLES_WITH_SCORE = hydrated;
-    prevArticleIds = hydrated.map((a) => a.id);
+    // 「加载更多」追加的页尾文章（超出首页 400 篇窗口）在增量刷新时保留：
+    // 与新首页按 id 去重合并，新文章滚入首页窗口时页尾旧条目自然让位
+    const extras = ARTICLES_WITH_SCORE.slice(BASE_PAGE_LIMIT);
+    const merged = new Map<string, ArticleWithScore>();
+    hydrated.forEach((a) => merged.set(a.id, a));
+    extras.forEach((a) => {
+      if (!merged.has(a.id)) merged.set(a.id, a);
+    });
+    ARTICLES_WITH_SCORE = [...merged.values()];
+    prevArticleIds = ARTICLES_WITH_SCORE.map((a) => a.id);
     EVENTS_WITH_SCORE = mapped;
     prevEventIds = mapped.map((e) => e.id);
 
@@ -485,8 +506,17 @@ export function eventById(id: string): EventWithScore | undefined {
   return EVENTS_WITH_SCORE.find((e) => e.id === id || e.id === key);
 }
 
-export function eventsForArticle(articleId: string): EventWithScore[] {
-  return EVENTS_WITH_SCORE.filter((e) => e.articleIds.includes(articleId));
+export function eventsForArticle(
+  article: Pick<ArticleWithScore, 'id' | 'eventIds'>
+): EventWithScore[] {
+  // 优先后端 event_ids（全量关联）；事件列表窗口外的事件查不到缓存则忽略。
+  // eventIds 缺省（旧快照）时回退缓存反推
+  if (article.eventIds && article.eventIds.length > 0) {
+    return article.eventIds
+      .map((eid) => eventById(eid))
+      .filter(Boolean) as EventWithScore[];
+  }
+  return EVENTS_WITH_SCORE.filter((e) => e.articleIds.includes(article.id));
 }
 
 /** 按需拉取单个事件（/events/{id}）：列表窗口（limit=100）外的事件详情兜底。
@@ -505,6 +535,47 @@ export async function fetchEventById(id: string): Promise<EventWithScore | null>
   } catch {
     return null;
   }
+}
+
+// ———————————————————— 热榜（服务端榜单，单一数据源） ————————————————————
+
+export type HotWindow = '24h' | '3d' | '7d' | 'all';
+
+/** 拉取后端热榜（/hot/board）：窗口/频道/排序/归一化全部服务端完成，
+ *  页面只渲染——消除「页面客户端另算一套榜单」的口径分裂（2026-09-09 审计）。 */
+export async function fetchHotBoard(
+  window: HotWindow,
+  channel: string
+): Promise<{ items: ArticleWithScore[]; total: number }> {
+  const ch = channel && channel !== '全部' ? `&channel=${encodeURIComponent(channel)}` : '';
+  const raw = await fetchJSON(`/hot/board?window=${window}&limit=100${ch}`, 10000);
+  return {
+    items: (raw.items ?? []).map(mapApiArticle),
+    total: raw.total ?? raw.items?.length ?? 0,
+  };
+}
+
+// ———————————————————— 最新资讯：加载更多（offset 分页） ————————————————————
+
+const BASE_PAGE_LIMIT = 400;
+
+/** 追加加载更早的文章（offset 分页）。返回本轮新增篇数（0 = 没有更多了）。
+ *  新增的「页尾文章」在 60s 增量刷新时会被保留（去重合并），不丢页。 */
+export async function loadMoreArticles(): Promise<number> {
+  if (!apiMode) return 0;
+  const offset = ARTICLES_WITH_SCORE.length;
+  const raw = await fetchJSON(
+    `/articles/latest?limit=200&offset=${offset}`,
+    10000
+  );
+  const mapped: ArticleWithScore[] = (raw.items ?? []).map(mapApiArticle);
+  const known = new Set(ARTICLES_WITH_SCORE.map((a) => a.id));
+  const fresh = mapped.filter((a) => !known.has(a.id));
+  if (fresh.length > 0) {
+    ARTICLES_WITH_SCORE = [...ARTICLES_WITH_SCORE, ...fresh];
+    notify();
+  }
+  return fresh.length;
 }
 
 export interface DailyIssue {

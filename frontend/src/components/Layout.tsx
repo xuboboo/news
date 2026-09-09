@@ -126,7 +126,7 @@ function SyncStatus() {
           <>
             <span className="hidden sm:inline-flex chip bg-emerald-500/10 text-emerald-300 border border-emerald-400/20">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              实时同步中 · 每 60s 自动更新
+              定时同步 · 每 60s 自动更新
             </span>
             <span className="hidden sm:inline tabular-nums">
               {syncMins == null
@@ -384,7 +384,7 @@ export default function Layout() {
           >
             <AlertTriangle className="h-4 w-4 shrink-0" />
             <span>
-              演示模式：后端未连接，当前展示的是内置演示数据，非真实采集内容；连接恢复后将自动切换为实时数据。
+              后端未连接，暂时无法加载数据（无演示数据）；系统每 15s 自动重连，恢复后自动加载。
             </span>
           </div>
         )}

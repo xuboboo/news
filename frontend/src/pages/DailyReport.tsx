@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   CalendarDays,
   Bot,
@@ -31,9 +31,6 @@ import {
 import { activateOnKey, useBootstrapReady, useDataVersion, usePageTitle } from '../utils/hooks';
 import { clockTime, formatScore } from '../utils/format';
 
-/** 日期切换 chips：只渲染最近 14 期，更早的收敛为计数（避免期号无限增长挤爆页头） */
-const MAX_DATE_CHIPS = 14;
-
 export default function DailyReport() {
   const bootReady = useBootstrapReady();
   const dataVer = useDataVersion();
@@ -43,7 +40,17 @@ export default function DailyReport() {
   // dataVer 变化（loadReports 完成 / 周期刷新）时重新读取可用日期
   // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVer 变化触发重算
   const dates = useMemo(() => availableDates(), [dataVer]);
-  const [dateKey, setDateKey] = useState('');
+  // 选中日期写入 URL（#/report?date=...）：刷新/分享不再丢失上下文（2026-09-09 审计）
+  const [searchParams, setSearchParams] = useSearchParams();
+  const dateParam = searchParams.get('date') ?? '';
+  const dateKey = dates.some((d) => d.key === dateParam) ? dateParam : '';
+  const setDateKey = (key: string) => {
+    const next = new URLSearchParams(searchParams);
+    // 默认（最新一期）不写参数，保持 URL 简洁
+    if (!dateKey || key === dates[0]?.key) next.delete('date');
+    else next.set('date', key);
+    setSearchParams(next, { replace: true });
+  };
   const [selected, setSelected] = useState<ArticleWithScore | null>(null);
   // 未命中缓存的日期按需拉取的结果（记录所属日期，防止切日期串数据）
   const [fetched, setFetched] = useState<{ date: string; view: DailyReportView | null } | null>(
@@ -51,8 +58,8 @@ export default function DailyReport() {
   );
   // 空态手动重试进行中（避免重复点击、给加载反馈）
   const [retrying, setRetrying] = useState(false);
-  // 「复制 Markdown」成功提示（2s 自动复位）
-  const [copied, setCopied] = useState(false);
+  // 「复制 Markdown」结果提示（成功/失败，2s 自动复位；失败不再静默）
+  const [copyState, setCopyState] = useState<'ok' | 'failed' | null>(null);
   const navigate = useNavigate();
 
   // API 模式下日报日期晚于首帧到达：用派生值兜底选中最新一天，无需 effect 同步
@@ -99,10 +106,35 @@ export default function DailyReport() {
     };
   }, [effectiveDateKey, cachedReport]);
 
-  const visibleDates = dates.slice(0, MAX_DATE_CHIPS);
+  // ———— 上一期补拉（hooks 须在提前 return 之前）————
+  // 「较上期」依赖上一期数据；未在缓存中时自动补拉而非静默缺失（2026-09-09 审计）
+  const prevKey = report ? (dates.find((d) => d.key < report.date)?.key ?? null) : null;
+  const cachedPrev = prevKey ? peekDailyReport(prevKey) : null;
+  const [prevFetched, setPrevFetched] = useState<{ date: string; view: DailyReportView | null } | null>(
+    null
+  );
+  const prevReport = cachedPrev ?? (prevFetched?.date === prevKey ? prevFetched.view : null);
+
+  useEffect(() => {
+    if (!prevKey || cachedPrev || prevFetched?.date === prevKey) return;
+    let cancelled = false;
+    fetchDailyReport(prevKey)
+      .then((view) => {
+        if (!cancelled) setPrevFetched({ date: prevKey, view });
+      })
+      .catch(() => {
+        if (!cancelled) setPrevFetched({ date: prevKey, view: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [prevKey, cachedPrev, prevFetched]);
+
+  // 日期 chips 展示后端返回的全部期数（上限 60，chips 自动换行）；
+  // 不再截断 14 条——历史日报存在于库中就该能从 UI 自然到达（2026-09-09 审计）
   const dateChips = (
     <div className="flex items-center gap-1.5 flex-wrap print:hidden">
-      {visibleDates.map((d) => (
+      {dates.map((d) => (
         <button
           key={d.key}
           onClick={() => setDateKey(d.key)}
@@ -116,9 +148,6 @@ export default function DailyReport() {
           {d.label}
         </button>
       ))}
-      {dates.length > visibleDates.length && (
-        <span className="text-[11px] text-slate-500">共 {dates.length} 期</span>
-      )}
     </div>
   );
 
@@ -170,9 +199,7 @@ export default function DailyReport() {
     return `统计窗口（北京时间）${report.date.slice(5).replace('-', '/')} 08:00 – ${mm}/${dd} 08:00`;
   })();
 
-  // 环比：与上一期对比（新进热点 / 收录篇数变化），上一期快照在缓存中才有
-  const prevKey = dates.find((d) => d.key < report.date)?.key ?? null;
-  const prevReport = prevKey ? peekDailyReport(prevKey) : null;
+  // 环比：与上一期对比（新进热点 / 收录篇数变化）；上一期已由上方补拉逻辑保证可用
   const newEventCount = prevReport
     ? report.topEvents.filter((e) => !prevReport.topEvents.some((p) => p.id === e.id)).length
     : 0;
@@ -242,6 +269,10 @@ export default function DailyReport() {
   };
   const copyMarkdown = async () => {
     const text = reportToMarkdown(report);
+    const reset = (state: 'ok' | 'failed') => {
+      setCopyState(state);
+      window.setTimeout(() => setCopyState(null), 2000);
+    };
     try {
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
@@ -252,13 +283,13 @@ export default function DailyReport() {
         ta.style.opacity = '0';
         document.body.appendChild(ta);
         ta.select();
-        document.execCommand('copy');
+        const ok = document.execCommand('copy');
         document.body.removeChild(ta);
+        if (!ok) throw new Error('execCommand copy failed');
       }
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
+      reset('ok');
     } catch {
-      /* 复制失败静默（http 非 Secure 上下文等） */
+      reset('failed');
     }
   };
 
@@ -322,9 +353,15 @@ export default function DailyReport() {
             <div className="flex gap-2 print:hidden">
               <button
                 onClick={() => void copyMarkdown()}
-                className="chip bg-radar-panel text-slate-400 border border-radar-border hover:text-slate-200 text-[11px] px-2.5 py-1 cursor-pointer"
+                className={`chip border text-[11px] px-2.5 py-1 cursor-pointer ${
+                  copyState === 'ok'
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/25'
+                    : copyState === 'failed'
+                    ? 'bg-red-500/15 text-red-300 border-red-400/25'
+                    : 'bg-radar-panel text-slate-400 border-radar-border hover:text-slate-200'
+                }`}
               >
-                {copied ? '已复制 ✓' : '复制 Markdown'}
+                {copyState === 'ok' ? '已复制 ✓' : copyState === 'failed' ? '复制失败 ✕' : '复制 Markdown'}
               </button>
               <button
                 onClick={() => window.print()}

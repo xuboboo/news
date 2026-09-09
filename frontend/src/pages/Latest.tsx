@@ -1,7 +1,14 @@
 import { useMemo, useState } from 'react';
-import { Search, MessageSquare, Share2, Eye, ThumbsUp, Zap, X } from 'lucide-react';
+import { Search, MessageSquare, Share2, Eye, ThumbsUp, Zap, X, ChevronDown } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ARTICLES_WITH_SCORE, FRESH_ARTICLE_IDS, eventsForArticle } from '../api/client';
+import {
+  ARTICLES_WITH_SCORE,
+  FRESH_ARTICLE_IDS,
+  LAST_SYNC,
+  aiSummaryText,
+  eventsForArticle,
+  loadMoreArticles,
+} from '../api/client';
 import { activateOnKey, useBootstrapReady, useDataVersion, usePageTitle, useTick } from '../utils/hooks';
 import { ArticleWithScore } from '../types';
 import ArticleModal from '../components/ArticleModal';
@@ -41,6 +48,22 @@ export default function Latest() {
 
   usePageTitle('最新资讯');
 
+  // 「加载更多」状态：加载中 / 没有更多（后端 total 已全部加载）。
+  // exhaustedAt 记录在哪一轮数据版本（dataVer）耗尽：新数据回流后自动视为可再加载
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [exhaustedAt, setExhaustedAt] = useState<number | null>(null);
+  const exhausted = exhaustedAt === dataVer;
+  const onLoadMore = async () => {
+    if (loadingMore || exhausted) return;
+    setLoadingMore(true);
+    try {
+      const added = await loadMoreArticles();
+      if (added === 0) setExhaustedAt(dataVer);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return ARTICLES_WITH_SCORE.filter((a) => {
@@ -71,7 +94,9 @@ export default function Latest() {
     <div>
       <PageHeader
         title="最新资讯"
-        description="实时时间轴 · 按 publish_time 倒序 · AI 摘要与标签已自动生成"
+        description={`定时同步时间轴 · 按 publish_time 倒序 · AI 摘要与标签已自动生成${
+          LAST_SYNC ? ` · 最近同步 ${new Date(LAST_SYNC).toLocaleTimeString('zh-CN', { hour12: false })}` : ''
+        }`}
       >
         <div className="relative">
           <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -122,7 +147,7 @@ export default function Latest() {
 
           <div className="space-y-2.5">
             {items.map((a) => {
-              const evs = eventsForArticle(a.id);
+              const evs = eventsForArticle(a);
               const fresh = FRESH_ARTICLE_IDS.has(a.id);
               return (
                 <div
@@ -198,7 +223,7 @@ export default function Latest() {
                           a.summary.summary_short ? 'text-slate-400' : 'text-slate-500'
                         }`}
                       >
-                        {a.summary.summary_short || 'AI 摘要生成中…'}
+                        {aiSummaryText(a)}
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-1.5 mt-2">
@@ -213,6 +238,20 @@ export default function Latest() {
           </div>
         </div>
       ))}
+
+      {/* 加载更多（offset 分页；后端 total 未全部加载时展示） */}
+      {filtered.length > 0 && !exhausted && (
+        <div className="flex justify-center mb-6 print:hidden">
+          <button
+            onClick={() => void onLoadMore()}
+            disabled={loadingMore}
+            className="chip bg-radar-card text-slate-400 border border-radar-border hover:text-accent hover:border-accent/40 px-5 py-2 cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+          >
+            <ChevronDown className={`h-4 w-4 ${loadingMore ? 'animate-bounce' : ''}`} />
+            {loadingMore ? '加载中…' : '加载更早的资讯'}
+          </button>
+        </div>
+      )}
 
       {filtered.length === 0 && (
         <div className="card py-16 text-center">
