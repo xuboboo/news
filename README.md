@@ -49,7 +49,8 @@ flowchart LR
     PG --> RD{{Redis 任务队列}}
     RD --> AI[ai-worker<br/>AI 摘要 / Embedding]
     RD --> WK[worker<br/>事件聚合 / 日报]
-    EMB[embedding<br/>fastembed 语义向量<br/>bge-small-zh-v1.5 · 384 维] -.-> AI
+    EMB[embedding<br/>fastembed 语义向量<br/>bge-small-zh-v1.5 · 384 维]
+    AI -.->|调用| EMB
     BT[beat 定时调度<br/>事件聚类 / 互动轮询 / 告警巡检<br/>每日 08:00 日报] --> RD
     AI --> PG
     WK --> PG
@@ -107,18 +108,18 @@ docker compose up -d --build           # 一键上线全套 9 个服务（含 ov
 
 | 变量 | 说明 |
 | --- | --- |
-| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | 配置后 AI 摘要与事件总结走大模型；不配置自动降级内置 TextRank v2 |
-| `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | 接入 embedding-server 时为 `http://embedding:80/v1` / `local-embedding` / `BAAI/bge-small-zh-v1.5` |
+| `LLM_BASE_URL` ★ / `LLM_API_KEY` ★ / `LLM_MODEL` ★ | 配置后 AI 摘要与事件总结走大模型；不配置自动降级内置 TextRank v2 |
+| `EMBEDDING_BASE_URL` ★ / `EMBEDDING_API_KEY` ★ / `EMBEDDING_MODEL` ★ | 接入 embedding-server 时为 `http://embedding:80/v1` / `local-embedding` / `BAAI/bge-small-zh-v1.5` |
 | `EMBED_DIM` | 向量维度（内置哈希向量默认 256；用 embedding-server 须为 384，与模型实际输出一致，严格模式下不符即硬失败） |
-| `EMBEDDING_STRICT` ★ | Embedding 失败/维度不符时是否硬失败（false 会静默降级本地哈希向量、污染聚类） |
-| `ALLOW_PRIVATE_AI_URLS` ★ | 是否允许 LLM/Embedding 地址指向私网/环回（内网服务名部署需开启） |
+| `EMBEDDING_STRICT` | Embedding 失败/维度不符时是否硬失败（false 会静默降级本地哈希向量、污染聚类）；仅 .env，不进面板 |
+| `ALLOW_PRIVATE_AI_URLS` | 是否允许 LLM/Embedding 地址指向私网/环回（内网服务名部署需开启）；仅 .env，不进面板 |
 
 **事件聚合与采集**
 
 | 变量 | 说明 |
 | --- | --- |
-| `SIM_THRESHOLD` ★ / `CLUSTER_WINDOW_HOURS` ★ | 事件聚类基础相似度阈值（默认 0.85）与时间窗（默认 48h） |
-| `CLUSTER_LOOKBACK_HOURS` ★ | 每轮聚类回看窗（默认 96h） |
+| `SIM_THRESHOLD` ★ / `KEYWORD_JACCARD_THRESHOLD` ★ / `HIGH_BAND_KW_FLOOR` ★ | 事件聚类基础相似度阈值（默认 0.85）/ 标题关键词重合门槛（模糊带，默认 0.2）/ 高位带最低关键词重合（默认 0.1，须跨来源） |
+| `CLUSTER_WINDOW_HOURS` / `CLUSTER_LOOKBACK_HOURS` ★ | 聚类时间窗（默认 48h，仅 .env）/ 每轮回看窗（默认 96h，可热调） |
 | `CRAWLER_INTERVAL_MINUTES` ★ / `CRAWL_LIMIT_PER_FEED` | 采集间隔（分钟，热调立即生效）/ 单源单轮抓取上限 |
 | `STATS_POLL_ENABLED` ★ / `STATS_POLL_BATCH` ★ | 互动数据轮询总开关 / 批次大小（IT之家评论数与点赞数，分层衰减节奏） |
 
@@ -137,7 +138,7 @@ docker compose up -d --build           # 一键上线全套 9 个服务（含 ov
 | `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` | 首启引导：user 表为空时自动创建「默认租户 + 平台超管」；建号后可移除 |
 | `SESSION_TTL_HOURS` ★ / `SESSION_IDLE_HOURS` ★ | 会话绝对有效期（模板 168h=7 天）/ 空闲超时（默认 24h，0=关闭） |
 | `LOGIN_MAX_ATTEMPTS` ★ / `LOGIN_LOCK_MINUTES` ★ | 登录失败锁定阈值（5 次）/ 锁定时长（15 分钟） |
-| `LOGIN_IP_THROTTLE_MAX` / `LOGIN_IP_THROTTLE_WINDOW_SECONDS` ★ | 登录 IP 限速：窗口内最大尝试次数（默认 30 次 / 300 秒） |
+| `LOGIN_IP_THROTTLE_MAX` ★ / `LOGIN_IP_THROTTLE_WINDOW_SECONDS` ★ | 登录 IP 限速：窗口内最大尝试次数（默认 30 次）/ 窗口时长（默认 300 秒）；成功登录清零 |
 | `COOKIE_SECURE` ★ | 会话 Cookie Secure 标记，HTTPS 部署必须 `true`（production 强制校验） |
 | `AUDIT_RETENTION_DAYS` ★ | 审计日志保留天数（默认 180，beat 每周自动清理） |
 
@@ -145,7 +146,7 @@ docker compose up -d --build           # 一键上线全套 9 个服务（含 ov
 
 | 变量 | 说明 |
 | --- | --- |
-| `ADMIN_TOKEN` | 管理接口应急后门 Token（脚本/回归用）；未设置时后门不可用（503） |
+| `ADMIN_TOKEN` ★ | 管理接口应急后门 Token（脚本/回归用，敏感键面板脱敏显示）；未设置时后门不可用（503） |
 | `ADMIN_NO_AUTH` | 免鉴权开关，**仅限本机/内网**；公网部署必须为 `false`（production 强制校验） |
 | `CORS_ORIGINS` | 允许跨域的前端来源白名单，勿用 `*` |
 

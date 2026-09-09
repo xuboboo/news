@@ -181,7 +181,7 @@ flowchart LR
 ## 11. 测试与验收
 
 - **后端 pytest 177 用例**：171 离线（SQLite 内存库 + 依赖覆写，bcrypt 降 cost）+ 6 容器内 pgvector 集成（独立 `hjradar_test` 库，`TEST_DATABASE_URL` 未设置自动跳过）；覆盖聚类门槛（含真实负样本回归）、认证权限矩阵、usage 记账、日报口径与期号幂等、hot_score 边界、快科技解析回测（含白名单口径与栏目页入口哨兵）、运维巡检
-- **前端 vitest 10 用例**：client 映射 / 事件关联 / aiStatus 三态 / 加载更多去重 / 期号幂等
+- **前端 vitest 10 用例**：client 映射保留 eventIds/aiStatus、事件关联双口径（后端优先/缓存反推）、aiStatus 三态文案、事件 ID 路由兼容（`3`/`e3`）、加载更多去重（文章/事件）
 - **验收脚本**：`scripts/audit_api.py`（全端点遍历）、`scripts/audit_auth.py`（权限矩阵/锁定/会话吊销/CSRF）
 - **验收标准**：AI 摘要准确率人工抽检；事件聚合同事件合并率达目标（负例拦截 ≥99%）；系统 7×24 稳定运行（心跳/告警值守）
 
