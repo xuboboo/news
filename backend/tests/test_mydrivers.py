@@ -12,6 +12,8 @@ from bs4 import BeautifulSoup
 from app.crawler.mydrivers import (
     _PAGE_TIME_RE,
     _parse_article_html,
+    CHANNEL_WHITELIST,
+    ENTRY_PAGES,
     clean_content,
     extract_article_links,
     extract_feed_items,
@@ -125,6 +127,22 @@ def test_parse_article_html_full_pipeline():
 def test_parse_article_html_missing_body_rejected():
     html = re.sub(r'<div class="news_info">.*?</div>', "", _sample_article_html(), flags=re.S)
     assert _parse_article_html(html) is None  # 正文容器缺失：拒收而非入库半截数据
+
+
+def test_whitelist_covers_kj_software_column():
+    """白名单 = 快科技「软件之家」大类全部二级栏目（官网 windows/ruanjian 栏目页口径）。
+
+    移动应用/手机系统 2026-09-10 加入：官网软件栏目列表含微信/App 文与鸿蒙/OriginOS/
+    MagicOS 系统文，不收则与官网栏目页内容对不上；对齐 IT之家软件之家频道口径。
+    """
+    assert CHANNEL_WHITELIST == {"桌面系统", "电脑软件", "移动应用", "手机系统"}
+
+
+def test_column_pages_are_entry_points():
+    """官网两栏目页必须作为主入口：全站流仅覆盖最新约半天，栏目文大多不在其中
+    （2026-09-10 实测 windows.html 16 篇栏目文 0 篇出现在 technewsall）。"""
+    for url in ENTRY_PAGES[:2]:
+        assert url.endswith(("windows.html", "ruanjian.html")), url
 
 
 FEED_XML = """
