@@ -193,9 +193,11 @@ def test_usage_period_boundaries(db):
 
 
 def test_usage_day_summary(db):
-    day = datetime.now(timezone.utc).date()
-    _add_log(db, cost=0.25)
-    _add_log(db, cost=0.25, created_at=datetime.now(timezone.utc) - timedelta(hours=5))
+    # 锚定当日 UTC 正午造数：now - 5h 会在 UTC 05 点前跑测时跨到昨天（按自然日切分）
+    noon = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+    day = noon.date()
+    _add_log(db, cost=0.25, created_at=noon)
+    _add_log(db, cost=0.25, created_at=noon - timedelta(hours=5))
     r = usage_day_summary(db, day)
     assert r["calls"] == 2
     assert r["tokens"] == 300
