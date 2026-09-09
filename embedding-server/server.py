@@ -1,4 +1,4 @@
-"""轻量 OpenAI 兼容 /embeddings 服务：fastembed(ONNX) + BAAI/bge-small-zh-v1.5（512 维）。
+"""轻量 OpenAI 兼容 /embeddings 服务：fastembed(ONNX) + BAAI/bge-small-zh-v1.5（384 维）。
 
 用途：给后端事件聚合提供真语义向量（本地哈希向量无判别力，实测不相关文章
 余弦可达 0.86）。免 API key、免 GPU；模型经 HF_ENDPOINT 镜像站下载后缓存在

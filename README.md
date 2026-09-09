@@ -24,32 +24,33 @@
 - **V1 解决**「今天发生了什么？」—— 频道热榜、最新资讯时间轴
 - **V2 解决**「这件事是什么？为什么重要？有哪些媒体关注？后续如何发展？」—— AI 摘要、热点事件聚合、多来源关联、科技日报
 
-第一阶段基于 IT之家体系频道（软件之家 / Win11之家 / Win10之家 / 智能时代）与快科技（桌面系统 / 电脑软件，2026-09 接入）建设，架构上预留多来源扩展能力。
+第一阶段基于 IT之家体系频道（软件之家 / Win11之家 / Win10之家 / 智能时代）与快科技（桌面系统 / 电脑软件 / 移动应用 / 手机系统，2026-09 接入）建设，架构上预留多来源扩展能力。
 
 ## ✨ 功能特性
 
 | 模块 | 说明 |
 | --- | --- |
-| 🔥 **热榜中心** | `HotScore = Engagement × TimeDecay`，纯算法热度、无人工权重；Engagement = 阅读 + 评论×4 + 点赞×2 + 分享×6，零互动时自动降级为时间衰减主导 |
-| 📰 **最新资讯** | 按发布时间倒序的实时资讯流，支持频道筛选与关键词检索 |
-| 🤖 **AI 摘要** | 一句话摘要 + 3~5 条核心信息 + 标签提取；支持任意 **OpenAI 兼容 LLM**，未配置时自动降级为内置 TextRank 抽取式摘要，双模式对上层透明 |
-| 🧩 **热点事件聚合** | Embedding 余弦相似度 > 0.85 + 标题关键词（jieba）+ 48h 时间窗，多来源报道归并为一个事件，附事件时间线与相关报道 |
-| 📅 **科技日报** | 每日 08:00 自动生成**昨日**日报：今日综述、TOP 热点、事件摘要、行业变化、重点来源；支持复制 Markdown / 打印导出 PDF；生成后自动推送**企业微信 + 飞书**双通道（运维监控面板「日报推送」热配置，总开关 + 各通道 URL，飞书可选签名校验） |
-| 📊 **AI 用量统计** | LLM / Embedding 的 token 消耗与调用记录 |
-| 🛠️ **运维监控面板** | 基础设施连通性（DB/Redis/Celery）、任务执行记录、**运行时配置热更新**（DB 覆盖 > .env，保存即生效无需重建）、LLM/Embedding 连通性测试 |
+| 🔥 **热榜中心** | `HotScore = Engagement × TimeDecay`，纯算法热度、无人工权重；Engagement = 阅读 + 评论×4 + 点赞×2 + 分享×6，零互动时自动降级为时间衰减主导；支持 24h / 3d / 7d / 全部四档时间窗，窗口筛选、排序与 0-100 归一化全部在服务端完成 |
+| 📰 **最新资讯** | 按发布时间倒序的实时资讯流，支持频道筛选、标题/标签检索与「加载更早」分页 |
+| 🤖 **AI 摘要** | 一句话摘要 + 3~5 条核心信息 + 标签提取；支持任意 **OpenAI 兼容 LLM**，未配置时自动降级为内置 TextRank v2 抽取式摘要（句图 PageRank + MMR 去冗余），双模式对上层透明 |
+| 🧩 **热点事件聚合** | 本地语义向量服务（fastembed + bge-small-zh-v1.5，384 维）+ **三段式聚类门槛**（相似度带 × 标题关键词 × 跨来源佐证，同来源一律不并高位带）+ 48h 时间窗 + 事件级二阶段合并，多来源报道归并为一个事件，附事件时间线与相关报道 |
+| 📅 **科技日报** | 每日 08:00 自动生成**昨日**日报（北京时间 08:00–08:00 完整窗口，期号幂等）：今日综述、TOP 热点、事件摘要、行业变化、重点来源、当日 AI 成本；支持复制 Markdown / 打印导出 PDF / 期号对比；生成后自动推送**企业微信 + 飞书**双通道（运维监控面板「日报推送」热配置，飞书可选签名校验） |
+| 💰 **AI 用量与成本看板** | LLM / Embedding 的 token 消耗、按模型价目表（含缓存价）核算成本、调用流水明细、CSV 导出（超管专属） |
+| 🛠️ **运维监控面板** | 基础设施连通性（DB/Redis/Celery）、任务执行记录（含 **degraded 降级态**）与任务节奏心跳（停摆感知）、互动数据轮询水位、告警 Webhook（企业微信/钉钉/飞书，每 5 分钟巡检）、**运行时配置热更新**（DB 覆盖 > .env，保存即生效无需重建）、LLM/Embedding 连通性测试 |
 | 🌗 **界面主题** | 浅色 / 深色 / 跟随系统三态切换（顶栏与移动端抽屉均可切换）；浅色为 **macOS 设计语言**（Apple 灰窗体 + 白卡悬浮 + 蓝色 accent + 毛玻璃顶栏）；偏好本地持久化、刷新不丢失，「跟随系统」实时响应操作系统深浅色变化 |
-| 🔑 **登录与多租户权限** | 全站强制登录（**邮箱 + 密码**，无注册，账号由管理员后台创建）；多租户三级 RBAC（平台超管 / 租户管理员 / 成员）；服务端会话（HttpOnly Cookie，即时吊销）+ 登录失败锁定 + 首登强制改密；完整审计日志（登录/管理操作留痕，超管可查，自动清理） |
+| 🔑 **登录与多租户权限** | 全站强制登录（**邮箱 + 密码**，无注册，账号由管理员后台创建）；多租户三级 RBAC（平台超管 / 租户管理员 / 成员）；服务端会话（HttpOnly Cookie，即时吊销）+ 登录失败锁定 + 登录 IP 限速 + 会话空闲超时 + 首登强制改密；完整审计日志（登录/管理操作留痕，**SHA-256 哈希链防篡改**，超管可查可导出，自动清理） |
 
 ## 🏗️ 系统架构
 
 ```mermaid
 flowchart LR
-    SRC[IT之家四频道子站<br/>win11/win10/soft/next.ithome.com<br/>+ 快科技全站流 technewsall<br/>+ 官方软件栏目 RSS] --> CR[crawler 常驻采集<br/>IT之家页面即频道真相<br/>快科技面包屑即频道真相]
+    SRC[IT之家四频道子站<br/>win11/win10/soft/next.ithome.com<br/>+ 快科技栏目页/全站流/官方RSS] --> CR[crawler 常驻采集<br/>IT之家页面即频道真相<br/>快科技面包屑即频道真相]
     CR --> PG[(PostgreSQL 16<br/>+ pgvector)]
     PG --> RD{{Redis 任务队列}}
     RD --> AI[ai-worker<br/>AI 摘要 / Embedding]
     RD --> WK[worker<br/>事件聚合 / 日报]
-    BT[beat 定时调度<br/>事件聚类 / 每日 08:00 日报] --> RD
+    EMB[embedding<br/>fastembed 语义向量<br/>bge-small-zh-v1.5 · 384 维] -.-> AI
+    BT[beat 定时调度<br/>事件聚类 / 互动轮询 / 告警巡检<br/>每日 08:00 日报] --> RD
     AI --> PG
     WK --> PG
     NG[nginx :80<br/>前端静态资源 + API 反代] --> BE[backend FastAPI :8000]
@@ -60,13 +61,14 @@ flowchart LR
 | 服务 | 职责 |
 | --- | --- |
 | `backend` | FastAPI REST API（容器内 8000，宿主机映射 `127.0.0.1:18000`） |
-| `crawler` | 常驻循环：多来源采集（IT之家页面即频道真相 / 快科技文章页面包屑即频道真相）→ 入库 → 派发 AI 任务 |
-| `worker` | Celery 默认队列：事件聚合 / 日报 |
+| `crawler` | 常驻循环：多来源采集（IT之家页面即频道真相 / 快科技文章页面包屑即频道真相）→ 入库 → 派发 AI 任务；心跳文件供健康检查 |
+| `worker` | Celery 默认队列：事件聚合 / 日报生成 |
 | `ai-worker` | Celery AI 队列：摘要 / Embedding |
-| `beat` | 定时调度：事件聚类、每日 08:00 生成昨日日报 |
+| `beat` | 定时调度：事件聚类（10 分钟）、互动数据轮询（15 分钟）、告警巡检（5 分钟）、每日 08:00 生成昨日日报、每周清理 |
+| `embedding` | 本地语义向量服务（docker-compose.override.yml 自动合并）：fastembed(ONNX) + BAAI/bge-small-zh-v1.5，OpenAI 兼容 `/v1/embeddings`，免 GPU、模型经镜像站缓存于卷 |
 | `postgres` | 业务数据 + pgvector 向量检索 |
 | `redis` | 缓存 + Celery 消息队列 |
-| `nginx` | 前端静态资源 + `/api` 反向代理（唯一公网入口） |
+| `nginx` | 前端静态资源 + `/api` 反向代理（唯一公网入口，动态 resolver，backend 单独重建不 502） |
 
 ## 🚀 快速开始
 
@@ -76,7 +78,7 @@ flowchart LR
 git clone https://github.com/xuboboo/news.git
 cd news
 cp backend/.env.example backend/.env   # 按需修改 ADMIN_TOKEN 等配置
-docker compose up -d --build           # 一键上线全套 8 个服务
+docker compose up -d --build           # 一键上线全套 9 个服务（含 override 合并的语义向量服务）
 ```
 
 启动后的访问入口：
@@ -90,47 +92,87 @@ docker compose up -d --build           # 一键上线全套 8 个服务
 
 ## ⚙️ 配置说明
 
-配置位于 `backend/.env`（模板见 `backend/.env.example`），所有键均可在管理面板「运行时配置」中热覆盖（DB 优先于 .env，保存即生效；传空串 = 回落 .env 默认值）。
+配置位于 `backend/.env`（模板见 `backend/.env.example`），标 ★ 的键均可在管理面板「运行时配置」中热覆盖（DB 优先于 .env，保存即生效；传空串 = 回落 .env 默认值）。
+
+**基础设施**
 
 | 变量 | 说明 |
 | --- | --- |
-| `DATABASE_URL` | PostgreSQL 连接串（业务库） |
-| `REDIS_URL` | Redis 连接串（缓存/队列） |
-| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | 可选，OpenAI 兼容协议；配置后 AI 摘要与事件总结走大模型 |
-| `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | 可选，OpenAI 兼容 Embedding 服务 |
-| `EMBED_DIM` | 向量维度（内置模式 256；外部服务需与之一致，严格模式下维度不符即硬失败） |
-| `SIM_THRESHOLD` / `CLUSTER_WINDOW_HOURS` | 事件聚类阈值（默认 0.85）与时间窗（默认 48h） |
-| `CRAWLER_INTERVAL_MINUTES` | 采集间隔，支持面板热调 |
-| `ADMIN_TOKEN` | 管理接口应急后门 Token（脚本/回归用）；未设置时后门不可用（503） |
-| `ADMIN_NO_AUTH` | 免鉴权开关，**仅限本机/内网**；公网部署必须为 `false` |
+| `ENVIRONMENT` | `production` 时启动执行安全自检（Cookie Secure / 关闭文档 / 关闭免鉴权 / 非默认 DB 口令任一不合规即拒绝启动） |
+| `DATABASE_URL` / `REDIS_URL` | PostgreSQL 连接串（业务库）/ Redis 连接串（缓存/队列） |
+| `POSTGRES_PASSWORD` | compose 建库口令（首次建库生效；轮换步骤见 `.env.example` 检查单） |
+| `ENABLE_DOCS` | OpenAPI 交互文档开关（默认 true；生产强制 false） |
+
+**AI 服务（可选，OpenAI 兼容协议）**
+
+| 变量 | 说明 |
+| --- | --- |
+| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | 配置后 AI 摘要与事件总结走大模型；不配置自动降级内置 TextRank v2 |
+| `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | 接入 embedding-server 时为 `http://embedding:80/v1` / `local-embedding` / `BAAI/bge-small-zh-v1.5` |
+| `EMBED_DIM` | 向量维度（内置哈希向量默认 256；用 embedding-server 须为 384，与模型实际输出一致，严格模式下不符即硬失败） |
+| `EMBEDDING_STRICT` ★ | Embedding 失败/维度不符时是否硬失败（false 会静默降级本地哈希向量、污染聚类） |
+| `ALLOW_PRIVATE_AI_URLS` ★ | 是否允许 LLM/Embedding 地址指向私网/环回（内网服务名部署需开启） |
+
+**事件聚合与采集**
+
+| 变量 | 说明 |
+| --- | --- |
+| `SIM_THRESHOLD` ★ / `CLUSTER_WINDOW_HOURS` ★ | 事件聚类基础相似度阈值（默认 0.85）与时间窗（默认 48h） |
+| `CLUSTER_LOOKBACK_HOURS` ★ | 每轮聚类回看窗（默认 96h） |
+| `CRAWLER_INTERVAL_MINUTES` ★ / `CRAWL_LIMIT_PER_FEED` | 采集间隔（分钟，热调立即生效）/ 单源单轮抓取上限 |
+| `STATS_POLL_ENABLED` ★ / `STATS_POLL_BATCH` ★ | 互动数据轮询总开关 / 批次大小（IT之家评论数与点赞数，分层衰减节奏） |
+
+**日报推送与告警（推荐直接在面板配置）**
+
+| 变量 | 说明 |
+| --- | --- |
+| `REPORT_PUSH_ENABLED` ★ + `REPORT_PUSH_WEBHOOK_URL` ★ | 企业微信机器人推送（日报生成后自动推） |
+| `REPORT_PUSH_FEISHU_WEBHOOK_URL` ★ / `REPORT_PUSH_FEISHU_SECRET` ★ | 飞书机器人推送 / 可选签名校验密钥 |
+| `ALERT_WEBHOOK_URL` ★ / `ALERT_WEBHOOK_STYLE` ★ | 运维告警 Webhook（每 5 分钟巡检 Redis/Worker/任务停摆，状态转坏/恢复才推送；格式 wecom/dingtalk/feishu/raw） |
+
+**登录与会话**
+
+| 变量 | 说明 |
+| --- | --- |
 | `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` | 首启引导：user 表为空时自动创建「默认租户 + 平台超管」；建号后可移除 |
-| `SESSION_TTL_HOURS` / `LOGIN_MAX_ATTEMPTS` / `LOGIN_LOCK_MINUTES` | 会话有效期（默认 168h）/ 登录失败锁定阈值（5 次）/ 锁定时长（15 分钟），支持面板热调 |
-| `COOKIE_SECURE` | 会话 Cookie Secure 标记，HTTPS 部署必须 `true` |
-| `AUDIT_RETENTION_DAYS` | 审计日志保留天数（默认 180，beat 每周自动清理） |
-| `EMBEDDING_STRICT` | Embedding 失败/维度不符时是否硬失败（false 会静默降级本地哈希向量、污染聚类） |
-| `ALLOW_PRIVATE_AI_URLS` | 是否允许 LLM/Embedding 地址指向私网/环回 |
-| `CORS_ORIGINS` | 允许跨域的前端来源，勿用 `*` |
+| `SESSION_TTL_HOURS` ★ / `SESSION_IDLE_HOURS` ★ | 会话绝对有效期（模板 168h=7 天）/ 空闲超时（默认 24h，0=关闭） |
+| `LOGIN_MAX_ATTEMPTS` ★ / `LOGIN_LOCK_MINUTES` ★ | 登录失败锁定阈值（5 次）/ 锁定时长（15 分钟） |
+| `LOGIN_IP_THROTTLE_MAX` / `LOGIN_IP_THROTTLE_WINDOW_SECONDS` ★ | 登录 IP 限速：窗口内最大尝试次数（默认 30 次 / 300 秒） |
+| `COOKIE_SECURE` ★ | 会话 Cookie Secure 标记，HTTPS 部署必须 `true`（production 强制校验） |
+| `AUDIT_RETENTION_DAYS` ★ | 审计日志保留天数（默认 180，beat 每周自动清理） |
+
+**管理面板与安全**
+
+| 变量 | 说明 |
+| --- | --- |
+| `ADMIN_TOKEN` | 管理接口应急后门 Token（脚本/回归用）；未设置时后门不可用（503） |
+| `ADMIN_NO_AUTH` | 免鉴权开关，**仅限本机/内网**；公网部署必须为 `false`（production 强制校验） |
+| `CORS_ORIGINS` | 允许跨域的前端来源白名单，勿用 `*` |
 
 ## 📡 API 概览
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/v2/hot/board?channel=` | 热榜中心 |
-| GET | `/api/v2/articles/latest?channel=&q=&limit=` | 最新资讯（时间倒序 + 检索） |
-| GET | `/api/v2/article/{id}` / `/api/v2/article/{id}/summary` | 文章详情 / **AI 摘要** |
-| GET | `/api/v2/events` / `/api/v2/events/{id}` | 热点事件列表 / 事件详情（时间线、相关报道） |
-| GET | `/api/v2/report/daily?date=` / `/api/v2/report/dates` | **科技日报** / 可用日期 |
-| GET | `/api/v2/stats` · GET `/api/v2/health` | 系统统计（需登录）/ 健康检查（公开） |
-| POST | `/api/v2/auth/login` · `/auth/logout` | 登录 / 登出（HttpOnly 会话 Cookie） |
+| GET | `/api/v2/health`（`?deep=1` 深度探测） | 健康检查（公开，唯一免登录探针；deep 追加 Redis/Celery/采集新鲜度） |
+| GET | `/api/v2/hot/board?window=24h\|3d\|7d\|all&channel=` | 热榜中心（服务端排序 + 窗口内归一化） |
+| GET | `/api/v2/articles/latest?channel=&q=&limit=&offset=` | 最新资讯（时间倒序 + 检索 + 分页） |
+| GET | `/api/v2/article/{id}` / `/api/v2/article/{id}/summary` | 文章详情（内嵌 summary 与 eventIds）/ **AI 摘要** |
+| GET | `/api/v2/events?limit=&offset=&status=&q=` / `/api/v2/events/{id}` | 热点事件列表（分页 + 过滤）/ 事件详情（时间线、相关报道、来源分布） |
+| GET | `/api/v2/report/daily?date=` / `/api/v2/report/dates` | **科技日报** / 期号列表 |
+| GET | `/api/v2/stats` | 系统统计（需登录） |
+| POST | `/api/v2/auth/login` · `/auth/logout` | 登录 / 登出（HttpOnly 会话 Cookie，IP 限速 + 失败锁定） |
 | GET | `/api/v2/auth/me` · GET `/auth/sessions` | 当前用户 / 我的活跃会话 |
-| PUT | `/api/v2/auth/me/password` · DELETE `/auth/sessions/{id}` | 修改密码 / 吊销会话 |
-| GET/POST | `/api/v2/admin/tenants` · PUT `/admin/tenants/{id}` | 租户管理（超管） |
-| GET/POST | `/api/v2/admin/users` · PUT `/admin/users/{id}` · POST `/admin/users/{id}/password-reset` | 用户管理（超管全局 / 租户管理员限本租户 member） |
-| GET | `/api/v2/admin/audit-logs` · `/admin/audit-actions` | 审计日志查询（超管） |
-| POST | `/api/v2/admin/crawl` · `/admin/events` · `/admin/report` | 手动触发任务（需超管会话或 Token） |
-| GET/PUT | `/api/v2/admin/config` | 运行时配置（敏感值脱敏，留空 = 不修改） |
-| GET | `/api/v2/admin/status` · `/admin/task-runs` | 基础设施状态 · 任务执行记录 |
+| PUT | `/api/v2/auth/me/password` · DELETE `/auth/sessions/{id}` · POST `/auth/sessions/revoke-others` | 修改密码 / 吊销会话 / 登出其他设备 |
+| GET/POST | `/api/v2/admin/tenants` · PUT `/admin/tenants/{id}` | 租户管理（超管；停用有防自锁护栏并即时吊销会话） |
+| GET/POST | `/api/v2/admin/users` · PUT `/admin/users/{id}` | 用户管理（超管全局 / 租户管理员限本租户 member） |
+| POST | `/api/v2/admin/users/{id}/password-reset` · `/admin/users/{id}/unlock` | 重置密码（强制首登改密）/ 解除登录锁定 |
+| GET | `/api/v2/admin/audit-logs` · `/audit-logs/export` · `/audit-actions` | 审计日志查询（超管，哈希链防篡改）/ CSV 导出 / 动作清单 |
+| GET/POST | `/api/v2/admin/crawl` · `/admin/events` · `/admin/stats` · `/admin/report` | 手动触发：采集 / 事件聚类 / 互动轮询 / 日报（需超管会话或 Token） |
+| GET/PUT | `/api/v2/admin/config` | 运行时配置热更新（敏感值脱敏，留空 = 不修改） |
 | POST | `/api/v2/admin/test/llm` · `/test/embedding` | AI 连通性测试（可先验证未保存的 key 再存） |
+| GET | `/api/v2/admin/status` · `/admin/task-runs` | 运维总览（含任务节奏心跳、轮询水位）· 任务执行记录 |
+| GET | `/api/v2/admin/usage/summary` · `/usage/logs` · `/usage/export` | AI 成本汇总 · 调用流水 · CSV 导出（超管） |
+| GET/POST | `/api/v2/admin/usage/prices` | 模型价目表（每百万 token，含缓存价） |
 
 ## 🗂️ 目录结构
 
@@ -138,20 +180,24 @@ docker compose up -d --build           # 一键上线全套 8 个服务
 news/
 ├── backend/
 │   ├── app/
-│   │   ├── api/v2/        # REST 接口（业务 + admin）
-│   │   ├── models/        # article / article_summary / event / daily_report / task_run / usage
-│   │   ├── services/      # 摘要、向量、事件、日报业务服务
-│   │   ├── algorithms/    # hot_score：HotScore = Engagement × TimeDecay
-│   │   ├── ai/            # summary / embedding / event_cluster（LLM 与内置算法双模式）
-│   │   ├── tasks/         # Celery：summary / embedding / event / report
-│   │   ├── crawler/       # 多来源采集：IT之家频道页（ithome）+ 快科技面包屑过滤（mydrivers）+ 调度（multi）+ 常驻循环 + 互动轮询（stats）
-│   │   ├── core/          # 配置、数据库
-│   │   └── utils/         # 中文文本处理（jieba）、URL 安全守卫
-│   ├── scripts/           # 运维脚本（重嵌入、数据修复、审计等）
-│   └── .env.example       # 配置模板
-├── frontend/              # React 18 + TypeScript + Vite + Tailwind
-│   └── src/pages/         # 热榜 / 最新 / 事件 / 日报 / AI 用量 / 运维监控
-└── docker-compose.yml     # 8 服务一键编排
+│   │   ├── api/v2/        # REST 接口（业务 + auth + admin + 审计）
+│   │   ├── auth/          # 会话/密码/限速/CSRF 依赖
+│   │   ├── models/        # article / summary / event / daily_report / task_run / usage / user / tenant / session / audit_log / setting（11 表）
+│   │   ├── services/      # 摘要、向量、事件、日报、推送、告警、审计（哈希链）、用量成本、配置热更
+│   │   ├── algorithms/    # hot_score：HotScore = Engagement × TimeDecay（含 SQL 表达式一致性）
+│   │   ├── ai/            # summary（LLM/TextRank v2）/ embedding（API/本地哈希）/ event_cluster（三段式门槛）
+│   │   ├── tasks/         # Celery：summary / embedding / event / report / stats / alert / 清理
+│   │   ├── crawler/       # 多来源采集：IT之家频道页（ithome）+ 快科技面包屑过滤（mydrivers）+ 调度（multi）+ 常驻循环（loop）+ 互动轮询（stats）
+│   │   ├── core/          # 配置（含生产 fail-fast 自检）、数据库
+│   │   └── utils/         # 中文文本处理（jieba）、URL 安全守卫（SSRF）、Redis 锁
+│   ├── scripts/           # 运维脚本（初始化、重嵌入、数据修复、审计校验、用户管理、聚类标定等 17 个）
+│   ├── tests/             # pytest 测试（离线 SQLite + 容器内 pgvector 集成）
+│   └── .env.example       # 配置模板（含生产部署检查单）
+├── frontend/              # React 18 + TypeScript + Vite + Tailwind（HashRouter）
+│   └── src/pages/         # 热榜 / 最新 / 事件 / 日报 / 成本看板 / 运维监控 / 用户与租户 / 审计 / 账号 / 登录
+├── embedding-server/      # 本地语义向量服务：fastembed + bge-small-zh-v1.5（384 维，OpenAI 兼容）
+├── docs/                  # 审计报告与整改清单、运维笔记
+└── docker-compose.yml     # 8 服务编排 + override 追加 embedding（共 9 个）
 ```
 
 ## 👤 账号与登录
@@ -159,8 +205,8 @@ news/
 全站强制登录：未登录访问任何页面会跳转登录页（`/health` 等基础设施探针除外）。账号**无注册入口**，全部由管理员后台创建（用户与租户页 → 新建用户），初始密码一次性线下发放，**首次登录强制修改**。
 
 - **角色**：`super_admin` 平台超管（租户/用户/审计/运维/成本全部可见）→ `tenant_admin` 租户管理员（本租户内管理成员）→ `member` 成员（热榜/最新/事件/日报只读）
-- **会话**：HttpOnly Cookie（SameSite=Lax，默认 7 天），改密/停用/登出即时吊销；连续失败 5 次锁定 15 分钟
-- **审计**：登录成功/失败/锁定、用户与租户变更、配置修改、手动触发任务全部留痕（操作者/IP/UA/时间），超管在「审计日志」页可查，保留 180 天自动清理
+- **会话**：HttpOnly Cookie（SameSite=Lax，模板默认 7 天），改密/停用/登出即时吊销；空闲超时默认 24h；连续失败 5 次锁定 15 分钟；单 IP 登录限速 30 次/5 分钟（成功登录清零，NAT 不连坐）
+- **审计**：登录成功/失败/锁定、用户与租户变更、配置修改、手动触发任务、越权访问全部留痕（操作者/IP/UA/时间），行间 **SHA-256 哈希链**可离线校验篡改；超管在「审计日志」页可查可导出，保留 180 天自动清理
 - **忘记超管密码**：`docker compose exec backend python scripts/manage_user.py reset-password <邮箱> <新密码>`
 
 ## 🔧 常用运维命令
@@ -171,9 +217,33 @@ docker compose logs -f crawler worker ai-worker        # 流水线日志
 docker compose exec backend python scripts/init_db.py  # 初始化/补建表
 docker compose restart crawler                         # 重启即触发一轮采集
 docker compose up -d --build backend                   # 改 .env 后重建生效
+docker compose exec backend python scripts/manage_user.py create-super <邮箱>   # 建平台超管
+docker compose exec backend python scripts/audit_chain_verify.py                # 审计日志哈希链校验
 ```
 
-### 验收脚本（需后端已在 18000 运行）
+### 测试
+
+```bash
+docker compose exec backend pytest                     # 后端 pytest（pg 集成用例需 TEST_DATABASE_URL）
+cd frontend && npm test                                # 前端 vitest
+```
+
+## 🔐 安全须知
+
+- **登录与多租户**：全站强制登录；会话令牌服务端存储（库中仅存 SHA-256，即时可吊销，含空闲超时）；密码 bcrypt(cost 12) + 弱口令封锁表；登录失败锁定 + 单 IP 限速；租户/用户停用即时吊销全部会话（停用租户有「最后启用超管」防自锁护栏）。
+- **CSRF 与越权留痕**：变更接口要求 JSON + `X-Requested-With`（双保险，配合 SameSite=Lax Cookie）；`/api/v2/admin/*` 的 403 越权与无效 Token 记审计（同操作者 5 分钟去重）。
+- **审计防篡改**：审计行间 SHA-256 哈希链（写路径 advisory lock 串行化），`scripts/audit_chain_verify.py` 可离线校验删改。
+- 管理接口（`/api/v2/admin/*`）：super_admin 登录会话，或 `X-Admin-Token` 应急后门（仅等效 admin 前缀，虚拟主体留痕可追溯）；`ADMIN_NO_AUTH=true` 仅限本机/内网调试，公网部署必须关闭。
+- **生产 fail-fast 自检**：`ENVIRONMENT=production` 时启动即校验 Cookie Secure / 关闭 API 文档 / 关闭免鉴权 / 非默认 DB 口令，任一不合规拒绝启动。
+- `backend` 端口仅绑定 `127.0.0.1`，公网入口统一走 nginx(80)；nginx 覆写 `X-Real-IP`/`X-Forwarded-For` 防审计 IP 伪造，并带 CSP（Report-Only 观察模式）、nosniff、X-Frame-Options 等安全头；上 HTTPS 时必须 `COOKIE_SECURE=true`。
+- **SSRF 守卫**：LLM/Embedding 服务地址仅放行公网 http(s)（私网/环回/保留段拒绝，内网部署用 `ALLOW_PRIVATE_AI_URLS` 豁免）。
+- 敏感键（`api_key` / `admin_token`）接口侧只做脱敏展示、不回传明文；配置修改审计只记「已变更」不记新旧明文；留空即表示不修改。
+- 生产部署请遵循 `.env.example` 末尾的检查单：更换 `POSTGRES_PASSWORD` 强口令、同步 `DATABASE_URL`、更换强随机 `ADMIN_TOKEN`、配置 `BOOTSTRAP_ADMIN_*` 完成引导。
+
+## ✅ 质量与验收
+
+- 后端 pytest **177 个用例**（171 离线 + 6 个容器内 pgvector 集成，`TEST_DATABASE_URL` 未设置自动跳过）+ 前端 vitest **10 个用例**，全部通过。
+- 验收脚本（需后端已在 18000 运行）：
 
 ```bash
 # 常规 API 回归（数据端点需先登录）
@@ -182,19 +252,12 @@ AUDIT_EMAIL=... AUDIT_PASSWORD=... ADMIN_TOKEN=... python backend/scripts/audit_
 AUDIT_EMAIL=... AUDIT_PASSWORD=... ADMIN_TOKEN=... python backend/scripts/audit_auth.py
 ```
 
-## 🔐 安全须知
-
-- **登录与多租户**：全站强制登录；会话令牌服务端存储（库中仅存 SHA-256，即时可吊销）；密码 bcrypt(cost 12)；变更接口要求 JSON + `X-Requested-With`（CSRF 双保险，配合 SameSite=Lax Cookie）。
-- 管理接口（`/api/v2/admin/*`）：super_admin 登录会话，或 `X-Admin-Token` 应急后门（脚本/回归用）；`ADMIN_NO_AUTH=true` 仅限本机/内网调试，公网部署必须关闭。
-- `backend` 端口仅绑定 `127.0.0.1`，公网入口统一走 nginx(80)；上 HTTPS 时必须 `COOKIE_SECURE=true`。
-- 敏感键（`api_key` / `admin_token`）接口侧只做脱敏展示、不回传明文；留空即表示不修改。
-- 生产部署请遵循 `.env.example` 末尾的检查单：更换 `POSTGRES_PASSWORD` 强口令、同步 `DATABASE_URL`、更换强随机 `ADMIN_TOKEN`、配置 `BOOTSTRAP_ADMIN_*` 完成引导。
-
 ## 🗺️ Roadmap
 
 - 多来源扩展：极客公园、少数派、36氪、爱范儿、InfoQ
 - 周报与趋势分析
-- 阅读数/分享数数据源（IT之家 hitcount 为只写接口，暂无公开读取通道）
+- 阅读数/分享数数据源（IT之家 hitcount 为只写接口，暂无公开读取通道；快科技量纲不同本期未启用）
+- 前端 E2E 测试（Playwright/Cypress，后端为最终权限边界）
 
 ---
 
