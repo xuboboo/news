@@ -111,6 +111,42 @@ def revoke_tenant_sessions(db: Session, tenant_id: int) -> int:
     return count
 
 
+def revoke_stale_disabled_sessions(db: Session) -> int:
+    """自愈兜底：停用账号/停用租户名下仍存活的会话统一吊销，返回吊销条数。
+
+    正常路径（管理 API 停用账号/停用租户）已即时吊销；这里兜住旁路——
+    如脚本直接 SQL 停用临时账号不经过 API——以及「登录校验通过后、吊销
+    执行前账号恰好被停用」的极端并发窗口。由 beat 每周清理任务调用；
+    吊销后的行交由 purge_expired 物理删除。
+    """
+    from sqlalchemy import or_
+
+    from app.models.tenant import Tenant
+    from app.models.user import User
+
+    now = _now()
+    count = (
+        db.query(UserSession)
+        .filter(
+            UserSession.revoked_at.is_(None),
+            UserSession.expires_at > now,
+            or_(
+                UserSession.user_id.in_(
+                    db.query(User.id).filter(User.status != "active")
+                ),
+                UserSession.user_id.in_(
+                    db.query(User.id)
+                    .join(Tenant, Tenant.id == User.tenant_id)
+                    .filter(Tenant.status != "active")
+                ),
+            ),
+        )
+        .update({"revoked_at": now}, synchronize_session=False)
+    )
+    db.commit()
+    return count
+
+
 def purge_expired(db: Session) -> int:
     """物理删除已过期或已吊销的会话行（beat 每周调用）。"""
     count = (

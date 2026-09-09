@@ -219,6 +219,9 @@ def auth_cleanup_task():
 
     db = new_session()
     try:
+        # 自愈兜底：停用账号/停用租户的残留存活会话统一吊销（旁路停用/并发窗口），
+        # 随后的 purge_expired 会把吊销行一并物理删除
+        stale_revoked = session_store.revoke_stale_disabled_sessions(db)
         sessions_deleted = session_store.purge_expired(db)
         try:
             days = int(config_service.get_effective(db, "audit_retention_days"))
@@ -231,10 +234,11 @@ def auth_cleanup_task():
         )
         db.commit()
         logger.info(
-            "auth_cleanup: sessions=%s audit_logs=%s task_runs=%s",
-            sessions_deleted, audits_deleted, task_runs_deleted,
+            "auth_cleanup: stale_disabled_sessions=%s sessions=%s audit_logs=%s task_runs=%s",
+            stale_revoked, sessions_deleted, audits_deleted, task_runs_deleted,
         )
         return {
+            "stale_disabled_sessions_revoked": stale_revoked,
             "sessions_deleted": sessions_deleted,
             "audit_deleted": audits_deleted,
             "task_runs_deleted": task_runs_deleted,

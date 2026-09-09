@@ -9,13 +9,13 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.models.task_run import TaskRun
+from app.services import alert_service, infra_status
+
 from conftest import login
 
 # 与 test_users_auth 同款：变更请求必带的 CSRF 头
 H = {"X-Requested-With": "XMLHttpRequest"}
-
-from app.models.task_run import TaskRun
-from app.services import alert_service, infra_status
 
 
 @pytest.fixture()

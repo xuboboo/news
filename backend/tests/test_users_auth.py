@@ -300,3 +300,63 @@ def test_client_ip_prefers_real_ip_then_last_xff_hop():
                           (b"x-real-ip", b"9.9.9.9")])) == "9.9.9.9"
     assert client_ip(req([(b"x-forwarded-for", b"1.2.3.4, 5.6.7.8")])) == "5.6.7.8"
     assert client_ip(req([])) == "10.0.0.1"
+
+
+# ———————————————————— 停用残留会话自愈（每周清理兜底） ————————————————————
+
+def test_revoke_stale_disabled_sessions_sweep(client, db, seeded):
+    """旁路停用（如脚本直接 SQL 改状态，不经过 API 的吊销路径）留下的存活会话，
+    由 revoke_stale_disabled_sessions 统一吊销；正常账号的会话不受波及。"""
+    from app.models.user import User
+    from app.models.user_session import UserSession
+
+    s = db.factory()
+    assert login(client, seeded.emails["member"]).status_code == 200
+    assert login(client, seeded.emails["super"]).status_code == 200
+    # 旁路停用：直接改库，不触发 update_user 的会话吊销
+    s.query(User).filter(User.id == seeded.ids["member"]).update({"status": "disabled"})
+    s.commit()
+    live_member = (
+        s.query(UserSession)
+        .filter(UserSession.user_id == seeded.ids["member"], UserSession.revoked_at.is_(None))
+        .count()
+    )
+    assert live_member > 0
+    s.close()
+
+    assert session_store.revoke_stale_disabled_sessions(db.factory()) >= 1
+
+    s = db.factory()
+    assert (
+        s.query(UserSession)
+        .filter(UserSession.user_id == seeded.ids["member"], UserSession.revoked_at.is_(None))
+        .count()
+    ) == 0
+    # 仍启用的超管会话原样保留
+    assert (
+        s.query(UserSession)
+        .filter(UserSession.user_id == seeded.ids["super"], UserSession.revoked_at.is_(None))
+        .count()
+    ) > 0
+    s.close()
+
+
+def test_revoke_stale_disabled_sessions_covers_disabled_tenant(client, db, seeded):
+    """停用租户（旁路 SQL 停用）名下用户的存活会话同样在清扫范围内。"""
+    from app.models.tenant import Tenant
+    from app.models.user_session import UserSession
+
+    s = db.factory()
+    assert login(client, seeded.emails["member_b"]).status_code == 200
+    s.query(Tenant).filter(Tenant.id == seeded.tids["b"]).update({"status": "disabled"})
+    s.commit()
+    s.close()
+
+    assert session_store.revoke_stale_disabled_sessions(db.factory()) >= 1
+    s = db.factory()
+    assert (
+        s.query(UserSession)
+        .filter(UserSession.user_id == seeded.ids["member_b"], UserSession.revoked_at.is_(None))
+        .count()
+    ) == 0
+    s.close()
