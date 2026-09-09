@@ -48,3 +48,19 @@ def test_similarity_ordering():
 
 def test_local_model_name():
     assert LOCAL_EMBED_MODEL == "local-hash-256-v2"
+
+
+# ———— 维度一致性守卫（2026-09-09 审计：zip 静默截断 → 显式拒绝） ————
+
+def test_cosine_dimension_mismatch_raises():
+    import pytest
+
+    from app.ai.embedding import EmbeddingError, centroid
+
+    with pytest.raises(EmbeddingError):
+        cosine([1.0, 0.0], [1.0, 0.0, 0.0])
+    with pytest.raises(EmbeddingError):
+        centroid([[1.0, 0.0], [1.0, 0.0, 0.0]])
+    # 空向量语义不变：返回 0 分 / 空质心，不抛
+    assert cosine([], [1.0]) == 0.0
+    assert centroid([]) == []

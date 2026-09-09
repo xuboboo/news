@@ -153,6 +153,10 @@ def embed(
 def cosine(a: Optional[List[float]], b: Optional[List[float]]) -> float:
     if not a or not b:
         return 0.0
+    if len(a) != len(b):
+        # 维度不一致 = 向量来源混杂（换模型未重嵌 / hash 混库）。旧实现 zip 静默截断，
+        # 相似度失真且无痕；显式拒绝并留下双方维度指纹（2026-09-09 审计）
+        raise EmbeddingError(f"cosine 维度不一致: {len(a)} vs {len(b)}（向量来源混杂？）")
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a)) or 1.0
     nb = math.sqrt(sum(y * y for y in b)) or 1.0
@@ -160,7 +164,12 @@ def cosine(a: Optional[List[float]], b: Optional[List[float]]) -> float:
 
 
 def centroid(vectors: List[List[float]]) -> List[float]:
+    if not vectors:
+        return []
     dim = len(vectors[0])
+    odd = {len(v) for v in vectors}
+    if len(odd) > 1:
+        raise EmbeddingError(f"centroid 维度不一致: {sorted(odd)}（向量来源混杂？）")
     acc = [0.0] * dim
     for v in vectors:
         for i, x in enumerate(v):

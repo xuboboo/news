@@ -21,11 +21,17 @@ from app.core.config import get_settings
 from app.utils.text import extract_keywords
 
 # 模糊带宽度：sim_threshold ~ sim_threshold+HIGH_BAND 之间为「语义相近但不确定」，
-# 需关键词 + 跨来源佐证；超过高位带视为几乎同一事件，直通合并。
+# 需关键词 + 跨来源佐证；高位带视为几乎同一事件。
 # 2026-09-09 在 bge-small-zh-v1.5 真实向量上标定：同事件对 ≥0.94，Win11 单一
 # 语料的同域基线高达 0.90+（同栏目不同教程 0.96），单一 (sim∧kw) 门槛无法分离，
 # 须按带分级 + 来源交叉判断（同事件跨来源正是 PRD 的多来源聚合语义）。
+# 2026-09-09 审计修正：高位带不再零条件直通——随机无关对也能摸到高位
+# （审计实测「六人利用 AI 获刑」事件混入 ARM 研究/豆包博物馆等完全无关文章），
+# 且 Win11 同栏目基线 0.90-0.96 恰好落在高位带内。现高位带同样要求跨来源，
+# 关键词重合只放宽到地面值 HIGH_BAND_KW_FLOOR（泛词如"AI"单词重合 ≈0.06
+# 挡在门外，真实同事件标题通常共享专名、重合 ≥0.2）；同来源一律不走高位带。
 HIGH_BAND = 0.04
+HIGH_BAND_KW_FLOOR = 0.1
 
 
 @dataclass
@@ -65,22 +71,25 @@ def similarity_gate_pass(
     sources_b: Set[str],
     sim_threshold: float,
     keyword_threshold: float,
+    high_band_kw_floor: float = HIGH_BAND_KW_FLOOR,
 ) -> bool:
     """三段式语义门槛（真实向量标定，见 HIGH_BAND 注释）：
 
-    - 高位带 sim ≥ sim_threshold + HIGH_BAND：直通合并；
+    - 低位带 sim < sim_threshold：不合并；
+    - 高位带 sim ≥ sim_threshold + HIGH_BAND：跨来源佐证 + 关键词重合不低于
+      HIGH_BAND_KW_FLOOR（审计修正：不再零条件直通，同来源高位相似是
+      Win11 学院类同栏目模板文的形态，一律不并）；
     - 模糊带 sim_threshold ≤ sim < 高位带：需标题关键词 ≥ 阈值，且双方来源
-      合并后 ≥2 个不同来源（同源同栏目的相近文章不合并——Win11 学院实测陷阱；
-      跨来源佐证正是 PRD「多篇不同报道」的聚合语义）；
-    - 低于模糊带：不合并。
+      合并后 ≥2 个不同来源（跨来源佐证正是 PRD「多篇不同报道」的聚合语义）。
     """
     if sim < sim_threshold:
         return False
+    cross_source = len(set(sources_a) | set(sources_b)) >= 2
     if sim >= sim_threshold + HIGH_BAND:
-        return True
+        return cross_source and kw >= high_band_kw_floor
     if kw < keyword_threshold:
         return False
-    return len(set(sources_a) | set(sources_b)) >= 2
+    return cross_source
 
 
 def _tz(t: datetime) -> datetime:
@@ -112,6 +121,7 @@ def cluster_articles(
     sim_threshold: Optional[float] = None,
     keyword_threshold: Optional[float] = None,
     window_hours: Optional[int] = None,
+    high_band_kw_floor: float = HIGH_BAND_KW_FLOOR,
 ) -> List[Cluster]:
     """贪心聚类：时间倒序处理，满足三条件（相似度/关键词/时间窗）才并入。
 
@@ -141,6 +151,7 @@ def cluster_articles(
                 {item.source},
                 sim_th,
                 kw_th,
+                high_band_kw_floor,
             ):
                 continue
             c.members.append(item)
@@ -191,6 +202,7 @@ def events_mergeable(
     sim_threshold: Optional[float] = None,
     keyword_threshold: Optional[float] = None,
     window_hours: Optional[int] = None,
+    high_band_kw_floor: float = HIGH_BAND_KW_FLOOR,
 ) -> bool:
     """事件级二阶段合并判定（纯函数）：时间窗相邻 + 三段式语义门槛（同建簇口径）。
 
@@ -205,4 +217,4 @@ def events_mergeable(
         return False
     sim = cosine(centroid_a, centroid_b)
     kw = keyword_jaccard_of(kw_a, kw_b)
-    return similarity_gate_pass(sim, kw, sources_a, sources_b, sim_th, kw_th)
+    return similarity_gate_pass(sim, kw, sources_a, sources_b, sim_th, kw_th, high_band_kw_floor)

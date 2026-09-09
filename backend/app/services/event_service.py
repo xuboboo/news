@@ -14,18 +14,21 @@ from sqlalchemy.orm import Session
 
 from app.ai.embedding import centroid, cosine
 from app.ai.event_cluster import (
+    HIGH_BAND_KW_FLOOR,
     ClusterItem,
     cluster_articles,
     effective_thresholds,
     event_time_range,
     event_title_for,
     events_mergeable,
+    keyword_jaccard_of,
+    similarity_gate_pass,
 )
 from app.models.article import Article
 from app.models.event import EventArticle, HotEvent
 from app.services import config_service
 from app.services.usage_service import extract_openai_usage, record_usage
-from app.utils.text import extract_keywords, keyword_jaccard, truncate, truncate_boundary
+from app.utils.text import extract_keywords, truncate, truncate_boundary
 from app.utils.url_guard import assert_public_http_url
 
 
@@ -229,6 +232,7 @@ def _merge_recent_events(
     sim_threshold: float,
     keyword_threshold: float,
     window_hours: int,
+    high_band_kw_floor: float = HIGH_BAND_KW_FLOOR,
 ) -> int:
     """事件级二阶段合并：先做共享成员去重（确定性同事件，不依赖相似度），
     再对剩余事件两两做同门槛判定（质心相似度 + 标题关键词 + 来源交叉 + 时间
@@ -309,6 +313,7 @@ def _merge_recent_events(
             sim_threshold=sim_threshold,
             keyword_threshold=keyword_threshold,
             window_hours=window_hours,
+            high_band_kw_floor=high_band_kw_floor,
         )
 
     # ② 相似度合并：50 轮上限覆盖 ①+② 的总合并数，防病态数据死循环
@@ -344,12 +349,17 @@ def run_event_clustering(db: Session) -> dict:
     # 阈值/回看窗读运行时生效值（管理面板可热调，DB 覆盖 .env）
     sim_threshold = float(config_service.get_effective(db, "sim_threshold"))
     keyword_threshold: float | None = None
+    high_band_kw_floor: float = HIGH_BAND_KW_FLOOR
     window_hours: int | None = None
     try:
         keyword_threshold = float(config_service.get_effective(db, "keyword_jaccard_threshold"))
         window_hours = int(config_service.get_effective(db, "cluster_window_hours"))
     except KeyError:
         pass  # 面板白名单未放行的键回落 .env 静态值（effective_thresholds 兜底）
+    try:
+        high_band_kw_floor = float(config_service.get_effective(db, "high_band_kw_floor"))
+    except KeyError:
+        pass
     lookback_hours = int(config_service.get_effective(db, "cluster_lookback_hours"))
     sim_threshold, keyword_threshold, window_hours = effective_thresholds(
         sim_threshold, keyword_threshold, window_hours
@@ -381,6 +391,7 @@ def run_event_clustering(db: Session) -> dict:
         sim_threshold=sim_threshold,
         keyword_threshold=keyword_threshold,
         window_hours=window_hours,
+        high_band_kw_floor=high_band_kw_floor,
     )
     article_map = {a.id: a for a in articles}
 
@@ -388,30 +399,68 @@ def run_event_clustering(db: Session) -> dict:
     for cluster in clusters:
         member_articles = [article_map[m.id] for m in cluster.members]
 
-        # 1) 尝试并入已有事件：与簇内合并同口径，须同时满足相似度与标题关键词两条件。
-        #    此前只看 Embedding 相似度，实际发生过错合并（2026-09-09：快科技两篇不相关
-        #    文章 sim=0.8563 擦线过阈值被并入同一事件，标题关键词重合度实为 0.053）
-        # 1) 尝试并入已有事件：与簇内合并同口径，须同时满足相似度与标题关键词两条件。
-        #    此前只看 Embedding 相似度，实际发生过错合并（2026-09-09：快科技两篇不相关
-        #    文章 sim=0.8563 擦线过阈值被并入同一事件，标题关键词重合度实为 0.053）。
-        #    多个候选都过门时取相似度最高者（而非首条命中），归属不再依赖查询顺序。
+        # 1) 尝试并入已有事件：与簇内合并完全同口径的三段式门槛
+        #    （similarity_gate_pass：带级相似度 + 关键词 + 跨来源），另加时间窗相邻校验。
+        #    旧实现只比标题关键词、无相似度下限；其后的"成员重叠救援"分支更是
+        #    零门槛并入——审计实测（2026-09-09）污染出 20+ 篇混题事件。
+        #    多个过门候选取相似度最高者（而非首条命中），归属不依赖查询顺序。
+        rep = cluster.members[0]
+        cluster_times = [_tz(m.publish_time) for m in cluster.members]
+        c_first, c_last = min(cluster_times), max(cluster_times)
+        window = timedelta(hours=window_hours)
+        candidate_events = (
+            db.query(HotEvent)
+            .filter(HotEvent.last_time >= since - timedelta(hours=24))
+            .all()
+        )
+        ev_ids = [ev.id for ev in candidate_events]
+        sources_by_ev: dict[int, set[str]] = {}
+        if ev_ids:
+            for eid, src in (
+                db.query(EventArticle.event_id, Article.source)
+                .join(Article, Article.id == EventArticle.article_id)
+                .filter(EventArticle.event_id.in_(ev_ids))
+                .all()
+            ):
+                if src:
+                    sources_by_ev.setdefault(eid, set()).add(src)
+        kw_by_ev = {
+            ev.id: set(extract_keywords(ev.title or "", 10)) for ev in candidate_events
+        }
+
         target_event: HotEvent | None = None
         best_sim = 0.0
-        rep = cluster.members[0]
-        for ev in db.query(HotEvent).filter(
-            HotEvent.last_time >= since - timedelta(hours=24)
-        ).all():
+        for ev in candidate_events:
+            # 时间窗：事件区间 [first, last] 与簇区间间隔超过聚类窗口则不相邻
+            # （与 events_mergeable 同口径）
+            if ev.last_time is None or ev.first_time is None:
+                continue
+            gap = max(_tz(ev.first_time), c_first) - min(_tz(ev.last_time), c_last)
+            if gap > window:
+                continue
             ev_vec = list(ev.centroid) if ev.centroid is not None else None
             sim = max(
                 (cosine(list(m.embedding), ev_vec) for m in cluster.members),
                 default=0.0,
             )
-            if sim > best_sim and keyword_jaccard(rep.title, ev.title or "") >= keyword_threshold:
+            kw = keyword_jaccard_of(rep.kw_set, kw_by_ev.get(ev.id, set()))
+            if sim > best_sim and similarity_gate_pass(
+                sim,
+                kw,
+                cluster.sources,
+                sources_by_ev.get(ev.id, set()),
+                sim_threshold,
+                keyword_threshold,
+                high_band_kw_floor,
+            ):
                 best_sim, target_event = sim, ev
 
         if target_event is None:
-            # 2) 检查是否已有事件覆盖了大部分成员（避免重复建事件）：
-            #    多个候选时选成员重叠数最多的事件，而不是任取第一条关联
+            # 2) 成员重叠救援（幂等守卫）：增量重聚类会把已归属某事件的文章重新成簇，
+            #    完全不认领会重复建事件。但救援必须守住语义下限——目标事件的 max
+            #    成员相似度 ≥ sim_threshold（不要求关键词）。旧版零门槛认领正是
+            #    混题事件越长越大的放大器：大杂烩质心吸得多 → 质心更糊 → 吸得更多。
+            #    目标按 (重叠数, 相似度) 取最优；都不达标则落入新建事件。
             member_ids = [m.id for m in cluster.members]
             existing_links = (
                 db.query(EventArticle)
@@ -422,8 +471,22 @@ def run_event_clustering(db: Session) -> dict:
                 overlap: dict[int, int] = {}
                 for lnk in existing_links:
                     overlap[lnk.event_id] = overlap.get(lnk.event_id, 0) + 1
-                best_ev_id = max(overlap, key=lambda eid: overlap[eid])
-                target_event = db.get(HotEvent, best_ev_id)
+                rescue_key: tuple[int, float] | None = None
+                for eid in overlap:
+                    ev = db.get(HotEvent, eid)
+                    if ev is None or ev.centroid is None:
+                        continue
+                    ev_vec = list(ev.centroid)
+                    sim = max(
+                        (cosine(list(m.embedding), ev_vec) for m in cluster.members),
+                        default=0.0,
+                    )
+                    if sim < sim_threshold:
+                        continue
+                    key = (overlap[eid], sim)
+                    if rescue_key is None or key > rescue_key:
+                        rescue_key = key
+                        target_event = ev
 
         if target_event is None:
             # 3) 新建事件（总结先用事实拼装兜底；成员关联建立后第 4 步统一重算一次。
@@ -463,6 +526,10 @@ def run_event_clustering(db: Session) -> dict:
         for aid in new_links:
             db.add(EventArticle(event_id=target_event.id, article_id=aid))
         if new_links or target_event.centroid is None:
+            # autoflush=False：显式 flush 让后续查询立刻看到新关联——否则本轮
+            # 质心重算漏掉新成员、二阶段合并的共享成员去重也认不出当轮新建事件
+            # （曾致质心滞后一轮、重复事件多活一个周期）
+            db.flush()
             # AI 状态机最后一环：文章已归入事件（pending → summarized → embedded → clustered）
             if new_links:
                 for m in cluster.members:
@@ -521,6 +588,7 @@ def run_event_clustering(db: Session) -> dict:
         sim_threshold=sim_threshold,
         keyword_threshold=keyword_threshold,
         window_hours=window_hours,
+        high_band_kw_floor=high_band_kw_floor,
     )
 
     db.commit()
