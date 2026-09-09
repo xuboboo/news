@@ -40,14 +40,12 @@ def init_db() -> None:
 
     with engine.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        # 标题模糊搜索（ILIKE '%kw%'）走 trgm GIN 索引，避免全表顺序扫描
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
-        conn.execute(
-            text("CREATE INDEX IF NOT EXISTS idx_article_title_trgm ON article USING gin (title gin_trgm_ops)")
-        )
     Base.metadata.create_all(engine)
     # 存量库升级：create_all 只建新表不加列，新增列在此幂等补齐（须在 create_all 之后，新库才有表）
     with engine.begin() as conn:
+        # 标题模糊搜索（ILIKE '%kw%'）走 trgm GIN 索引，避免全表顺序扫描（须在 create_all 之后，新库才有表）
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_article_title_trgm ON article USING gin (title gin_trgm_ops)"))
         conn.execute(text("ALTER TABLE article ADD COLUMN IF NOT EXISTS likes BIGINT NOT NULL DEFAULT 0"))
         conn.execute(text("ALTER TABLE article ADD COLUMN IF NOT EXISTS stats_polled_at TIMESTAMPTZ NULL"))
         conn.execute(text("ALTER TABLE article ADD COLUMN IF NOT EXISTS stats_next_poll_at TIMESTAMPTZ NULL"))
