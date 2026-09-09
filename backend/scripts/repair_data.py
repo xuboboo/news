@@ -34,21 +34,22 @@ COUNT_RE = __import__("re").compile(r"共有 (\d+) 篇")
 def main() -> None:
     db = SessionLocal()
     try:
-        # 1) 清洗正文
-        cleaned = 0
+        # 1) 清洗正文（记录被修改的文章：只有它们需要重生成摘要/向量）
+        cleaned_ids: list[int] = []
         for a in db.query(Article).all():
             new_text = clean_content(a.content or "")
             if new_text != (a.content or ""):
                 a.content = new_text
-                cleaned += 1
+                cleaned_ids.append(a.id)
         db.commit()
-        print(f"[1/5] 正文清洗完成：{cleaned} 篇被修改")
+        print(f"[1/5] 正文清洗完成：{len(cleaned_ids)} 篇被修改")
 
-        # 2) 受影响文章重生成摘要 + 向量（摘要引擎不变时结果一致，此处保证摘要与正文对齐）
+        # 2) 仅受影响文章重生成摘要 + 向量（摘要引擎不变时结果一致，重算全部
+        #    只是白烧 token——LLM 配置时是整库调用）
         # 补数据产生的 AI 调用记 manual_repair，与流水线调用在账面上区分
-        for a in db.query(Article).all():
-            generate_summary(db, a.id, trigger="manual_repair")
-            generate_embedding(db, a.id, trigger="manual_repair")
+        for aid in cleaned_ids:
+            generate_summary(db, aid, trigger="manual_repair")
+            generate_embedding(db, aid, trigger="manual_repair")
         print("[2/5] 摘要与向量重生成完成")
 
         # 3) 事件总结修复：脏摘要或「共有 N 篇」计数不符的事件，用当前成员事实重算

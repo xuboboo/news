@@ -36,8 +36,8 @@ const SECURITY_HEADERS = {
 
 // gzip 结果按「文件路径 + mtime」缓存：构建产物文件名带 hash 天然去重，
 // index.html 这类会变的文件靠 mtime 失效，超量时简单淘汰最早条目
-const gzipCache = new Map<string, { mtimeMs: number; data: Buffer }>();
-function gzipFor(file: string, mtimeMs: number, data: Buffer): Buffer {
+const gzipCache = new Map(); // 纯 JS 运行（.mjs），不得使用 TS 语法
+function gzipFor(file, mtimeMs, data) {
   const hit = gzipCache.get(file);
   if (hit && hit.mtimeMs === mtimeMs) return hit.data;
   const gz = gzipSync(data, { level: 6 });
@@ -93,7 +93,7 @@ const server = createServer(async (req, res) => {
         return;
       }
       // fetch 已自动解压 gzip/br，转发前必须去掉编码与长度头，避免响应体错位
-      const outHeaders: Record<string, string> = { ...SECURITY_HEADERS };
+      const outHeaders = { ...SECURITY_HEADERS };
       upstream.headers.forEach((value, key) => {
         if (!['content-encoding', 'content-length', 'transfer-encoding'].includes(key)) {
           outHeaders[key] = value;
@@ -122,7 +122,7 @@ const server = createServer(async (req, res) => {
     }
     const data = await readFile(file);
     const immutable = rel.startsWith(`assets${sep}`) || rel.startsWith('assets/');
-    const headers: Record<string, string> = {
+    const headers = {
       'Content-Type': MIME[extname(file)] ?? 'application/octet-stream',
       // index.html 与无 hash 的 public 文件（如 radar.svg）禁止长缓存，部署后即时生效
       'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',

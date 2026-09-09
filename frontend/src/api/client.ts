@@ -167,8 +167,10 @@ function mapApiEvent(ev: any, articleMap: Map<string, ArticleWithScore>): EventW
     sourcesCount: typeof ev.sources_count === 'number' ? ev.sources_count : undefined,
     rawScore: ev.hot_score ?? 0,
     hotScore: ev.hot_score ?? 0,
-    firstTime: sorted[0]?.publishTime ?? new Date(),
-    lastTime: sorted[sorted.length - 1]?.publishTime ?? new Date(),
+    // 后端 first_time/last_time 是事件全量成员的时间区间（event_article 全量口径）：
+    // 优先消费；成员滚出「最近 400 篇」窗口时用窗口内成员推算会严重失真
+    firstTime: ev.first_time ? new Date(ev.first_time) : sorted[0]?.publishTime ?? new Date(),
+    lastTime: ev.last_time ? new Date(ev.last_time) : sorted[sorted.length - 1]?.publishTime ?? new Date(),
   };
 }
 
@@ -436,8 +438,10 @@ export async function refreshFromApi(): Promise<boolean> {
         .filter((id) => prevEventIds.length > 0 && !prevEventIds.includes(id))
     );
     // 「加载更多」追加的页尾文章（超出首页 400 篇窗口）在增量刷新时保留：
-    // 与新首页按 id 去重合并，新文章滚入首页窗口时页尾旧条目自然让位
-    const extras = ARTICLES_WITH_SCORE.slice(BASE_PAGE_LIMIT);
+    // 按 id 集合取"旧列表中不在新首页里"的完整尾段——若按位置 slice，
+    // 新文章把旧文顶出首页边界时会留下永不再可达的历史页洞
+    const hydratedIds = new Set(hydrated.map((a) => a.id));
+    const extras = ARTICLES_WITH_SCORE.filter((a) => !hydratedIds.has(a.id));
     const merged = new Map<string, ArticleWithScore>();
     hydrated.forEach((a) => merged.set(a.id, a));
     extras.forEach((a) => {
@@ -445,8 +449,9 @@ export async function refreshFromApi(): Promise<boolean> {
     });
     ARTICLES_WITH_SCORE = [...merged.values()];
     prevArticleIds = ARTICLES_WITH_SCORE.map((a) => a.id);
-    // 事件列表同理：loadMoreEvents 追加的页尾事件在增量刷新时保留
-    const evExtras = EVENTS_WITH_SCORE.slice(BASE_EVENT_PAGE_LIMIT);
+    // 事件列表同理：loadMoreEvents 追加的页尾事件在增量刷新时保留（按 id 集合并集，防页洞）
+    const mappedIds = new Set(mapped.map((e) => e.id));
+    const evExtras = EVENTS_WITH_SCORE.filter((e) => !mappedIds.has(e.id));
     const mergedEvents = new Map<string, EventWithScore>();
     mapped.forEach((e) => mergedEvents.set(e.id, e));
     evExtras.forEach((e) => {
@@ -564,7 +569,6 @@ export async function fetchHotBoard(
 
 // ———————————————————— 最新资讯：加载更多（offset 分页） ————————————————————
 
-const BASE_PAGE_LIMIT = 400;
 const BASE_EVENT_PAGE_LIMIT = 100;
 
 /** 追加加载更早的事件（offset 分页）。返回本轮新增个数（0 = 没有更多了）。

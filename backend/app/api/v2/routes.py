@@ -333,8 +333,10 @@ def events_list(
             )
         )
     total = query.count()
+    # 稳定二级排序：hot_score 每轮 event_task 全量重算、排序随时间漂移，无 tiebreaker
+    # 时 offset 翻页会跳过/重复事件（同分事件页间互换）
     events = (
-        query.order_by(HotEvent.hot_score.desc())
+        query.order_by(HotEvent.hot_score.desc(), HotEvent.id.desc())
         .offset(offset)
         .limit(limit)
         .all()

@@ -133,6 +133,7 @@ def _llm_event_summary(
         usage = extract_openai_usage(body)
         raw = body["choices"][0]["message"]["content"]
         data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
+        raw_impacts = data.get("impacts")
         record_usage(
             task_type="event_summary",
             model=model,
@@ -143,7 +144,9 @@ def _llm_event_summary(
         )
         return (
             truncate(str(data.get("summary", "")), 300),
-            [str(i) for i in (data.get("impacts") or [])][:4],
+            # 容器类型守卫：impacts 非 list（字符串/dict）时按缺失处理，
+            # 降级事实拼装（同 summary.key_points 的防线）
+            [str(i) for i in raw_impacts][:4] if isinstance(raw_impacts, list) else [],
         )
     except Exception as exc:
         record_usage(
@@ -475,6 +478,16 @@ def run_event_clustering(db: Session) -> dict:
                 for eid in overlap:
                     ev = db.get(HotEvent, eid)
                     if ev is None or ev.centroid is None:
+                        continue
+                    # 时间窗相邻校验与 step 1 / events_mergeable 同口径：
+                    # 救援只该「认领回家的成员」，不该跨时间窗吸附远期事件
+                    if ev.first_time is None or ev.last_time is None:
+                        continue
+                    ev_first, ev_last = _tz(ev.first_time), _tz(ev.last_time)
+                    gap = max(_tz(rep.publish_time), ev_first) - min(
+                        min(cluster_times), ev_last
+                    )
+                    if gap > window:
                         continue
                     ev_vec = list(ev.centroid)
                     sim = max(

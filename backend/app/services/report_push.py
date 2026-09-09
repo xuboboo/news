@@ -49,7 +49,7 @@ def push_targets(db: Session | None) -> list[tuple[str, str, str]]:
     wecom = _cfg(db, "report_push_wecom_webhook_url", "REPORT_PUSH_WEBHOOK_URL")
     if wecom.lower().startswith(("http://", "https://")):
         out.append(("wecom", wecom, ""))
-    feishu = _cfg(db, "report_push_feishu_webhook_url", "")
+    feishu = _cfg(db, "report_push_feishu_webhook_url", "REPORT_PUSH_FEISHU_WEBHOOK_URL")
     if feishu.lower().startswith(("http://", "https://")):
         out.append(("feishu", feishu, _cfg(db, "report_push_feishu_secret", "")))
     return out
@@ -143,6 +143,23 @@ def build_payload(provider: str, md: str, feishu_secret: str = "") -> dict:
     return {"msgtype": "markdown", "markdown": {"content": md}}  # wecom
 
 
+def _provider_ok(provider: str, resp: httpx.Response) -> bool:
+    """HTTP 200 之外再校验机器人业务码：企微/飞书的签名错误、key 无效、内容超限、
+    限流等业务失败几乎都以 200 + 错误码 body 返回，只看状态码会把失败记成 ok。"""
+    try:
+        body = resp.json()
+    except Exception:
+        return False
+    if provider == "wecom":
+        code = body.get("errcode", 0)
+    else:  # feishu：新版 {"code":0}，旧版 {"StatusCode":0}
+        code = body.get("code", body.get("StatusCode", 0))
+    try:
+        return int(code or 0) == 0
+    except (TypeError, ValueError):
+        return False
+
+
 def push_report(db: Session | None, content: dict) -> str:
     """推送日报到所有已配置通道。返回状态描述；未启用返回空串。"""
     targets = push_targets(db)
@@ -153,11 +170,14 @@ def push_report(db: Session | None, content: dict) -> str:
     for provider, url, secret in targets:
         try:
             resp = httpx.post(url, json=build_payload(provider, md, secret), timeout=_PUSH_TIMEOUT)
-            if resp.status_code == 200:
+            if resp.status_code == 200 and _provider_ok(provider, resp):
                 results.append(f"{provider}:ok")
             else:
                 results.append(f"{provider}:HTTP{resp.status_code}")
-                logger.warning("日报 webhook 推送失败[%s]: HTTP %s %s", provider, resp.status_code, resp.text[:200])
+                logger.warning(
+                    "日报 webhook 推送失败[%s]: HTTP %s %s",
+                    provider, resp.status_code, resp.text[:200],
+                )
         except Exception as exc:  # 网络/超时等一切异常都不上抛
             results.append(f"{provider}:fail:{exc.__class__.__name__}")
             logger.warning("日报 webhook 推送失败[%s]: %s", provider, exc)

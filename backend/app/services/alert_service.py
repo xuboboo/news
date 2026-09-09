@@ -201,7 +201,9 @@ def watch(db: Session) -> dict:
         except Exception as exc:
             logger.error("告警 webhook 推送失败：%s", exc)
 
-    # 无论推送成败都更新状态机（推送失败时下轮按「持续告警」节奏重试，不会每 5 分钟轰炸）
-    _save_state({"bad": now_bad, "last_notify": now_ts if notified else last_notify})
+    # 无论推送成败都推进 last_notify：失败重试按「持续告警」30 分钟节奏而非每 5 分钟
+    # 轰炸 webhook（last_notify 只在成功时前进的话，失败后每轮都满足重推条件）；
+    # 恢复通知不受此节流影响
+    _save_state({"bad": now_bad, "last_notify": now_ts})
 
     return {"problems": problems, "notified": notified}

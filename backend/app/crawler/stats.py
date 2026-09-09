@@ -49,8 +49,9 @@ _FAIL_BACKOFF_BASE_MIN = 15    # 轮次失败退避：15min × 2^(n-1)，上限 
 _FAIL_BACKOFF_MAX_MIN = 120
 GIVE_UP_FAILS = 6             # 连续失败该次数后放弃（停采终态）
 _POLITENESS_SLEEP_SECONDS = 0.5  # 轮内请求间隔
-# 单轮批次上限：最坏 100 篇 × 17s（8s 超时×2 + 间隔）≈ 28min < 锁 TTL 30min
-_MAX_BATCH = 100
+# 单轮批次上限：httpx 标量 timeout 按阶段计（connect/read 各 8s），单请求最坏 ~16s，
+# 单篇双端点+间隔最坏 ~33s → 60 篇 ≈ 33min……取 50 留余量（50×33s ≈ 28min < 锁 TTL 30min）
+_MAX_BATCH = 50
 
 
 def parse_comment_count(text: str) -> int | None:

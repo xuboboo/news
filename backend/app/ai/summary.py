@@ -146,8 +146,10 @@ def _summarize_by_llm(
         return SummaryResult(
             summary_short=truncate(str(data.get("summary", "")), 80),
             summary_long=truncate(str(data.get("summary", "")), 400),
-            key_points=[str(p) for p in (data.get("points") or [])][:5],
-            tags=[str(t) for t in (data.get("tags") or [])][:5],
+            # 容器类型守卫：模型把 points/tags 返回成字符串时逐字符拆分会产出
+            # 单字要点污染摘要，dict 会产出键名——非 list 一律按缺失处理
+            key_points=[str(p) for p in data.get("points")][:5] if isinstance(data.get("points"), list) else [],
+            tags=[str(t) for t in data.get("tags")][:5] if isinstance(data.get("tags"), list) else [],
             model=model,
         )
     except Exception as exc:

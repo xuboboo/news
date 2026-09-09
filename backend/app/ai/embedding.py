@@ -67,17 +67,25 @@ def embed(
     cfg: tuple[str, str, str] | None = None,
     article_id: int | None = None,
     trigger: str = "auto",
+    source_out: dict | None = None,
 ) -> List[float]:
     """生成文本向量（标题 + 正文前段联合编码），并负责用量记账（每次调用恰好落一条）：
 
-    - API 配置启用且成功 → status=success（仅输入 token）；
+    - API 配置启用且成功 → status=success（仅输入 token），source_out["api"]=True；
     - API 配置启用但失败（连接/非 200/维度不符）→ status=api_fail；
       strict 模式（默认）抛 EmbeddingError 交任务层重试；非 strict 静默回退本地哈希；
     - API 未配置 → 记 model=local-hash-256-v2、cost=0（与抽取式摘要同理，非 api_fail）。
 
+    source_out：可选出参字典，调用方据此区分向量实际来源（"api"=API 成功向量，
+    缺失/False=本地哈希回退）——非 strict 降级路径写入的是哈希向量，指纹等
+    「记录 API 向量来源」的下游判断必须绕开它。
+
     cfg: 运行时生效配置 (base_url, api_key, model)，由调用方从配置服务读取；
     未传时回退 .env 静态配置。
     """
+    if source_out is None:
+        source_out = {}
+    source_out["api"] = False
     s = get_settings()
     base_url, api_key, model = cfg if cfg else (
         s.embedding_base_url, s.embedding_api_key, s.embedding_model
@@ -138,6 +146,7 @@ def embed(
             trigger=trigger,
             **usage,
         )
+        source_out["api"] = True
         return [float(v) for v in vec]
     # API 未配置：本地哈希回退落一条 cost=0 的账（status=success，非 api_fail）
     record_usage(

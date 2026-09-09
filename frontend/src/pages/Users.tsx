@@ -414,7 +414,10 @@ export default function Users() {
         <ResetPasswordModal
           target={resetTarget}
           onClose={() => setResetTarget(null)}
-          onFlash={flash}
+          onReset={(password) => {
+            // 与建号同款的一次性展示模态：密码驻留 4s toast 既易泄露又无法找回
+            setCreatedPwd({ email: resetTarget.email, password });
+          }}
         />
       )}
     </div>
@@ -730,11 +733,11 @@ function CreateUserModal({
 function ResetPasswordModal({
   target,
   onClose,
-  onFlash,
+  onReset,
 }: {
   target: ManagedUser;
   onClose: () => void;
-  onFlash: (ok: boolean, text: string) => void;
+  onReset: (password: string) => void;
 }) {
   const [password, setPassword] = useState(() => genPassword());
   const [showPwd, setShowPwd] = useState(true);
@@ -747,7 +750,7 @@ function ResetPasswordModal({
     setBusy(true);
     try {
       await resetUserPassword(target.id, password);
-      onFlash(true, `已重置 ${target.email} 的密码：${password}（请线下告知，首登强制改密）`);
+      onReset(password);
       onClose();
     } catch (e: any) {
       setErr(e?.message ?? '重置失败');

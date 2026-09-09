@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.setting import SystemSetting
+from app.utils.url_guard import UrlNotAllowed, assert_public_http_url
 
 # 允许通过管理面板修改的配置项
 ALLOWED_KEYS: dict[str, type] = {
@@ -29,6 +30,7 @@ ALLOWED_KEYS: dict[str, type] = {
     "keyword_jaccard_threshold": float,
     "high_band_kw_floor": float,
     "cluster_lookback_hours": int,
+    "cluster_window_hours": int,
     "admin_token": str,
     # —— 登录与会话 ——
     "session_ttl_hours": int,
@@ -58,6 +60,7 @@ CONFIG_RANGES: dict[str, tuple[int | float, int | float]] = {
     "keyword_jaccard_threshold": (0, 1),
     "high_band_kw_floor": (0, 1),
     "cluster_lookback_hours": (1, 720),
+    "cluster_window_hours": (1, 720),
     "session_ttl_hours": (1, 8760),
     "session_idle_hours": (0, 8760),
     "login_max_attempts": (1, 100),
@@ -65,7 +68,7 @@ CONFIG_RANGES: dict[str, tuple[int | float, int | float]] = {
     "login_ip_throttle_max": (5, 10000),
     "login_ip_throttle_window_seconds": (60, 86400),
     "audit_retention_days": (30, 3650),
-    "stats_poll_batch": (1, 100),
+    "stats_poll_batch": (1, 50),
 }
 
 # 脱敏展示的字段（alert_webhook_url 通常内嵌钉钉/企微机器人 token）
@@ -120,6 +123,18 @@ def _validate_str(key: str, value: str) -> None:
         ("http://", "https://")
     ):
         raise ValueError(f"{key} 需为 http(s):// 开头的完整机器人 webhook 地址")
+    if key in (
+        "alert_webhook_url",
+        "report_push_wecom_webhook_url",
+        "report_push_feishu_webhook_url",
+    ):
+        # 与 LLM/Embedding 地址同口径的 SSRF 防线：这些 URL 会被后端定时 POST
+        # （告警每 5 分钟 / 日报每日），放行内网地址等于开放内网信标通道；
+        # 全内网部署（自建网关）走既有 ALLOW_PRIVATE_AI_URLS 豁免
+        try:
+            assert_public_http_url(value)
+        except UrlNotAllowed as exc:
+            raise ValueError(str(exc))
 
 
 def get_overrides(db: Session) -> dict[str, str]:

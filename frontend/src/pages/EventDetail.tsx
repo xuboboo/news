@@ -32,24 +32,26 @@ export default function EventDetail() {
   // dataVer：后台同步拉到新数据后重新查询（含首次引导完成的那次通知）
   // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVer 变化触发重算
   const cachedEvent = useMemo(() => (id ? eventById(id) : undefined), [id, dataVer]);
-  // 事件滚出列表窗口（/events?limit=100）时的按需兜底：直调 /events/{id}
-  const [fetchedEvent, setFetchedEvent] = useState<EventWithScore | null>(null);
-  const [fetchFailed, setFetchFailed] = useState(false);
+  // 事件滚出列表窗口（/events?limit=100）时的按需兜底：直调 /events/{id}。
+  // 兜底状态携带所属路由 id 并派生生效范围——路由参数变化时组件实例被复用
+  // （key 是常量页名），派生条件自动失效回退"未拉取"，不会把上一个事件的
+  // 兜底数据渲染在当前 URL 下（shouldFetch 也会重新放行补拉）
+  const [fetched, setFetched] = useState<{ id: string; ev: EventWithScore | null } | null>(null);
+  const fetchedEvent = fetched && fetched.id === id ? fetched.ev : null;
   const event = cachedEvent ?? fetchedEvent ?? undefined;
-  const shouldFetch = bootReady && !!id && !cachedEvent && !fetchedEvent && !fetchFailed;
+  const shouldFetch = bootReady && !!id && !cachedEvent && fetched?.id !== id;
 
   useEffect(() => {
-    if (!shouldFetch || !apiMode) return;
+    if (!shouldFetch || !apiMode || !id) return;
     let cancelled = false;
-    fetchEventById(id as string).then((ev) => {
-      if (cancelled) return;
-      if (ev) setFetchedEvent(ev);
-      else setFetchFailed(true);
+    // ev 为 null = 拉取失败（fetchFailed 由上方派生得出），不再重复请求
+    fetchEventById(id).then((ev) => {
+      if (!cancelled) setFetched({ id, ev });
     });
     return () => {
       cancelled = true;
     };
-  }, [shouldFetch, id, fetchedEvent, fetchFailed]);
+  }, [shouldFetch, id, fetched]);
 
   usePageTitle(event ? event.title : '事件详情');
 

@@ -23,8 +23,11 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_default_queue="default",
     # acks_late 下，任务执行超过 visibility_timeout 会被 broker 视为未消费而重复投递；
-    # event_task 内逐事件串行调 LLM（每个最长 60s），放宽到 4h
+    # event_task 内逐事件串行调 LLM（每个最长 60s），放宽到 4h。
+    # 官方要求 broker 与 result backend（同为 Redis）两侧设同一值，否则出现
+    # 整点重投/结果消失类问题（celery#7651）
     broker_transport_options={"visibility_timeout": 4 * 3600},
+    result_backend_transport_options={"visibility_timeout": 4 * 3600},
     # 硬上限 1h：卡死任务（LLM 悬挂/死锁）不再永久占住 worker 槽位，
     # 也保证任务在 4h visibility_timeout 内结束，不会因超时重投而重复执行
     task_soft_time_limit=55 * 60,

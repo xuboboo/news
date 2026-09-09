@@ -32,11 +32,14 @@ def main() -> int:
     legacy = [r for r in rows if not r.row_hash]
     chained = [r for r in rows if r.row_hash]
 
-    if legacy and chained and legacy[-1].id > chained[0].id:
-        # 理论上不可能：哈希链上线后所有新写入都应有 row_hash
-        print(f"异常：遗留段与链上行交错（遗留最大 id={legacy[-1].id} > 链上最小 id={chained[0].id}）")
-
     problems = verify_chain_rows(rows)
+    if legacy and chained and legacy[-1].id > chained[0].id:
+        # 理论上不可能：哈希链上线后所有新写入都应有 row_hash。
+        # 该异常必须参与退出码——中间行 row_hash 被抹掉（篡改形态之一）若只靠
+        # stdout 提示，按退出码做自动巡检的场景会漏报
+        problems.insert(
+            0, f"异常：遗留段与链上行交错（遗留最大 id={legacy[-1].id} > 链上最小 id={chained[0].id}）"
+        )
     head = chained[-1].row_hash if chained else "(空表/全部为遗留段)"
 
     print(f"审计日志总量 {len(rows)} 行 = 链前遗留段 {len(legacy)} + 哈希链 {len(chained)}")

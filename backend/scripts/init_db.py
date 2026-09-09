@@ -17,7 +17,9 @@ def main():
 
     with engine.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        logger.info("pgvector extension ready")
+        # 标题 trgm GIN 索引依赖 pg_trgm 扩展：缺了它下方索引创建直接报错
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+        logger.info("pgvector / pg_trgm extensions ready")
     Base.metadata.create_all(engine)
     logger.info("tables created")
     # 存量库升级：create_all 只建新表不加列，新增列在此幂等补齐（与 app/main.py init_db 保持一致）

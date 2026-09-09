@@ -38,6 +38,12 @@ from app.models.user import ROLE_SUPER_ADMIN, User  # noqa: E402
 
 def _ensure_tables() -> None:
     """独立运行时兜底建表（与 init_db.py 同语义；已存在则无操作）。"""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        # article 含 Vector 列、标题 trgm 索引依赖 pg_trgm：全新库缺扩展会直接建表失败
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
     Base.metadata.create_all(engine)
 
 
@@ -65,9 +71,19 @@ def _ensure_len(pw: str) -> str:
     return pw
 
 
+def _ensure_strength(pw: str, email: str = "") -> str:
+    """CLI 建号/重置同样过弱口令封锁表与邮箱本体校验（与 API 三条写路径同口径）。"""
+    _ensure_len(pw)
+    try:
+        passwords.check_strength(pw, email=email)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    return pw
+
+
 def create_super(email: str, password: str | None, display_name: str) -> None:
     email = _norm(email)
-    password = _ensure_len(_read_password(password, "超管初始密码"))
+    password = _ensure_strength(_read_password(password, "超管初始密码"), email)
     with SessionLocal() as db:
         if db.query(func.count(User.id)).filter(User.role == ROLE_SUPER_ADMIN).scalar():
             sys.exit("已存在超管账号（避免误用此命令创建第二个超管；如确需请用 SQL）")
@@ -92,7 +108,7 @@ def create_super(email: str, password: str | None, display_name: str) -> None:
 
 
 def reset_password(email: str, password: str | None) -> None:
-    password = _ensure_len(_read_password(password, f"{_norm(email)} 的新密码"))
+    password = _ensure_strength(_read_password(password, f"{_norm(email)} 的新密码"), _norm(email))
     with SessionLocal() as db:
         user = db.query(User).filter_by(email=_norm(email)).first()
         if user is None:

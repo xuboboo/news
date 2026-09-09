@@ -15,6 +15,7 @@ from app.services import usage_service
 from app.services.report_push import push_enabled, push_report
 from app.utils.text import truncate_boundary
 from sqlalchemy import text as sql_text
+from sqlalchemy.orm import selectinload
 
 
 def _tz(t: datetime) -> datetime:
@@ -27,9 +28,9 @@ def issue_no_for(day: date_type) -> int:
     return max(1, (day - start).days + 1)
 
 
-# 「IT之家 9 月 8 日消息，」「快科技 9 月 9 日讯，」等媒体导语壳
+# 「IT之家 9 月 8 日消息，」「快科技 9 月 9 日讯，」等媒体导语壳（含「2026 年 9 月 8 日」带年份变体）
 _LEDE_PREFIX_RE = re.compile(
-    r'^\S{0,12}\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:消息|讯|快讯)\s*[，,]?\s*'
+    r'^\S{0,12}\s*(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日(?:消息|讯|快讯)\s*[，,]?\s*'
 )
 # 「据韩媒 sedaily 消息，」「据IT之家小伙伴反馈，」等无日期转述壳
 _LEDE_JU_RE = re.compile(r'^据[^，。]{1,14}(?:消息|反馈|爆料)[，,]\s*')
@@ -116,6 +117,7 @@ def build_report(db: Session, day: date_type) -> dict:
 
     day_articles = (
         db.query(Article)
+        .options(selectinload(Article.summary))
         .filter(Article.publish_time >= day_start, Article.publish_time < day_end)
         .all()
     )

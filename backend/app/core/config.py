@@ -99,6 +99,11 @@ def _assert_production_safe(s: "Settings") -> None:
         problems.append("admin_no_auth 必须为 false（管理面板不得免鉴权暴露）")
     if ":hjradar@" in s.database_url:
         problems.append("database_url 仍在使用默认口令 hjradar，必须更换")
+    # .env.example 的占位密钥原样带进生产 = 管理后门/引导密码公开于仓库可猜
+    if s.admin_token == "please-change-me":
+        problems.append("admin_token 仍是 .env.example 的占位值，必须更换")
+    if s.bootstrap_admin_password == "please-change-me-too":
+        problems.append("bootstrap_admin_password 仍是 .env.example 的占位值，必须更换")
     if problems:
         raise RuntimeError(
             "ENVIRONMENT=production 安全自检未通过（禁止弱默认值上线）：\n  - "

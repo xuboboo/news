@@ -39,15 +39,18 @@ def generate_embedding(db: Session, article_id: int, trigger: str = "auto") -> A
     # Embedding 配置运行时可改（管理面板 / system_setting 表）
     # article_id / trigger 透传给用量记账（ai_usage_log）
     cfg = config_service.effective_embedding(db)
+    vec_source: dict = {}
     article.embedding = embed(
         text,
         cfg,
         article_id=article_id,
         trigger=trigger,
+        source_out=vec_source,
     )
     article.ai_status = "embedded"
-    # 仅 API 向量（配置齐全且本次调用走 API 成功）刷新指纹
-    if cfg and all(cfg):
+    # 仅 API 成功向量刷新指纹（"model|dim"）。非 strict 模式下 API 失败会静默回退
+    # 本地哈希向量——哈希向量与 API 向量不可比，把指纹记成 API 模型会让漂移检测失真
+    if cfg and all(cfg) and vec_source.get("api"):
         _save_fingerprint(db, f"{cfg[2]}|{len(article.embedding)}")
     db.commit()
     db.refresh(article)

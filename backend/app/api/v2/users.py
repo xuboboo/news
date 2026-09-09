@@ -334,8 +334,13 @@ def update_user(
             raise HTTPException(403, "只有平台超管可以调整所属租户")
         if not _is_int(new_tenant):
             raise HTTPException(400, "tenant_id 必须为整数")
-        if db.get(Tenant, new_tenant) is None:
+        tenant = db.get(Tenant, new_tenant)
+        if tenant is None:
             raise HTTPException(404, "租户不存在")
+        if tenant.status != "active":
+            # 与 create_user 同口径：停用租户不能收编账号（否则用户立刻陷入
+            # 「登录 403」且无任何操作提示）
+            raise HTTPException(400, "目标租户已停用，不能将用户迁入")
 
     status_changing = new_status is not None and new_status != target.status
     role_changing = new_role is not None and new_role != target.role

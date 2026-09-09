@@ -67,10 +67,14 @@ services:
     env_file: ./backend/.env
     # max-tasks-per-child：numpy/jieba 等库的内存碎片随任务数累积，定期回收进程
     command: celery -A app.tasks.celery_app worker -Q default -c 4 --loglevel=INFO --max-tasks-per-child=100
+    # 依赖 backend healthy：表结构由 backend 启动时的 init_db 建立，
+    # 首启窗口任务（event/stats 消费）不再打在空库上
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      backend:
         condition: service_healthy
     restart: unless-stopped
     # worker 名默认为 celery@<容器主机名>；无应答时 celery 以非零码退出
@@ -91,6 +95,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      backend:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping --timeout=10 -d celery@$$HOSTNAME"]
@@ -106,6 +112,8 @@ services:
     command: celery -A app.tasks.celery_app beat --loglevel=INFO
     depends_on:
       redis:
+        condition: service_healthy
+      backend:
         condition: service_healthy
     restart: unless-stopped
     # beat 不响应 inspect ping：探测 /proc 里 beat 主进程是否存活（slim 镜像无 pgrep）。
@@ -127,6 +135,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      backend:
         condition: service_healthy
     restart: unless-stopped
     # 采集循环可能卡死而非崩溃（restart 救不了）：loop 每轮写心跳文件，

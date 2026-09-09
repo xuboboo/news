@@ -51,6 +51,14 @@ def main() -> None:
         if not url_channel:
             print("所有页面均不可达，中止（不做任何修改）。")
             return
+        # 熔断护栏：任一频道一个链接都没抓到（该频道页面全部不可达 / 改版致解析
+        # 失效）时，该频道在库文章会因 boundary 缺失被整体判为可删——这正是本脚本
+        # 唯一可能真实丢数据的路径。此时立即中止，不做任何修改。
+        mapped_channels = set(url_channel.values())
+        dead_channels = [ch for ch in PAGE_SOURCES if ch not in mapped_channels]
+        if dead_channels:
+            print(f"频道 {dead_channels} 的页面全部不可达或解析为空，中止（不做任何修改）。")
+            return
 
         rows = (
             db.query(Article)

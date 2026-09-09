@@ -48,9 +48,14 @@ def health(deep: bool = False, db: Session = Depends(get_db)):
             interval = config_service.get_effective(db, "crawler_interval_minutes")
         except Exception:
             interval = None
-        deep_result = deep_checks(db, interval)
-        _DEEP_CACHE["t"] = time.monotonic()
-        _DEEP_CACHE["data"] = deep_result
+        try:
+            deep_result = deep_checks(db, interval)
+            _DEEP_CACHE["t"] = time.monotonic()
+            _DEEP_CACHE["data"] = deep_result
+        except Exception:
+            # DB 故障时 deep_checks 内的 TaskRun 查询会抛错：降级为结构化 degraded
+            # 而非 500（redis/celery 两项仍有效，crawler 无法判定置 None 不参与判负）
+            deep_result = {"status": "degraded", "checks": {"crawler": None}, "failed": []}
 
     # db 的真实结果放后面覆盖：deep_checks 内部对 db 恒为 True（它查不了调用方的检查）
     checks = {**deep_result["checks"], "db": db_ok}

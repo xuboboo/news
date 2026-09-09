@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.deps import require_super_admin
 from app.core.db import get_db
-from app.services import audit_service
+from app.services import audit_service, usage_service
 
 router = APIRouter(prefix="/api/v2/admin")
 
@@ -80,8 +80,10 @@ def audit_logs_export(
             writer = csv.writer(buf)
             writer.writerow(
                 [r.id, r.created_at.isoformat() if r.created_at else "",
-                 r.action, r.user_id or "", r.user_email, r.tenant_id or "",
-                 r.ip, r.user_agent, json.dumps(r.detail or {}, ensure_ascii=False, sort_keys=True)]
+                 usage_service.csv_safe_cell(r.action), r.user_id or "",
+                 usage_service.csv_safe_cell(r.user_email), r.tenant_id or "",
+                 usage_service.csv_safe_cell(r.ip), usage_service.csv_safe_cell(r.user_agent),
+                 json.dumps(r.detail or {}, ensure_ascii=False, sort_keys=True)]
             )
             yield buf.getvalue()
         if truncated:
