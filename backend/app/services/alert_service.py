@@ -96,6 +96,25 @@ def _collect_problems(db: Session) -> list[str]:
                 f"{(last_failed.detail or '')[:150]}"
             )
 
+    # 部分失败（degraded）连续 3 轮未恢复：单来源采集持续失效时任务不再是 success，
+    # 但偶发 1-2 轮降级只进面板不打扰；连续 3 轮说明对应来源已稳定故障
+    degraded_names = (
+        db.query(TaskRun.name).filter(TaskRun.status == "degraded").distinct().all()
+    )
+    for (name,) in degraded_names:
+        recent = (
+            db.query(TaskRun)
+            .filter(TaskRun.name == name)
+            .order_by(TaskRun.id.desc())
+            .limit(3)
+            .all()
+        )
+        if len(recent) >= 3 and all(r.status == "degraded" for r in recent):
+            problems.append(
+                f"任务连续降级：{name} 最近 3 轮均为 degraded（部分来源持续失败），"
+                f"最新明细：{(recent[0].detail or '')[:150]}"
+            )
+
     return problems
 
 

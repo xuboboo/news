@@ -23,8 +23,10 @@ def record_task_run(name: str, trigger: str = "auto"):
         with record_task_run("crawler", trigger="manual") as run:
             ...
             run.detail = "新增 12 篇"   # 可选：成功摘要
+            run.status = "degraded"     # 可选：部分失败（如单来源采集异常）
 
-    任务内部异常会被记录为 failed 后原样抛出（不吞异常）。
+    任务内部异常会被记录为 failed 后原样抛出（不吞异常）；
+    任务体可把 status 置为 "degraded" 表达部分失败，退出时不再覆盖为 success。
     """
     db = new_session()
     # 僵尸清扫：进程中断会留下永远停在 running 的记录（restart 只能救进程，
@@ -64,7 +66,9 @@ def record_task_run(name: str, trigger: str = "auto"):
         raise
     else:
         try:
-            run.status = "success"
+            # 任务体可显式置 degraded（部分失败）——退出时保留，不覆盖为 success
+            if run.status == "running":
+                run.status = "success"
             run.finished_at = _now()
             run.duration_ms = int((time.monotonic() - start) * 1000)
             db.commit()

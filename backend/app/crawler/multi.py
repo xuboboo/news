@@ -61,6 +61,11 @@ def ingest_all_sources(db: Session) -> dict:
     return merged
 
 
+def has_source_error(result: dict) -> bool:
+    """任一来源本轮采集异常（供任务层把部分失败标为 degraded，不再静默记成功）。"""
+    return any(r.get("error") for r in (result.get("per_source") or {}).values())
+
+
 def format_detail(result: dict) -> str:
     """task_run detail：分源「来源 新增X · 扫描Y · 过滤Z」+ 全局频道新增分布。"""
     parts: list[str] = []

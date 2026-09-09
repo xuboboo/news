@@ -128,11 +128,16 @@ def build_report(db: Session, day: date_type) -> dict:
 
     # —— TOP 事件（当天有报道的事件）——
     # 4 条集合查询替代逐事件 N+1（旧实现 = 1 + 2×事件总数 条查询）；
-    # articles_count / sources_count 仍按事件全量成员统计（口径不变）
+    # articles_count / sources_count 为日报窗口内统计（2026-09-09 审计修正：
+    # 旧口径取事件全量成员，跨日事件会把历史文章计入"今日聚合 X 篇"），
+    # 全生命周期数据放 lifecycle_* 字段单独呈现，两口径不混用
     day_ids = [a.id for a in day_articles]
+    day_id_set = set(day_ids)
     events: list[HotEvent] = []
     member_ids_by_ev: dict[int, list[int]] = defaultdict(list)
     sources_by_ev: dict[int, set] = defaultdict(set)
+    day_member_ids_by_ev: dict[int, list[int]] = defaultdict(list)
+    day_sources_by_ev: dict[int, set] = defaultdict(set)
     if day_ids:
         candidate_ids = [
             row[0]
@@ -149,6 +154,8 @@ def build_report(db: Session, day: date_type) -> dict:
             )
             for eid, aid in links:
                 member_ids_by_ev[eid].append(aid)
+                if aid in day_id_set:
+                    day_member_ids_by_ev[eid].append(aid)
             art_sources = dict(
                 db.query(Article.id, Article.source)
                 .filter(Article.id.in_({aid for _, aid in links}))
@@ -158,20 +165,24 @@ def build_report(db: Session, day: date_type) -> dict:
                 src = art_sources.get(aid)
                 if src:
                     sources_by_ev[eid].add(src)
+                    if aid in day_id_set:
+                        day_sources_by_ev[eid].add(src)
             events = db.query(HotEvent).filter(HotEvent.id.in_(candidate_ids)).all()
 
     top_events = []
     max_ev_raw = max((e.hot_score for e in events), default=0)
     for ev in events:
-        member_ids = member_ids_by_ev.get(ev.id, [])
+        day_member_ids = day_member_ids_by_ev.get(ev.id, [])
         top_events.append({
             "id": ev.id,
             "title": ev.title,
             "summary": ev.summary,
             "status": ev.status,
             "hot_score": round((ev.hot_score / max_ev_raw) * 100, 1) if max_ev_raw > 0 else round(ev.hot_score, 1),
-            "articles_count": len(member_ids),
-            "sources_count": len(sources_by_ev.get(ev.id, set())),
+            "articles_count": len(day_member_ids),
+            "sources_count": len(day_sources_by_ev.get(ev.id, set())),
+            "lifecycle_articles_count": len(member_ids_by_ev.get(ev.id, [])),
+            "lifecycle_sources_count": len(sources_by_ev.get(ev.id, set())),
         })
     top_events = sorted(top_events, key=lambda e: e["hot_score"], reverse=True)[:5]
 

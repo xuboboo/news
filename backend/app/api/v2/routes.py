@@ -11,7 +11,7 @@ from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.algorithms.hot_score import hot_score, hot_score_expr
@@ -183,35 +183,51 @@ def stats(db: Session = Depends(get_db)):
 
 # ———————————————————— 热榜中心 ————————————————————
 
+# 窗口参数 → 小时数；"all" 取一年（业务上等价全量，避免无界查询）
+_HOT_WINDOWS: dict[str, int] = {"24h": 24, "3d": 72, "7d": 168, "all": 8760}
+
+
 @router.get("/hot/board")
 def hot_board(
     channel: str | None = None,
+    window: str = Query("24h", pattern="^(24h|3d|7d|all)$"),
     limit: int = Query(40, le=100),
     db: Session = Depends(get_db),
 ):
-    filters = [Article.publish_time >= datetime.now(timezone.utc) - timedelta(hours=120)]
+    hours = _HOT_WINDOWS[window]
+    now = datetime.now(timezone.utc)
+    filters = [Article.publish_time >= now - timedelta(hours=hours)]
     if channel and channel != "全部":
         filters.append(Article.channel == channel)
 
     expr = hot_score_expr(Article)
     total = db.query(func.count(Article.id)).filter(*filters).scalar() or 0
-    max_raw = float(db.query(func.max(expr)).filter(*filters).scalar() or 0.0)
+    # 归一化基准取窗口内全频道最大原始分（不含频道过滤）：
+    # 切换频道筛选时分数保持稳定可比，不随选择范围缩放
+    max_raw = float(
+        db.query(func.max(expr))
+        .filter(Article.publish_time >= now - timedelta(hours=hours))
+        .scalar()
+        or 0.0
+    )
     articles = (
         db.query(Article)
         .options(selectinload(Article.summary))
         .filter(*filters)
-        .order_by(expr.desc())
+        # 稳定二级排序：同分不再随刷新抖动（2026-09-09 审计）
+        .order_by(expr.desc(), Article.publish_time.desc(), Article.id.desc())
         .limit(limit)
         .all()
     )
     if not articles:
-        return {"items": [], "total": 0}
+        return {"items": [], "total": 0, "window": window}
     if max_raw <= 0:
         max_raw = _page_max_raw(articles)
     links = _event_links(db, [a.id for a in articles])
     return {
         "items": [_article_dict(a, links, max_raw) for a in articles],
         "total": total,
+        "window": window,
     }
 
 
@@ -229,9 +245,25 @@ def articles_latest(
     if channel and channel != "全部":
         query = query.filter(Article.channel == channel)
     if q:
-        query = query.filter(Article.title.ilike(f"%{_escape_like(q)}%", escape="\\"))
+        # 与前端口径一致：标题或标签任一命中（2026-09-09 审计：旧实现仅搜标题）
+        like = f"%{_escape_like(q)}%"
+        query = (
+            query.outerjoin(ArticleSummary, ArticleSummary.article_id == Article.id)
+            .filter(
+                or_(
+                    Article.title.ilike(like, escape="\\"),
+                    cast(ArticleSummary.tags, String).ilike(like, escape="\\"),
+                )
+            )
+        )
     total = query.count()
-    articles = query.order_by(Article.publish_time.desc()).offset(offset).limit(limit).all()
+    # 稳定二级排序：同一 publish_time 的文章顺序不随刷新抖动
+    articles = (
+        query.order_by(Article.publish_time.desc(), Article.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     max_raw = _max_raw(db)
     if max_raw <= 0:
         max_raw = _page_max_raw(articles)

@@ -357,14 +357,17 @@ def update_user(
     if role_changing:
         target.role = new_role
         detail["changes"].append(f"role={new_role}")
-    if new_tenant is not None and new_tenant != target.tenant_id:
+    # 先存旧值再比较：赋值后 target.tenant_id 已等于 new_tenant，
+    # 直接比较恒为 False，租户迁移永远不会吊销会话（2026-09-09 审计修复）
+    tenant_changing = new_tenant is not None and new_tenant != target.tenant_id
+    if tenant_changing:
+        detail["changes"].append(f"tenant_id={target.tenant_id}->{new_tenant}")
         target.tenant_id = new_tenant
-        detail["changes"].append(f"tenant_id={new_tenant}")
     db.commit()
     if status_changing and new_status == "disabled":
         # 停用即时生效：吊销全部会话
         session_store.revoke_user_sessions(db, target.id)
-    if role_changing or (new_tenant is not None and new_tenant != target.tenant_id):
+    if role_changing or tenant_changing:
         # 权限/归属变更即时吊销会话（OWASP：privilege change 须重换会话）。
         # 权限本身每请求实时查库无提权残留，吊销的目的是强制以新身份重新登录；
         # 降级超管/搬移租户后继续用旧会话操作不符合直觉且扩大误操作面

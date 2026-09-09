@@ -5,7 +5,7 @@ import time
 
 from app.core.config import get_settings
 from app.core.db import new_session
-from app.crawler.multi import format_detail, ingest_all_sources
+from app.crawler.multi import format_detail, has_source_error, ingest_all_sources
 from app.services.taskrun_service import record_task_run
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -55,6 +55,9 @@ def main():
                         try:
                             result = ingest_all_sources(db)
                             run.detail = format_detail(result)
+                            if has_source_error(result):
+                                # 单来源失败不再静默记成功：本轮降级为 degraded
+                                run.status = "degraded"
                             logger.info("ingest result: %s", result)
                             # 为新文章派发 AI 处理任务
                             if result["new_ids"]:

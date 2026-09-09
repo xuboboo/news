@@ -183,6 +183,22 @@ def test_tenant_disable_guard_and_session_revocation(client, db, seeded):
     assert login(m, seeded.emails["member_b"]).status_code == 403
 
 
+def test_tenant_migration_revokes_old_sessions(client, db, seeded):
+    """租户迁移即时吊销旧会话（2026-09-09 审计修复：旧实现先赋值再比较恒 False，
+    迁移租户后旧 token 一直可用）。"""
+    login(client, seeded.emails["super"])
+    m = other_client()
+    assert login(m, seeded.emails["member"]).status_code == 200
+    assert m.get("/api/v2/auth/me").status_code == 200
+    r = client.put(
+        f"/api/v2/admin/users/{seeded.ids['member']}",
+        json={"tenant_id": seeded.tids["b"]},
+        headers=H,
+    )
+    assert r.status_code == 200
+    assert m.get("/api/v2/auth/me").status_code == 401  # 旧会话已吊销
+
+
 # ———————————————————— 锁定与解锁 ————————————————————
 
 def test_lockout_visibility_and_unlock(client, db, seeded):

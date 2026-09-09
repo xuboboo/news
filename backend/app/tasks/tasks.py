@@ -25,7 +25,7 @@ def crawler_task(trigger: str = "auto"):
     与常驻 crawler loop 双入口互斥：抢不到 Redis 锁说明另一入口正在采集，
     本轮直接跳过（记 success + detail，避免面板误报失败）。
     """
-    from app.crawler.multi import format_detail, ingest_all_sources
+    from app.crawler.multi import format_detail, has_source_error, ingest_all_sources
     from app.utils.lock import LOCK_CRAWLER, LOCK_CRAWLER_TTL_MS, acquire_lock, release_lock
 
     if not acquire_lock(LOCK_CRAWLER, LOCK_CRAWLER_TTL_MS):
@@ -38,6 +38,10 @@ def crawler_task(trigger: str = "auto"):
             try:
                 result = ingest_all_sources(db)
                 run.detail = format_detail(result)
+                if has_source_error(result):
+                    # 单来源失败不再静默记成功：任务降级为 degraded，
+                    # 面板/告警可见；其余来源数据照常入库
+                    run.status = "degraded"
                 for article_id in result["new_ids"]:
                     summary_task.delay(article_id)
                 # 孤儿自愈：补派历史滞留 pending（幂等，见 summary_service.repair_pending_summaries）
