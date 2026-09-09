@@ -367,9 +367,19 @@ def report_daily(date: str | None = None, db: Session = Depends(get_db)):
         if not row:
             raise HTTPException(404, "report not generated for this date")
         return {"date": row.date.isoformat(), "issue_no": row.issue_no, **row.content}
-    row = db.query(DailyReport).order_by(DailyReport.date.desc()).first()
-    if not row:
+    # latest 取最近一个有实质内容的报告：全空报告（如凌晨窗口刚开启时的误生成占位）
+    # 不应顶掉前一日的有效报告——否则日报页白天展示一整天空内容
+    rows = db.query(DailyReport).order_by(DailyReport.date.desc()).limit(7).all()
+    if not rows:
         raise HTTPException(404, "no report yet")
+    row = next(
+        (
+            r
+            for r in rows
+            if (r.content or {}).get("top_events") or (r.content or {}).get("quick_news")
+        ),
+        rows[0],  # 冷启动期连续全空时回退旧行为（返回最新一条）
+    )
     return {"date": row.date.isoformat(), "issue_no": row.issue_no, **row.content}
 
 

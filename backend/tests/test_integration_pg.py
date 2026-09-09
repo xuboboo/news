@@ -265,6 +265,38 @@ def test_generate_daily_report_issue_no_and_idempotency(pg):
         db.close()
 
 
+# ———— /report/daily latest：全空占位报告不顶掉有效报告 ————
+
+def test_report_daily_latest_skips_empty_placeholder(pg):
+    """latest 跳过全空报告（凌晨窗口刚开启时的误生成占位），回退最近一个有实质内容的；
+    指定 date 仍可原样访问（审计口径：日报页不应白天展示一整天空内容）。"""
+    from fastapi import HTTPException
+
+    from app.api.v2.routes import report_daily
+
+    db = pg()
+    try:
+        good_day = (NOW - timedelta(days=1)).date()
+        empty_day = good_day + timedelta(days=1)
+        db.add(DailyReport(date=good_day, issue_no=1,
+                           content={"top_events": [{"id": 9}], "quick_news": []}))
+        db.add(DailyReport(date=empty_day, issue_no=2,
+                           content={"top_events": [], "quick_news": []}))
+        db.commit()
+
+        latest = report_daily(date=None, db=db)
+        assert latest["date"] == good_day.isoformat()
+
+        by_date = report_daily(date=empty_day.isoformat(), db=db)
+        assert by_date["date"] == empty_day.isoformat()
+
+        with pytest.raises(HTTPException) as ei:
+            report_daily(date="2099-01-01", db=db)
+        assert ei.value.status_code == 404
+    finally:
+        db.close()
+
+
 # ———— /hot/board：窗口参数与稳定排序（审计 P1/P2） ————
 
 def test_hot_board_windows_and_stable_order(pg):

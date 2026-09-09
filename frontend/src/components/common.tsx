@@ -10,6 +10,8 @@ const CHANNEL_STYLES: Record<string, string> = {
   // 快科技栏目
   桌面系统: 'bg-blue-500/10 text-blue-300 border-blue-400/20',
   电脑软件: 'bg-indigo-500/10 text-indigo-300 border-indigo-400/20',
+  移动应用: 'bg-fuchsia-500/10 text-fuchsia-300 border-fuchsia-400/20',
+  手机系统: 'bg-teal-500/10 text-teal-300 border-teal-400/20',
 };
 
 export function ChannelTag({ channel }: { channel: string }) {

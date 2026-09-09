@@ -91,7 +91,13 @@ if LOGGED_IN:
         d["items"][i]["publish_time"] >= d["items"][i + 1]["publish_time"] for i in range(len(d["items"]) - 1)))
     total = d["total"] if d else 0
     d = call("资讯搜索", "/articles/latest?q=AI")
-    check("搜索过滤生效", d and d["total"] < total and all("AI" in it["title"] or "ai" in it["title"].lower() for it in d["items"]),
+
+    def _hit(it):
+        # 与 API 搜索语义一致：标题或 AI 摘要 tags 任一命中（routes.py 2026-09-09 起）
+        tags = " ".join((it.get("summary") or {}).get("tags") or [])
+        return "AI" in it["title"] or "ai" in it["title"].lower() or "ai" in tags.lower()
+
+    check("搜索过滤生效", d and d["total"] < total and all(_hit(it) for it in d["items"]),
           f"{total}->{d['total'] if d else 0}")
     d = call("资讯频道+搜索组合", "/articles/latest?channel=智能时代&limit=5")
     check("组合筛选", d and all(it["channel"] == "智能时代" for it in d["items"]))

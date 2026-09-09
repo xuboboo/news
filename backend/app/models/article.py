@@ -20,7 +20,7 @@ class Article(Base):
     id = Column(Integer, primary_key=True)
     title = Column(String(512), nullable=False)
     url = Column(String(1024), nullable=False, unique=True, index=True)
-    channel = Column(String(64), nullable=False, index=True)   # 软件之家 / Win11之家 / Win10之家 / 智能时代
+    channel = Column(String(64), nullable=False, index=True)   # IT之家: 软件之家/Win11之家/Win10之家/智能时代；快科技: 桌面系统/电脑软件/移动应用/手机系统
     source = Column(String(64), nullable=False, default="IT之家")
     news_id = Column(String(64), index=True)                   # 原始站点文章 ID
     content = Column(Text, default="")
