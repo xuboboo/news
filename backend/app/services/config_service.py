@@ -27,6 +27,7 @@ ALLOWED_KEYS: dict[str, type] = {
     "stats_poll_batch": int,
     "sim_threshold": float,
     "keyword_jaccard_threshold": float,
+    "high_band_kw_floor": float,
     "cluster_lookback_hours": int,
     "admin_token": str,
     # —— 登录与会话 ——
@@ -55,6 +56,7 @@ CONFIG_RANGES: dict[str, tuple[int | float, int | float]] = {
     "crawler_interval_minutes": (1, 1440),
     "sim_threshold": (0, 1),
     "keyword_jaccard_threshold": (0, 1),
+    "high_band_kw_floor": (0, 1),
     "cluster_lookback_hours": (1, 720),
     "session_ttl_hours": (1, 8760),
     "session_idle_hours": (0, 8760),

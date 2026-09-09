@@ -26,3 +26,4 @@ logs/
 
 # TypeScript 增量构建产物（tsc --noEmit 也会写）
 frontend/tsconfig.tsbuildinfo
+backups/

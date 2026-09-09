@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     app_name: str = "华军软件园资讯雷达系统 API"
     version: str = "2.0.0"
 
+    # —— 运行环境（production = 启动时执行安全自检，见 get_settings）——
+    environment: str = "development"
+
     # —— 基础设施 ——
     database_url: str = "postgresql+psycopg://hjradar:hjradar@postgres:5432/hjradar"
     redis_url: str = "redis://redis:6379/0"
@@ -66,6 +69,7 @@ class Settings(BaseSettings):
     # —— 事件聚合（PRD：相似度 > 0.85 + 标题关键词 + 实体 + 发布时间）——
     sim_threshold: float = 0.85
     keyword_jaccard_threshold: float = 0.2
+    high_band_kw_floor: float = 0.1  # 高位带合并的最低关键词重合（跨来源佐证下限）
     cluster_window_hours: int = 48
     cluster_lookback_hours: int = 96
 
@@ -81,6 +85,29 @@ class Settings(BaseSettings):
     report_issue_epoch: str = "2026-04-15"  # 第 1 期基准日
 
 
+def _assert_production_safe(s: "Settings") -> None:
+    """ENVIRONMENT=production 的启动 fail-fast 自检（2026-09-09 审计）：
+    关键安全项必须显式收紧，禁止把开发默认值带进生产。任一不满足直接抛错拒绝启动。"""
+    if s.environment.strip().lower() != "production":
+        return
+    problems: list[str] = []
+    if not s.cookie_secure:
+        problems.append("cookie_secure 必须为 true（HTTPS 部署的会话 Cookie Secure 标记）")
+    if s.enable_docs:
+        problems.append("enable_docs 必须为 false（不对外公开 /docs /redoc /openapi.json）")
+    if s.admin_no_auth:
+        problems.append("admin_no_auth 必须为 false（管理面板不得免鉴权暴露）")
+    if ":hjradar@" in s.database_url:
+        problems.append("database_url 仍在使用默认口令 hjradar，必须更换")
+    if problems:
+        raise RuntimeError(
+            "ENVIRONMENT=production 安全自检未通过（禁止弱默认值上线）：\n  - "
+            + "\n  - ".join(problems)
+        )
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    s = Settings()
+    _assert_production_safe(s)
+    return s
