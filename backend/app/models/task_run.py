@@ -19,7 +19,7 @@ class TaskRun(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(64), nullable=False, index=True)   # crawler / event / report
     trigger = Column(String(16), nullable=False, default="auto")  # auto / manual
-    status = Column(String(16), nullable=False, default="running")  # running / success / failed
+    status = Column(String(16), nullable=False, default="running")  # running / success / degraded / failed / stale
     started_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
     finished_at = Column(DateTime(timezone=True), nullable=True)
     duration_ms = Column(Integer, nullable=True)

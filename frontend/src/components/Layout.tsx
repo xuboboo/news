@@ -106,6 +106,7 @@ function computeSyncMins(): number | null {
 
 function SyncStatus() {
   useDataVersion(); // 订阅后台同步通知：每轮刷新/断线恢复立即重渲染，相对时间随之新鲜
+  const bootReady = useBootstrapReady();
   const [, setTick] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => setTick((x) => x + 1), 15000);
@@ -137,10 +138,16 @@ function SyncStatus() {
             </span>
           </>
         )
-      ) : (
+      ) : bootReady ? (
         <span className="chip bg-amber-500/10 text-amber-300 border border-amber-400/30">
           <AlertTriangle className="h-3 w-3" />
           后端未连接 · 自动重连中
+        </span>
+      ) : (
+        // 引导进行中：中性「连接中」态，不闪「后端未连接」（2026-09-09 审计 4.3）
+        <span className="chip bg-slate-500/10 text-slate-400 border border-slate-500/30">
+          <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-pulse" />
+          正在连接后端…
         </span>
       )}
     </>

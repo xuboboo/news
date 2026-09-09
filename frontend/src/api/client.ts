@@ -445,8 +445,15 @@ export async function refreshFromApi(): Promise<boolean> {
     });
     ARTICLES_WITH_SCORE = [...merged.values()];
     prevArticleIds = ARTICLES_WITH_SCORE.map((a) => a.id);
-    EVENTS_WITH_SCORE = mapped;
-    prevEventIds = mapped.map((e) => e.id);
+    // 事件列表同理：loadMoreEvents 追加的页尾事件在增量刷新时保留
+    const evExtras = EVENTS_WITH_SCORE.slice(BASE_EVENT_PAGE_LIMIT);
+    const mergedEvents = new Map<string, EventWithScore>();
+    mapped.forEach((e) => mergedEvents.set(e.id, e));
+    evExtras.forEach((e) => {
+      if (!mergedEvents.has(e.id)) mergedEvents.set(e.id, e);
+    });
+    EVENTS_WITH_SCORE = [...mergedEvents.values()];
+    prevEventIds = EVENTS_WITH_SCORE.map((e) => e.id);
 
     LAST_SYNC = Date.now();
     syncFailures = 0;
@@ -558,6 +565,27 @@ export async function fetchHotBoard(
 // ———————————————————— 最新资讯：加载更多（offset 分页） ————————————————————
 
 const BASE_PAGE_LIMIT = 400;
+const BASE_EVENT_PAGE_LIMIT = 100;
+
+/** 追加加载更早的事件（offset 分页）。返回本轮新增个数（0 = 没有更多了）。
+ *  页尾事件在 60s 增量刷新时保留（去重合并）；事件缓存补全后 eventById/
+ *  eventsForArticle 的关联反查也随之完整。 */
+export async function loadMoreEvents(): Promise<number> {
+  if (!apiMode) return 0;
+  const offset = EVENTS_WITH_SCORE.length;
+  const raw = await fetchJSON(`/events?limit=${BASE_EVENT_PAGE_LIMIT}&offset=${offset}`, 10000);
+  const articleMap = new Map<string, ArticleWithScore>(
+    ARTICLES_WITH_SCORE.map((a) => [a.id, a] as [string, ArticleWithScore])
+  );
+  const mappedEvents: EventWithScore[] = (raw.items ?? []).map((e: any) => mapApiEvent(e, articleMap));
+  const known = new Set(EVENTS_WITH_SCORE.map((e) => e.id));
+  const fresh = mappedEvents.filter((e) => !known.has(e.id));
+  if (fresh.length > 0) {
+    EVENTS_WITH_SCORE = [...EVENTS_WITH_SCORE, ...fresh];
+    notify();
+  }
+  return fresh.length;
+}
 
 /** 追加加载更早的文章（offset 分页）。返回本轮新增篇数（0 = 没有更多了）。
  *  新增的「页尾文章」在 60s 增量刷新时会被保留（去重合并），不丢页。 */

@@ -70,6 +70,7 @@ import {
   eventById,
   eventsForArticle,
   loadMoreArticles,
+  loadMoreEvents,
   ARTICLES_WITH_SCORE,
   EVENTS_WITH_SCORE,
 } from './client';
@@ -162,5 +163,26 @@ describe('loadMoreArticles', () => {
     });
     expect(await loadMoreArticles()).toBe(1);
     expect(ARTICLES_WITH_SCORE.map((a) => a.id)).toEqual(['1', '2']);
+  });
+});
+
+describe('loadMoreEvents', () => {
+  it('无新增时返回 0；追加事件进入全局列表且不重复', async () => {
+    await boot();
+    expect(EVENTS_WITH_SCORE.map((e) => e.id)).toEqual(['e3']);
+    const event4 = { ...EVENT_3, id: 4, title: '更早的事件' };
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/events?limit=100&offset=1')) return jsonResponse({ items: [event4], total: 2 });
+      if (url.includes('/health')) return jsonResponse({ status: 'ok' });
+      if (url.includes('/articles/latest')) return jsonResponse({ items: [ARTICLE_1], total: 1 });
+      if (url.includes('/events')) return jsonResponse({ items: [EVENT_3] });
+      return jsonResponse({});
+    });
+    expect(await loadMoreEvents()).toBe(1);
+    expect(EVENTS_WITH_SCORE.map((e) => e.id)).toEqual(['e3', 'e4']);
+    // 追加后 eventById 可命中新事件（关联反查缓存补全）
+    expect(eventById('e4')?.title).toBe('更早的事件');
+    expect(await loadMoreEvents()).toBe(0);
   });
 });

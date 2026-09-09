@@ -234,6 +234,37 @@ def test_build_report_event_stats_window_scoped(pg):
         db.close()
 
 
+# ———— generate_daily_report：期号递增与同日幂等（审计：日报真实生成链路无集成测试） ————
+
+def test_generate_daily_report_issue_no_and_idempotency(pg):
+    """同日重复生成更新同一行（advisory lock + 更新分支，issue_no 不变）；
+    次日生成期号严格 +1（issue_no_for 以 report_issue_epoch 为基准）。"""
+    from app.services.report_service import generate_daily_report
+
+    db = pg()
+    try:
+        day = (NOW - timedelta(days=2)).date()
+        row1 = generate_daily_report(db, day)
+        issue1 = row1.issue_no
+        assert row1.date == day
+
+        # 同日重复生成：幂等——同一行、同期号（手动重触发/定时撞车不产生重复期）
+        row2 = generate_daily_report(db, day)
+        assert row2.id == row1.id
+        assert row2.issue_no == issue1
+
+        # 次日：新行 + 期号递增
+        row3 = generate_daily_report(db, day + timedelta(days=1))
+        assert row3.id != row1.id
+        assert row3.issue_no == issue1 + 1
+
+        # 跳一天生成：期号按日期差递增（不要求连续生成）
+        row4 = generate_daily_report(db, day + timedelta(days=3))
+        assert row4.issue_no == issue1 + 3
+    finally:
+        db.close()
+
+
 # ———— /hot/board：窗口参数与稳定排序（审计 P1/P2） ————
 
 def test_hot_board_windows_and_stable_order(pg):
