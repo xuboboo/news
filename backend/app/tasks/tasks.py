@@ -184,6 +184,24 @@ def report_task(date_str: str | None = None, trigger: str = "auto"):
             db.close()
 
 
+@celery_app.task(name="alert_watch_task")
+def alert_watch_task():
+    """告警巡检（beat 每 5 分钟）：Redis/Worker/任务停摆/失败未恢复 → webhook 推送。
+
+    不写 task_run：每 5 分钟一行会把任务执行记录表刷屏；结果只进日志。
+    """
+    from app.services.alert_service import watch
+
+    db = new_session()
+    try:
+        result = watch(db)
+        if result["problems"]:
+            logger.info("alert_watch: %s notified=%s", result["problems"], result["notified"])
+        return result
+    finally:
+        db.close()
+
+
 @celery_app.task(name="auth_cleanup_task")
 def auth_cleanup_task():
     """每周清理：物理删除过期/已吊销会话 + 超过保留期的审计日志 + 超保留期的任务运行记录。

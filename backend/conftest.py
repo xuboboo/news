@@ -19,8 +19,8 @@ from app.auth import passwords, throttle
 from app.core.db import Base, get_db
 from app.main import app
 
-# 用户/租户域测试所需的最小表集（不含 article 等需要 pgvector 的表）
-_TEST_TABLES = ("tenant", "app_user", "user_session", "audit_log", "system_setting")
+# 用户/租户域 + 运维监控域测试所需的最小表集（不含 article 等需要 pgvector 的表）
+_TEST_TABLES = ("tenant", "app_user", "user_session", "audit_log", "system_setting", "task_run")
 
 # 统一测试密码（弱口令表会拒绝 12345678 等，此串不在其中）
 PW = "Str0ng-Test-Pw!"

@@ -1,5 +1,12 @@
 name: hj-tech-radar
 
+# 日志轮转：json-file 驱动默认无上限，长期运行会撑爆宿主机磁盘
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # ---------- 数据层 ----------
   postgres:
@@ -19,6 +26,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    logging: *default-logging
 
   redis:
     image: redis:7-alpine
@@ -29,6 +37,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    logging: *default-logging
 
   # ---------- 后端 API ----------
   backend:
@@ -43,31 +52,55 @@ services:
       # 仅绑定本机回环：公网入口统一走 nginx(80)，避免管理接口直接暴露
       - "127.0.0.1:18000:8000"
     restart: unless-stopped
+    # slim 镜像无 curl，用 python 标准库探活（顺带验证 DB 连路——/health 查库）
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v2/health', timeout=5).status == 200 else 1)\""]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
 
   # ---------- 任务队列 ----------
   worker:        # 默认队列：事件聚合 / 日报
     build: ./backend
     env_file: ./backend/.env
-    command: celery -A app.tasks.celery_app worker -Q default -c 4 --loglevel=INFO
+    # max-tasks-per-child：numpy/jieba 等库的内存碎片随任务数累积，定期回收进程
+    command: celery -A app.tasks.celery_app worker -Q default -c 4 --loglevel=INFO --max-tasks-per-child=100
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
+    # worker 名默认为 celery@<容器主机名>；无应答时 celery 以非零码退出
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping --timeout=10 -d celery@$$HOSTNAME"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
 
   ai-worker:     # AI 队列：摘要 / Embedding
     build: ./backend
     env_file: ./backend/.env
-    command: celery -A app.tasks.celery_app worker -Q ai -c 2 --loglevel=INFO
+    command: celery -A app.tasks.celery_app worker -Q ai -c 2 --loglevel=INFO --max-tasks-per-child=100
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping --timeout=10 -d celery@$$HOSTNAME"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
 
-  beat:          # 定时调度：事件聚类 10min / 日报每日 08:00（生成昨日报告）
+  beat:          # 定时调度：事件聚类 10min / 告警巡检 5min / 日报每日 08:00
     build: ./backend
     env_file: ./backend/.env
     command: celery -A app.tasks.celery_app beat --loglevel=INFO
@@ -75,6 +108,15 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    # beat 不响应 inspect ping：探测 /proc 里 beat 主进程是否存活（slim 镜像无 pgrep）。
+    # 必须排除探测进程自身——healthcheck 命令行里就带 'beat' 字样，不排除会恒真
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,sys; me=str(os.getpid()); sys.exit(0 if any(b'beat' in open(f'/proc/{p}/cmdline','rb').read() for p in os.listdir('/proc') if p.isdigit() and p != me and os.path.exists(f'/proc/{p}/cmdline')) else 1)\""]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *default-logging
 
   # ---------- 采集服务 ----------
   crawler:       # 常驻循环：多来源采集（IT之家 / 快科技，crawler/multi.py）→ 入库 → 派发 AI 任务
@@ -87,15 +129,33 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    # 采集循环可能卡死而非崩溃（restart 救不了）：loop 每轮写心跳文件，
+    # 超过「当轮间隔 ×3 + 5 分钟」无心跳判为 unhealthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import json,time,sys,os; p='/tmp/crawler-loop-heartbeat'; sys.exit(0 if os.path.exists(p) and time.time()-json.load(open(p))['ts'] < (max(1,json.load(open(p)).get('interval_min',30))*3+5)*60 else 1)\""]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 5m
+    logging: *default-logging
 
   # ---------- 前端 + Nginx ----------
   nginx:
     build: ./frontend
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "80:80"
     restart: unless-stopped
+    # 探活走本机反代链路：nginx → backend → /health，代理断了也能暴露
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/api/v2/health || exit 1"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 20s
+    logging: *default-logging
 
 volumes:
   pgdata:

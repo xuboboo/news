@@ -1,4 +1,5 @@
 """爬虫常驻循环（docker-compose 的 crawler 服务入口）。"""
+import json
 import logging
 import time
 
@@ -9,6 +10,19 @@ from app.services.taskrun_service import record_task_run
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("crawler-loop")
+
+# 心跳文件：每轮结束写入时间戳与当轮间隔，供容器 healthcheck 判断循环悬挂
+# （restart 只能救崩溃，救不了卡死在无超时网络调用上的进程）。
+HEARTBEAT_FILE = "/tmp/crawler-loop-heartbeat"
+
+
+def _write_heartbeat(interval_min: int) -> None:
+    try:
+        with open(HEARTBEAT_FILE, "w", encoding="utf-8") as f:
+            json.dump({"ts": time.time(), "interval_min": interval_min}, f)
+    except OSError:
+        pass  # 心跳写不进不影响采集（如只读 fs），healthcheck 会退化为 unhealthy 提示
+
 
 def main():
     s = get_settings()
@@ -61,6 +75,7 @@ def main():
                     release_lock(LOCK_CRAWLER)
         except Exception:
             logger.exception("crawl round failed")
+        _write_heartbeat(max(1, interval_min))
         time.sleep(max(1, interval_min) * 60)
 
 

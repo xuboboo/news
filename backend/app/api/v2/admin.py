@@ -8,17 +8,17 @@ ADMIN_NO_AUTH=true 时直接放行（仅限内网，公网必须关闭）。
 import csv
 import hmac
 import io
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
-import redis as redis_lib
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
-from app.auth.deps import attach_token_principal, authenticate_session, current_user_of
+from app.auth.deps import attach_token_principal, authenticate_session, current_user_of, require_json_mutation
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.models.article import Article
@@ -29,9 +29,12 @@ from app.models.usage import AiUsageLog, ModelPrice
 from app.models.user import ROLE_SUPER_ADMIN, User
 from app.services import audit_service, config_service, usage_service
 from app.services.embedding_service import get_embedding_fingerprint
+from app.services.infra_status import cadence_warnings, celery_workers_ping, redis_ping
 from app.utils.url_guard import UrlNotAllowed, assert_public_http_url
 
-router = APIRouter(prefix="/api/v2/admin")
+# 变更类接口统一过 CSRF 防线（X-Requested-With + JSON body）：
+# 此前防线只挂在 auth/users 路由，admin 的 PUT/POST（config/test/prices）不在防线内。
+router = APIRouter(prefix="/api/v2/admin", dependencies=[Depends(require_json_mutation)])
 
 
 # ———————————————————— 鉴权 ————————————————————
@@ -240,14 +243,14 @@ def test_embedding(payload: dict | None = None, request: Request = None, db: Ses
 
 # ———————————————————— 运行状态总览 ————————————————————
 
-def _collect_stats(db: Session) -> dict:
+def _collect_stats(db: Session, crawler_last_started: datetime | None = None) -> dict:
     since = datetime.now(timezone.utc) - timedelta(hours=24)
     total = db.query(func.count(Article.id)).scalar() or 0
     summarized = db.query(func.count(ArticleSummary.id)).scalar() or 0
     embedded = db.query(func.count(Article.id)).filter(Article.embedding.isnot(None)).scalar() or 0
     events_active = db.query(func.count(HotEvent.id)).filter(HotEvent.status != "已平息").scalar() or 0
     articles_24h = db.query(func.count(Article.id)).filter(Article.publish_time >= since).scalar() or 0
-    last_crawl = db.query(func.max(Article.created_at)).scalar()
+    last_ingest = db.query(func.max(Article.created_at)).scalar()
     return {
         "articles_total": total,
         "articles_summarized": summarized,
@@ -255,15 +258,46 @@ def _collect_stats(db: Session) -> dict:
         "events_active": events_active,
         "articles_24h": articles_24h,
         "ai_coverage": round(summarized / total * 100, 1) if total else 0,
-        "last_crawl": last_crawl.isoformat() if last_crawl else None,
+        # 「最近采集」以 TaskRun(crawler) 最近一轮为准：用 max(created_at) 当采集时间
+        # 会在来源断供/连续 0 新文章时越来越旧，误报「采集停了」；入库时间另列 last_ingest
+        "last_crawl": crawler_last_started.isoformat() if crawler_last_started else None,
+        "last_ingest": last_ingest.isoformat() if last_ingest else None,
     }
 
 
+# /status 结果短缓存：探测（Redis/Celery 广播 ping）+ 多个全表 COUNT 偏重，
+# 多管理员/多标签页每 30s 轮询会线性放大；10s 缓存对运维面板足够新鲜
+_STATUS_CACHE: dict = {"t": 0.0, "data": None}
+_STATUS_LOCK = threading.Lock()
+_STATUS_TTL_SECONDS = 10.0
+
+
 @router.get("/status", dependencies=[Depends(require_admin)])
-def admin_status(db: Session = Depends(get_db)):
-    """运维总览：基础设施连通性 + worker 存活 + 数据水位 + 最近任务。"""
+def admin_status(
+    fresh: bool = Query(False, description="跳过缓存强制重算"),
+    db: Session = Depends(get_db),
+):
+    """运维总览：基础设施连通性 + worker 存活 + 数据水位 + 任务节奏心跳 + 最近任务。"""
+    if not fresh:
+        with _STATUS_LOCK:
+            cached = _STATUS_CACHE["data"]
+            if cached is not None and time.monotonic() - _STATUS_CACHE["t"] < _STATUS_TTL_SECONDS:
+                return cached
+    data = _compute_status(db)
+    with _STATUS_LOCK:
+        _STATUS_CACHE["t"] = time.monotonic()
+        _STATUS_CACHE["data"] = data
+    return data
+
+
+def _compute_status(db: Session) -> dict:
     settings = get_settings()
-    s = _collect_stats(db)
+
+    # 最近一次爬虫运行记录（先取：「最近采集」口径与下方 crawler 字段共用）
+    last_run = (
+        db.query(TaskRun).filter(TaskRun.name == "crawler").order_by(TaskRun.id.desc()).first()
+    )
+    s = _collect_stats(db, last_run.started_at if last_run else None)
 
     # DB
     db_ok = True
@@ -272,26 +306,11 @@ def admin_status(db: Session = Depends(get_db)):
     except Exception:
         db_ok = False
 
-    # Redis
-    redis_ok, redis_latency = False, None
-    try:
-        t0 = time.monotonic()
-        client = redis_lib.Redis.from_url(settings.redis_url, socket_connect_timeout=2, socket_timeout=2)
-        redis_ok = bool(client.ping())
-        redis_latency = int((time.monotonic() - t0) * 1000)
-    except Exception:
-        redis_ok = False
+    # Redis（模块级共享连接池，复用连接不再每次新建 client）
+    redis_ok, redis_latency = redis_ping()
 
-    # Celery worker（default 队列 worker + ai 队列 worker 都会响应 ping）
-    workers: list[str] = []
-    workers_error: str | None = None
-    try:
-        from app.tasks.celery_app import celery_app
-        pong = celery_app.control.inspect(timeout=2).ping()
-        if isinstance(pong, dict):
-            workers = sorted(pong.keys())
-    except Exception as exc:
-        workers_error = str(exc)[:200]
+    # Celery worker（default 队列 worker + ai 队列 worker 都会响应 ping；4s 超时 + 空结果重试一次）
+    workers, workers_error = celery_workers_ping()
 
     # AI 配置是否就绪
     def _configured(prefix: str) -> bool:
@@ -313,10 +332,6 @@ def admin_status(db: Session = Depends(get_db)):
     current_fp = f"{current_embedding}|{settings.embed_dim}"
     embedding_stale = bool(fingerprint and fingerprint != current_fp)
 
-    # 最近一次爬虫运行记录
-    last_run = (
-        db.query(TaskRun).filter(TaskRun.name == "crawler").order_by(TaskRun.id.desc()).first()
-    )
     # 最近一次失败任务：若同任务在失败后已有成功运行，视为已恢复，不再告警
     last_failed = (
         db.query(TaskRun).filter(TaskRun.status == "failed").order_by(TaskRun.id.desc()).first()
@@ -345,6 +360,14 @@ def admin_status(db: Session = Depends(get_db)):
         stats_enabled = config_service.get_effective(db, "stats_poll_enabled")
     except Exception:
         stats_enabled = None
+
+    # 任务节奏心跳：beat 是单点且 inspect.ping() 看不见它——beat 挂掉后 worker 仍在线、
+    # 面板全绿，但定时任务（聚类/轮询/日报）全部停摆。用「最近一次运行是否超出预期节奏」
+    # 感知调度停摆；stats 被面板热停（enabled=false）时不产生记录，不参与判停。
+    interval_minutes = config_service.get_effective(db, "crawler_interval_minutes")
+    heartbeat = cadence_warnings(
+        db, interval_minutes, skip={"stats"} if stats_enabled is False else set()
+    )
     due_now = (
         db.query(func.count(Article.id))
         .filter(stats_source_filter(), Article.stats_next_poll_at.isnot(None), Article.stats_next_poll_at <= now_utc)
@@ -399,7 +422,7 @@ def admin_status(db: Session = Depends(get_db)):
             }
             if last_run
             else None,
-            "interval_minutes": config_service.get_effective(db, "crawler_interval_minutes"),
+            "interval_minutes": interval_minutes,
         },
         "stats_poll": {
             "enabled": stats_enabled,
@@ -417,6 +440,7 @@ def admin_status(db: Session = Depends(get_db)):
             if last_stats_run
             else None,
         },
+        "heartbeat": heartbeat,
         "stats": s,
         "last_failed_task": {
             "name": last_failed.name,

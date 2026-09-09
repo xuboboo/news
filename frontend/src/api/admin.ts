@@ -89,6 +89,29 @@ export interface AdminStatus {
     } | null;
     interval_minutes: number;
   };
+  /** 互动数据轮询水位（到期/待回填/已放弃/近 24h 轮询量） */
+  stats_poll: {
+    enabled: boolean | null;
+    due_now: number;
+    pending_backfill: number;
+    gave_up: number;
+    polled_24h: number;
+    last_run: {
+      status: string;
+      trigger: string;
+      started_at: string | null;
+      duration_ms: number | null;
+      detail: string | null;
+    } | null;
+  };
+  /** 任务节奏心跳：超出预期节奏仍未运行的任务（beat 停摆时这里会亮） */
+  heartbeat: {
+    name: string;
+    label: string;
+    last_run_at: string;
+    age_minutes: number;
+    threshold_minutes: number;
+  }[];
   stats: {
     articles_total: number;
     articles_summarized: number;
@@ -96,7 +119,10 @@ export interface AdminStatus {
     events_active: number;
     articles_24h: number;
     ai_coverage: number;
+    /** 最近一轮采集（TaskRun 口径：采集正常但 0 新文章时不会变旧） */
     last_crawl: string | null;
+    /** 最近一篇文章入库时间 */
+    last_ingest: string | null;
   };
   last_failed_task: {
     name: string;
@@ -106,16 +132,20 @@ export interface AdminStatus {
   } | null;
 }
 
-export const getStatus = () => request<AdminStatus>('/status');
+/** fresh=true 跳过后端 10s 缓存强制重算（手动刷新按钮用） */
+export const getStatus = (fresh = false) =>
+  request<AdminStatus>(`/status${fresh ? '?fresh=true' : ''}`);
 
 // ———————————————————— 运行时配置 ————————————————————
 
 export interface ConfigItem {
   value: string;
-  /** 生效值原文；敏感键（api_key / admin_token）后端不再回传明文，恒为 null */
+  /** 生效值原文；敏感键（api_key / admin_token / alert_webhook_url）后端不再回传明文，恒为 null */
   raw: string | null;
   source: 'env' | 'db';
   overridden: boolean;
+  /** 配置类型：bool 渲染开关，int/float 渲染数字框，string 渲染文本框 */
+  type: 'str' | 'int' | 'float' | 'bool';
 }
 
 export interface ConfigView {
@@ -165,9 +195,10 @@ export interface TaskRunItem {
 export const getTaskRuns = (limit = 50) =>
   request<{ items: TaskRunItem[] }>(`/task-runs?limit=${limit}`);
 
-// 触发接口挂在 /api/v2/admin/crawl|events|report（routes.py），与上面同一前缀
+// 触发接口挂在 /api/v2/admin/crawl|events|stats|report（routes.py），与上面同一前缀
 export const triggerCrawl = () => request<{ queued: boolean; task_id: string }>('/crawl', { method: 'POST' });
 export const triggerEvents = () => request<{ queued: boolean; task_id: string }>('/events', { method: 'POST' });
+export const triggerStats = () => request<{ queued: boolean; task_id: string }>('/stats', { method: 'POST' });
 export const triggerReport = (date?: string) =>
   request<{ queued: boolean; task_id: string }>(`/report${date ? `?date=${date}` : ''}`, { method: 'POST' });
 

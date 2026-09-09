@@ -1,6 +1,12 @@
 """运行时配置服务：DB 覆盖（system_setting 表）优先，.env 为默认值。
 
 管理面板修改后立即生效（API 与 Celery worker 每次调用都从 DB 读取），无需重建镜像。
+
+校验分两层：
+- 类型转换 _coerce：int/float/bool；bool 只接受明确的真假拼写，其余值一律拒绝
+  （此前 "flase" 之类的手滑会被静默当作 false，曾可能悄悄关闭 cookie_secure）。
+- 范围校验 CONFIG_RANGES：此前只存在于前端（Admin.tsx NUMERIC_RULES），
+  拿到 token 的直连调用可写入 sim_threshold=-1 之类的破坏值，现前后端同规则。
 """
 from sqlalchemy.orm import Session
 
@@ -32,31 +38,86 @@ ALLOWED_KEYS: dict[str, type] = {
     "login_ip_throttle_window_seconds": int,
     "cookie_secure": bool,
     "audit_retention_days": int,
+    # —— 告警通知（alert_service 巡检推送；URL 留空 = 关闭） ——
+    "alert_webhook_url": str,
+    "alert_webhook_style": str,
+    # —— 日报推送（report_push；总开关开 + 任一 URL 非空才推） ——
+    "report_push_enabled": bool,
+    "report_push_wecom_webhook_url": str,
+    "report_push_feishu_webhook_url": str,
+    "report_push_feishu_secret": str,
 }
 
-# 脱敏展示的字段
-SENSITIVE_KEYS = {"llm_api_key", "embedding_api_key", "admin_token"}
-
-# 整数键下界：面板误设过小值会造成实际损害（如保留期 1 天 → 周清理一次性抹掉近半年审计）
-MIN_INT_VALUES = {
-    "audit_retention_days": 30,
-    # IP 限速过紧会把整个出口 NAT 的正常用户挡在登录之外
-    "login_ip_throttle_max": 5,
-    "login_ip_throttle_window_seconds": 60,
-    # 空闲超时 0 = 关闭（允许），>0 时至少 1 小时
-    "session_idle_hours": 0,
+# 数值键的合法区间（min, max）：与前端 NUMERIC_RULES 保持一致。
+# 下界取严防实际损害：保留期过短会被周清理一次性抹掉大量审计；
+# IP 限速过紧会把整个出口 NAT 的正常用户挡在登录之外；空闲超时 0 = 关闭（允许）
+CONFIG_RANGES: dict[str, tuple[int | float, int | float]] = {
+    "crawler_interval_minutes": (1, 1440),
+    "sim_threshold": (0, 1),
+    "keyword_jaccard_threshold": (0, 1),
+    "cluster_lookback_hours": (1, 720),
+    "session_ttl_hours": (1, 8760),
+    "session_idle_hours": (0, 8760),
+    "login_max_attempts": (1, 100),
+    "login_lock_minutes": (1, 1440),
+    "login_ip_throttle_max": (5, 10000),
+    "login_ip_throttle_window_seconds": (60, 86400),
+    "audit_retention_days": (30, 3650),
+    "stats_poll_batch": (1, 100),
 }
+
+# 脱敏展示的字段（alert_webhook_url 通常内嵌钉钉/企微机器人 token）
+SENSITIVE_KEYS = {
+    "llm_api_key",
+    "embedding_api_key",
+    "admin_token",
+    "alert_webhook_url",
+    "report_push_wecom_webhook_url",
+    "report_push_feishu_webhook_url",
+    "report_push_feishu_secret",
+}
+
+_TRUE_SPELLINGS = {"1", "true", "yes", "on"}
+_FALSE_SPELLINGS = {"0", "false", "no", "off"}
+
+_WEBHOOK_STYLES = {"wecom", "dingtalk", "feishu", "raw"}
 
 
 def _coerce(key: str, value: str):
     t = ALLOWED_KEYS[key]
+    raw = str(value).strip()
     if t is int:
-        return str(int(str(value).strip()))
+        n = int(float(raw))
+        lo, hi = CONFIG_RANGES[key]
+        if not (lo <= n <= hi):
+            raise ValueError(f"{key} 需为 {lo} ~ {hi} 之间的整数")
+        return str(n)
     if t is float:
-        return str(float(str(value).strip()))
+        n = float(raw)
+        lo, hi = CONFIG_RANGES[key]
+        if not (lo <= n <= hi):
+            raise ValueError(f"{key} 需为 {lo} ~ {hi} 之间的数值")
+        return str(n)
     if t is bool:
-        return "true" if str(value).strip().lower() in ("1", "true", "yes", "on") else "false"
-    return str(value).strip()
+        low = raw.lower()
+        if low in _TRUE_SPELLINGS:
+            return "true"
+        if low in _FALSE_SPELLINGS:
+            return "false"
+        raise ValueError(f"{key} 仅接受 true/false（收到 {raw[:32]!r}）")
+    return raw
+
+
+def _validate_str(key: str, value: str) -> None:
+    """字符串键的额外约束（类型转换之外）。"""
+    if key == "alert_webhook_style" and value not in _WEBHOOK_STYLES:
+        raise ValueError(f"alert_webhook_style 仅支持 {'/'.join(sorted(_WEBHOOK_STYLES))}")
+    if key == "alert_webhook_url" and not value.lower().startswith(("http://", "https://")):
+        raise ValueError("alert_webhook_url 需为 http(s):// 开头的完整地址")
+    if key in ("report_push_wecom_webhook_url", "report_push_feishu_webhook_url") and not value.lower().startswith(
+        ("http://", "https://")
+    ):
+        raise ValueError(f"{key} 需为 http(s):// 开头的完整机器人 webhook 地址")
 
 
 def get_overrides(db: Session) -> dict[str, str]:
@@ -79,7 +140,7 @@ def get_effective(db: Session, key: str):
     if t is float:
         return float(raw)
     if t is bool:
-        return raw.strip().lower() in ("1", "true", "yes", "on")
+        return raw.strip().lower() in _TRUE_SPELLINGS
     return raw
 
 
@@ -118,9 +179,8 @@ def set_overrides(db: Session, data: dict[str, str]) -> list[str]:
                 updated.append(key)
         else:
             clean = _coerce(key, raw)
-            floor = MIN_INT_VALUES.get(key)
-            if floor is not None and int(clean) < floor:
-                raise ValueError(f"{key} 不能小于 {floor}（过低会造成不可逆的数据损失）")
+            if ALLOWED_KEYS[key] is str:
+                _validate_str(key, clean)
             if row is None:
                 db.add(SystemSetting(key=key, value=clean))
             else:
@@ -131,17 +191,22 @@ def set_overrides(db: Session, data: dict[str, str]) -> list[str]:
 
 
 def masked_view(db: Session) -> dict:
-    """管理面板展示：生效值 + 来源（env/db），敏感值脱敏展示。
+    """管理面板展示：生效值 + 来源（env/db）+ 类型，敏感值脱敏展示。
 
-    敏感键（api_key / admin_token）的 raw 一律返回 None，明文不出后端：
+    敏感键（api_key / admin_token / alert_webhook_url）的 raw 一律返回 None，明文不出后端：
     编辑语义由前端配合——留空 = 不修改，填新值 = 覆盖，显式清除 = 发空串回落 .env。
+    type 字段供前端渲染控件（bool → 开关，其余 → 文本框）。
     """
     overrides = get_overrides(db)
     out = {}
-    for key in ALLOWED_KEYS:
+    for key, key_type in ALLOWED_KEYS.items():
         default = str(getattr(get_settings(), key, ""))
         override = overrides.get(key, "")
         effective = override if override != "" else default
+        if key_type is bool:
+            # Settings 的 Python bool 经 str() 会变成 'True'/'False'；
+            # 统一归一化为小写，前端开关/编辑比较都按 'true'/'false'
+            effective = "true" if effective.strip().lower() in _TRUE_SPELLINGS else "false"
         source = "db" if override != "" else "env"
         if key in SENSITIVE_KEYS and effective:
             shown = effective[:4] + "****" + effective[-4:] if len(effective) > 8 else "****"
@@ -154,5 +219,6 @@ def masked_view(db: Session) -> dict:
             "raw": raw,
             "source": source,
             "overridden": override != "",
+            "type": key_type.__name__,
         }
     return {"config": out, "allowlist": sorted(ALLOWED_KEYS), "sensitive": sorted(SENSITIVE_KEYS)}

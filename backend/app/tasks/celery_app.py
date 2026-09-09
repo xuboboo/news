@@ -25,6 +25,10 @@ celery_app.conf.update(
     # acks_late 下，任务执行超过 visibility_timeout 会被 broker 视为未消费而重复投递；
     # event_task 内逐事件串行调 LLM（每个最长 60s），放宽到 4h
     broker_transport_options={"visibility_timeout": 4 * 3600},
+    # 硬上限 1h：卡死任务（LLM 悬挂/死锁）不再永久占住 worker 槽位，
+    # 也保证任务在 4h visibility_timeout 内结束，不会因超时重投而重复执行
+    task_soft_time_limit=55 * 60,
+    task_time_limit=3600,
     # 路由：AI 处理走 ai 队列（由 ai-worker 消费），其余走 default
     task_routes={
         "summary_task": {"queue": "ai"},
@@ -45,6 +49,11 @@ celery_app.conf.update(
             "daily-report-0800": {
                 "task": "report_task",
                 "schedule": crontab(hour=8, minute=0),
+            },
+            # 告警巡检：Redis/Worker/任务停摆/失败未恢复 → webhook 推送（面板可配 URL，留空关闭）
+            "alert-watch-every-5min": {
+                "task": "alert_watch_task",
+                "schedule": crontab(minute="*/5"),
             },
             # 每周一 03:30（北京时间）：清理过期会话与超保留期审计日志
             "auth-cleanup-weekly": {

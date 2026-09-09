@@ -16,13 +16,16 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.algorithms.hot_score import hot_score, hot_score_expr
 from app.api.v2.admin import require_admin
+from app.auth.deps import require_json_mutation
 from app.core.db import get_db
 from app.models.article import Article
 from app.models.event import EventArticle, HotEvent
 from app.models.report import DailyReport
 from app.models.summary import ArticleSummary
 
-router = APIRouter(prefix="/api/v2")
+# 变更类接口（/admin/crawl|events|stats|report 触发等 POST）统一过 CSRF 防线；
+# GET/HEAD/OPTIONS 在守卫内部直接放行，业务读接口不受影响
+router = APIRouter(prefix="/api/v2", dependencies=[Depends(require_json_mutation)])
 
 
 def _tz(t: datetime) -> datetime:

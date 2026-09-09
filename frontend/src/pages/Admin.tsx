@@ -1,5 +1,5 @@
 /**
- * 运维监控页：运行状态总览 / 运行时配置（含连通性测试）/ 任务执行记录 / 手动触发。
+ * 运维监控页：运行状态总览（含任务节奏心跳）/ 运行时配置（含连通性测试）/ 任务执行记录 / 手动触发。
  * 数据源：/api/v2/admin/*（见 backend/app/api/v2/admin.py）。
  * 鉴权：走全局登录会话（RequireAuth 已保证已登录），本页仅平台超管可见。
  */
@@ -39,6 +39,7 @@ import {
   triggerCrawl,
   triggerEvents,
   triggerReport,
+  triggerStats,
 } from '../api/admin';
 
 const FIELD_LABELS: Record<string, string> = {
@@ -50,30 +51,59 @@ const FIELD_LABELS: Record<string, string> = {
   embedding_model: 'Embedding 模型',
   crawler_interval_minutes: '采集间隔（分钟）',
   sim_threshold: '事件聚合相似度阈值',
-  keyword_jaccard_threshold: '事件聚合标题关键词阈值',
+  keyword_jaccard_threshold: '标题关键词 Jaccard 阈值',
   cluster_lookback_hours: '聚合回看窗口（小时）',
   admin_token: '管理后门 Token',
   session_ttl_hours: '会话有效期（小时）',
+  session_idle_hours: '会话空闲超时（小时，0 = 不限制）',
   login_max_attempts: '登录失败锁定阈值（次）',
   login_lock_minutes: '登录锁定时长（分钟）',
+  login_ip_throttle_max: '单 IP 登录尝试上限（窗口内）',
+  login_ip_throttle_window_seconds: 'IP 限速窗口（秒）',
   cookie_secure: 'Cookie Secure（HTTPS 必开）',
   audit_retention_days: '审计日志保留（天）',
+  stats_poll_enabled: '互动轮询开关',
+  stats_poll_batch: '单轮轮询批量（篇）',
+  alert_webhook_url: '告警 Webhook URL',
+  alert_webhook_style: '告警消息格式',
+  report_push_enabled: '日报推送总开关',
+  report_push_wecom_webhook_url: '企业微信机器人 URL',
+  report_push_feishu_webhook_url: '飞书机器人 URL',
+  report_push_feishu_secret: '飞书签名密钥（未开启校验留空）',
 };
 
-const SENSITIVE = new Set(['llm_api_key', 'embedding_api_key', 'admin_token']);
+const SENSITIVE = new Set([
+  'llm_api_key',
+  'embedding_api_key',
+  'admin_token',
+  'alert_webhook_url',
+  'report_push_wecom_webhook_url',
+  'report_push_feishu_webhook_url',
+  'report_push_feishu_secret',
+]);
 
-/** 数值字段前端校验规则（留空 = 恢复默认，允许） */
+/** 数值字段前端校验规则（留空 = 恢复默认，允许）；后端 config_service 有同规则兜底 */
 const NUMERIC_RULES: Record<string, { min: number; max: number }> = {
   crawler_interval_minutes: { min: 1, max: 1440 },
   sim_threshold: { min: 0, max: 1 },
   keyword_jaccard_threshold: { min: 0, max: 1 },
   cluster_lookback_hours: { min: 1, max: 720 },
   session_ttl_hours: { min: 1, max: 8760 },
+  session_idle_hours: { min: 0, max: 8760 },
   login_max_attempts: { min: 1, max: 100 },
   login_lock_minutes: { min: 1, max: 1440 },
-  audit_retention_days: { min: 7, max: 3650 },
+  login_ip_throttle_max: { min: 5, max: 10000 },
+  login_ip_throttle_window_seconds: { min: 60, max: 86400 },
+  audit_retention_days: { min: 30, max: 3650 },
   stats_poll_batch: { min: 1, max: 100 },
 };
+
+const WEBHOOK_STYLES: { value: string; label: string }[] = [
+  { value: 'wecom', label: '企业微信机器人' },
+  { value: 'dingtalk', label: '钉钉机器人' },
+  { value: 'feishu', label: '飞书机器人' },
+  { value: 'raw', label: '通用 JSON（text 字段）' },
+];
 
 const GROUPS: { title: string; hint: string; keys: string[] }[] = [
   {
@@ -88,24 +118,47 @@ const GROUPS: { title: string; hint: string; keys: string[] }[] = [
   },
   {
     title: '爬虫与聚合参数',
-    hint: '采集间隔、聚合阈值修改后立即生效，无需重启服务',
-    keys: ['crawler_interval_minutes', 'sim_threshold', 'keyword_jaccard_threshold', 'cluster_lookback_hours'],
+    hint: '采集间隔、聚合阈值/窗口修改后立即生效，无需重启服务',
+    keys: [
+      'crawler_interval_minutes',
+      'sim_threshold',
+      'keyword_jaccard_threshold',
+      'cluster_lookback_hours',
+    ],
   },
   {
     title: '互动数据轮询',
-    hint: '评论/点赞数回采接入热度算法；enabled 填 false 关闭后热度回退纯时间衰减',
+    hint: '评论/点赞数回采接入热度算法；关闭后热度回退纯时间衰减，任务表不再产生 stats 记录',
     keys: ['stats_poll_enabled', 'stats_poll_batch'],
   },
   {
     title: '安全与会话',
-    hint: '登录锁定 / 会话有效期 / 审计保留期；admin_token 仅作脚本应急后门',
+    hint: '登录锁定 / IP 限速 / 空闲超时 / 审计保留期；admin_token 仅作脚本应急后门',
     keys: [
       'admin_token',
       'session_ttl_hours',
+      'session_idle_hours',
       'login_max_attempts',
       'login_lock_minutes',
+      'login_ip_throttle_max',
+      'login_ip_throttle_window_seconds',
       'cookie_secure',
       'audit_retention_days',
+    ],
+  },
+  {
+    title: '告警通知',
+    hint: '巡检任务每 5 分钟检查 Redis/Worker/任务停摆/失败未恢复，异常经 webhook 推送（状态转坏/恢复才发）；URL 留空 = 关闭',
+    keys: ['alert_webhook_url', 'alert_webhook_style'],
+  },
+  {
+    title: '日报推送（企业微信 / 飞书）',
+    hint: '每日 08:00 生成与手动重算后自动推送 markdown 日报；总开关打开 + 任一通道填 URL 即启用，双通道可并存',
+    keys: [
+      'report_push_enabled',
+      'report_push_wecom_webhook_url',
+      'report_push_feishu_webhook_url',
+      'report_push_feishu_secret',
     ],
   },
 ];
@@ -135,6 +188,7 @@ export default function Admin() {
   const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null);
   const [testResult, setTestResult] = useState<{ llm?: string; embedding?: string }>({});
   const [revealKeys, setRevealKeys] = useState<Set<string>>(new Set());
+  const [reportDate, setReportDate] = useState('');
 
   // 组件卸载时清理所有延时任务（toast 自动消失、触发后补拉任务列表）
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -164,7 +218,8 @@ export default function Admin() {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [s, c, r] = await Promise.all([getStatus(), getConfig(), getTaskRuns(50)]);
+      // 手动刷新绕过后端 10s 缓存，确保点「刷新」看到的是即时状态
+      const [s, c, r] = await Promise.all([getStatus(true), getConfig(), getTaskRuns(50)]);
       setStatus(s);
       setConfig(c);
       setRuns(r.items ?? []);
@@ -176,14 +231,17 @@ export default function Admin() {
     }
   }, []);
 
-  // 进入面板即拉全量数据 + 每 30s 刷新状态（会话失效由全局登录态接管）
+  // 进入面板即拉全量数据 + 每 30s 刷新状态与任务表（会话失效由全局登录态接管）。
+  // 任务表必须随轮询刷新：手动触发后 TaskRun 行在 worker 消费时才落库，
+  // 只靠触发后的固定补拉会在队列拥堵时永远看不到新记录
   useEffect(() => {
     if (allowed) {
       refreshAll();
       const timer = setInterval(() => {
-        getStatus()
-          .then((s) => {
+        Promise.all([getStatus(), getTaskRuns(50)])
+          .then(([s, r]) => {
             setStatus(s);
+            setRuns(r.items ?? []);
             setLoadError('');
           })
           .catch(() => {
@@ -195,7 +253,7 @@ export default function Admin() {
   }, [allowed, refreshAll]);
 
   // ———— 配置编辑 ————
-  // 敏感键（api_key/admin_token）后端不回传明文：留空 = 不修改，输入了内容才算待保存的修改
+  // 敏感键（api_key/admin_token/webhook url）后端不回传明文：留空 = 不修改，输入了内容才算待保存的修改
   const dirtyKeys = useMemo(() => {
     if (!config) return [];
     return Object.keys(edits).filter((k) => {
@@ -242,6 +300,7 @@ export default function Admin() {
       const next = await putConfig(data);
       setConfig(next);
       setEdits({});
+      setTestResult({});  // 旧「连通 ✓」对应的是改前配置，不清空会误导
       flash(true, `已保存并生效：${dirtyKeys.map((k) => FIELD_LABELS[k] ?? k).join('、')}`);
     } catch (e: any) {
       flash(false, `保存失败：${e?.message ?? e}`);
@@ -270,7 +329,8 @@ export default function Admin() {
     }
   };
 
-  const runTest = async (which: 'llm' | 'embedding') => {    setBusy(`test-${which}`);
+  const runTest = async (which: 'llm' | 'embedding') => {
+    setBusy(`test-${which}`);
     setTestResult((r) => ({ ...r, [which]: '' }));
     try {
       const payload: Record<string, string> = {};
@@ -297,17 +357,30 @@ export default function Admin() {
     }
   };
 
-  const trigger = async (name: 'crawl' | 'events' | 'report') => {
+  // 各触发按钮的 busy 键互相独立，避免共享前缀导致并发操作误解锁
+  const trigger = async (name: 'crawl' | 'events' | 'stats' | 'report') => {
     setBusy(`trigger-${name}`);
     try {
-      const fn = name === 'crawl' ? triggerCrawl : name === 'events' ? triggerEvents : triggerReport;
+      const fn =
+        name === 'crawl'
+          ? triggerCrawl
+          : name === 'events'
+          ? triggerEvents
+          : name === 'stats'
+          ? triggerStats
+          : () => triggerReport(reportDate || undefined);
       await fn();
-      flash(true, '任务已入队，稍后可在「任务执行记录」查看结果');
-      later(() => {
-        getTaskRuns(50).then((r) => setRuns(r.items ?? [])).catch(() => {});
-        // 日报生成入队后同步强制刷新日报缓存（绕过 60s 节流），科技日报页即可见
-        if (name === 'report') void loadReports(true);
-      }, 1500);
+      flash(true, '任务已入队，任务表会在数秒内自动刷新');
+      // TaskRun 行在 worker 消费时才落库：间隔补拉 3 次，避免固定 1.5s 拉空后看不到记录
+      [2000, 6000, 12000].forEach((ms) =>
+        later(() => {
+          getTaskRuns(50)
+            .then((r) => setRuns(r.items ?? []))
+            .catch(() => {});
+          // 日报生成入队后同步强制刷新日报缓存（绕过 60s 节流），科技日报页即可见
+          if (name === 'report' && ms === 12000) void loadReports(true);
+        }, ms)
+      );
     } catch (e: any) {
       flash(false, `触发失败：${e?.message ?? e}`);
     } finally {
@@ -337,6 +410,7 @@ export default function Admin() {
 
   const infra = status?.infra;
   const stats = status?.stats;
+  const statsPoll = status?.stats_poll;
 
   return (
     <div className="space-y-6">
@@ -372,6 +446,23 @@ export default function Admin() {
           <div>
             最近失败任务：<b>{status.last_failed_task.name}</b>（{fmtTime(status.last_failed_task.started_at)}）
             <div className="text-xs text-amber-300/80 mt-0.5 break-all">{status.last_failed_task.detail}</div>
+          </div>
+        </div>
+      )}
+
+      {/* ———— 任务节奏心跳：beat 是单点且 worker ping 看不见它，停摆只能靠节奏异常感知 ———— */}
+      {status && (status.heartbeat ?? []).length > 0 && (
+        <div className="card px-4 py-3 border-amber-500/30 bg-amber-500/5 text-sm text-amber-200 flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+          <div>
+            任务节奏异常（超出预期时长未运行，疑似调度器/服务停摆）：
+            <ul className="list-disc ml-4 mt-1 space-y-0.5 text-xs text-amber-300/90">
+              {status.heartbeat.map((h) => (
+                <li key={h.name}>
+                  <b>{h.label}</b>（{h.name}）最近运行 {fmtTime(h.last_run_at)}，距今 {h.age_minutes} 分钟（阈值 {h.threshold_minutes} 分钟）
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       )}
@@ -438,8 +529,35 @@ export default function Admin() {
           <StatCard icon={<Database className="h-4 w-4" />} label="文章总量" value={String(stats?.articles_total ?? '—')} sub={`近 24h 新增 ${stats?.articles_24h ?? '—'} 篇`} />
           <StatCard icon={<Bot className="h-4 w-4" />} label="AI 摘要覆盖" value={`${stats?.ai_coverage ?? '—'}%`} sub={`已摘要 ${stats?.articles_summarized ?? '—'} · 已向量化 ${stats?.articles_embedded ?? '—'}`} />
           <StatCard icon={<Play className="h-4 w-4" />} label="活跃事件" value={String(stats?.events_active ?? '—')} sub="状态非「已平息」" />
-          <StatCard icon={<RefreshCw className="h-4 w-4" />} label="最近采集" value={fmtTime(stats?.last_crawl ?? null)} sub={`采集间隔 ${status?.crawler.interval_minutes ?? '—'} 分钟`} />
+          <StatCard
+            icon={<RefreshCw className="h-4 w-4" />}
+            label="最近采集"
+            value={fmtTime(status.crawler.last_run?.started_at ?? stats?.last_crawl ?? null)}
+            sub={`采集间隔 ${status?.crawler.interval_minutes ?? '—'} 分钟 · 最近入库 ${fmtTime(stats?.last_ingest ?? null)}`}
+          />
         </div>
+
+        {/* ———— 互动轮询水位（此前后端已计算但面板从未展示） ———— */}
+        {statsPoll && (
+          <>
+            <div className="flex items-baseline justify-between pt-1">
+              <h3 className="text-xs font-semibold text-slate-400">互动数据轮询水位</h3>
+              <span className={`text-[11px] ${statsPoll.enabled === false ? 'text-slate-500' : 'text-emerald-300'}`}>
+                {statsPoll.enabled === false
+                  ? '已热停：热度回退纯时间衰减，不再产生轮询记录'
+                  : statsPoll.last_run
+                  ? `最近一轮 ${fmtTime(statsPoll.last_run.started_at)} · ${statsPoll.last_run.status === 'success' ? '成功' : statsPoll.last_run.status === 'failed' ? '失败' : '运行中'}`
+                  : '尚无轮询记录'}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <StatCard icon={<RefreshCw className="h-4 w-4" />} label="到期待轮询" value={String(statsPoll.due_now)} sub="已排期且已到期的文章" />
+              <StatCard icon={<Database className="h-4 w-4" />} label="待回填" value={String(statsPoll.pending_backfill)} sub="未排期未放弃的历史文章" />
+              <StatCard icon={<AlertTriangle className="h-4 w-4" />} label="已放弃" value={String(statsPoll.gave_up)} sub="连续失败达上限，不再排期" />
+              <StatCard icon={<CheckCircle2 className="h-4 w-4" />} label="24h 已轮询" value={String(statsPoll.polled_24h)} sub="近 24 小时完成过回采的文章" />
+            </div>
+          </>
+        )}
       </section>
       )}
 
@@ -472,11 +590,15 @@ export default function Admin() {
                   const item = config?.config[key];
                   if (!item) return null;
                   const isSensitive = SENSITIVE.has(key);
+                  const isBool = item.type === 'bool';
+                  const isStyle = key === 'alert_webhook_style';
                   const editing = edits[key];
                   // 敏感键不回填明文：只要输入框有内容即视为修改；非敏感键与 raw 对比
                   const changed = editing !== undefined && (isSensitive ? editing !== '' : editing !== item.raw);
                   const revealed = revealKeys.has(key);
                   const invalid = invalidKeys[key];
+                  // 开关/下拉的当前值：优先未保存编辑，否则生效值
+                  const current = editing ?? (item.raw || '');
                   return (
                     <label key={key} className="block">
                       <div className="flex items-center gap-1.5 mb-1">
@@ -503,36 +625,71 @@ export default function Admin() {
                           </button>
                         )}
                       </div>
-                      <div className="relative">
-                        <input
-                          type={isSensitive && !revealed ? 'password' : 'text'}
-                          value={editing ?? (item.raw ?? '')}
-                          onChange={(e) => setEdits((m) => ({ ...m, [key]: e.target.value }))}
-                          placeholder={
-                            isSensitive
-                              ? item.value
-                                ? '已设置 · 留空不修改，输入新值即覆盖'
-                                : '未设置，输入后保存'
-                              : ''
+                      {isBool ? (
+                        // 布尔配置用开关：此前手填 true/false，拼写错误（如 flase）会被后端
+                        // 静默当作 false，可能悄悄关闭 Secure Cookie / 互动轮询
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={current === 'true'}
+                          aria-label={FIELD_LABELS[key] ?? key}
+                          onClick={() =>
+                            setEdits((m) => ({ ...m, [key]: current === 'true' ? 'false' : 'true' }))
                           }
-                          autoComplete="off"
-                          inputMode={NUMERIC_RULES[key] ? 'decimal' : undefined}
-                          className={`w-full px-2.5 py-1.5 ${isSensitive ? 'pr-8' : ''} rounded-lg bg-radar-panel border text-xs text-slate-200 outline-none focus:border-accent font-mono ${
-                            invalid ? 'border-red-400/60' : 'border-radar-border'
+                          className={`relative inline-flex h-5 w-9 mt-0.5 items-center rounded-full transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent/50 ${
+                            current === 'true' ? 'bg-emerald-500/80' : 'bg-slate-600/60'
                           }`}
-                        />
-                        {isSensitive && (
-                          <button
-                            type="button"
-                            onClick={() => toggleReveal(key)}
-                            title={revealed ? '隐藏' : '显示'}
-                            aria-label={revealed ? `隐藏${FIELD_LABELS[key] ?? key}` : `显示${FIELD_LABELS[key] ?? key}`}
-                            className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-slate-500 hover:text-slate-300 cursor-pointer"
-                          >
-                            {revealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                          </button>
-                        )}
-                      </div>
+                        >
+                          <span
+                            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                              current === 'true' ? 'translate-x-[19px]' : 'translate-x-[3px]'
+                            }`}
+                          />
+                        </button>
+                      ) : isStyle ? (
+                        <select
+                          value={current || 'wecom'}
+                          onChange={(e) => setEdits((m) => ({ ...m, [key]: e.target.value }))}
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-radar-panel border border-radar-border text-xs text-slate-200 outline-none focus:border-accent cursor-pointer"
+                        >
+                          {WEBHOOK_STYLES.map((s) => (
+                            <option key={s.value} value={s.value}>
+                              {s.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="relative">
+                          <input
+                            type={isSensitive && !revealed ? 'password' : 'text'}
+                            value={current}
+                            onChange={(e) => setEdits((m) => ({ ...m, [key]: e.target.value }))}
+                            placeholder={
+                              isSensitive
+                                ? item.value
+                                  ? '已设置 · 留空不修改，输入新值即覆盖'
+                                  : '未设置，输入后保存'
+                                : ''
+                            }
+                            autoComplete="off"
+                            inputMode={NUMERIC_RULES[key] ? 'decimal' : undefined}
+                            className={`w-full px-2.5 py-1.5 ${isSensitive ? 'pr-8' : ''} rounded-lg bg-radar-panel border text-xs text-slate-200 outline-none focus:border-accent font-mono ${
+                              invalid ? 'border-red-400/60' : 'border-radar-border'
+                            }`}
+                          />
+                          {isSensitive && (
+                            <button
+                              type="button"
+                              onClick={() => toggleReveal(key)}
+                              title={revealed ? '隐藏' : '显示'}
+                              aria-label={revealed ? `隐藏${FIELD_LABELS[key] ?? key}` : `显示${FIELD_LABELS[key] ?? key}`}
+                              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-slate-500 hover:text-slate-300 cursor-pointer"
+                            >
+                              {revealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                            </button>
+                          )}
+                        </div>
+                      )}
                       {invalid && <div className="text-[10px] text-red-400 mt-1">{invalid}</div>}
                     </label>
                   );
@@ -542,7 +699,7 @@ export default function Admin() {
                 <div className="mt-3 flex items-center gap-2">
                   <button
                     onClick={() => runTest(g.title.startsWith('LLM') ? 'llm' : 'embedding')}
-                    disabled={busy.startsWith('test-')}
+                    disabled={busy === 'test-llm' || busy === 'test-embedding'}
                     className="chip border border-radar-border bg-radar-panel text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40"
                   >
                     {busy.startsWith('test-') ? (
@@ -577,14 +734,24 @@ export default function Admin() {
             <Play className="h-4 w-4 text-accent" /> 任务执行记录
           </h2>
           <div className="flex items-center gap-2">
-            <button onClick={() => trigger('crawl')} disabled={busy.startsWith('trigger-')} className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40">
+            <input
+              type="date"
+              value={reportDate}
+              onChange={(e) => setReportDate(e.target.value)}
+              title="留空 = 生成昨日（UTC）日报；选择日期可补生成任意一天"
+              className="chip bg-radar-card border border-radar-border text-slate-400 [color-scheme:dark]"
+            />
+            <button onClick={() => trigger('crawl')} disabled={busy === 'trigger-crawl'} className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40">
               <Play className="h-3.5 w-3.5" /> 立即采集
             </button>
-            <button onClick={() => trigger('events')} disabled={busy.startsWith('trigger-')} className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40">
+            <button onClick={() => trigger('events')} disabled={busy === 'trigger-events'} className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40">
               <Play className="h-3.5 w-3.5" /> 立即聚合
             </button>
-            <button onClick={() => trigger('report')} disabled={busy.startsWith('trigger-')} className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40">
-              <Play className="h-3.5 w-3.5" /> 生成昨日日报
+            <button onClick={() => trigger('stats')} disabled={busy === 'trigger-stats'} className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40">
+              <Play className="h-3.5 w-3.5" /> 立即轮询互动
+            </button>
+            <button onClick={() => trigger('report')} disabled={busy === 'trigger-report'} className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40">
+              <Play className="h-3.5 w-3.5" /> 生成日报
             </button>
           </div>
         </div>
@@ -610,36 +777,42 @@ export default function Admin() {
                     </td>
                   </tr>
                 )}
-                {runs.map((r) => (
-                  <tr key={r.id} className="border-b border-radar-border/50 hover:bg-radar-panel/50">
-                    <td className="px-4 py-2 text-slate-400 whitespace-nowrap">{fmtTime(r.started_at)}</td>
-                    <td className="px-2 py-2 text-slate-200">{r.name}</td>
-                    <td className="px-2 py-2">
-                      <span
-                        className={`chip text-[10px] ${
-                          r.trigger === 'manual'
-                            ? 'bg-sky-500/10 text-sky-300'
-                            : 'bg-slate-500/10 text-slate-400'
-                        }`}
-                      >
-                        {r.trigger === 'manual' ? '手动' : '定时'}
-                      </span>
-                    </td>
-                    <td className="px-2 py-2">
-                      {r.status === 'success' ? (
-                        <span className="text-emerald-300 flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" />成功</span>
-                      ) : r.status === 'failed' ? (
-                        <span className="text-red-400 flex items-center gap-1"><XCircle className="h-3.5 w-3.5" />失败</span>
-                      ) : (
-                        <span className="text-amber-300 flex items-center gap-1"><Loader2 className="h-3.5 w-3.5 animate-spin" />运行中</span>
-                      )}
-                    </td>
-                    <td className="px-2 py-2 text-slate-400 whitespace-nowrap">{fmtDuration(r.duration_ms)}</td>
-                    <td className="px-4 py-2 text-slate-400 max-w-md truncate" title={r.detail ?? ''}>
-                      {r.detail ?? '—'}
-                    </td>
-                  </tr>
-                ))}
+                {runs.map((r) => {
+                  // 双入口抢锁时另一入口的轮次记为 success + "skipped: ..."，显示为「跳过」而非绿色「成功」
+                  const skipped = r.status === 'success' && (r.detail ?? '').startsWith('skipped');
+                  return (
+                    <tr key={r.id} className="border-b border-radar-border/50 hover:bg-radar-panel/50">
+                      <td className="px-4 py-2 text-slate-400 whitespace-nowrap">{fmtTime(r.started_at)}</td>
+                      <td className="px-2 py-2 text-slate-200">{r.name}</td>
+                      <td className="px-2 py-2">
+                        <span
+                          className={`chip text-[10px] ${
+                            r.trigger === 'manual'
+                              ? 'bg-sky-500/10 text-sky-300'
+                              : 'bg-slate-500/10 text-slate-400'
+                          }`}
+                        >
+                          {r.trigger === 'manual' ? '手动' : '定时'}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2">
+                        {r.status === 'success' && !skipped ? (
+                          <span className="text-emerald-300 flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" />成功</span>
+                        ) : r.status === 'failed' ? (
+                          <span className="text-red-400 flex items-center gap-1"><XCircle className="h-3.5 w-3.5" />失败</span>
+                        ) : skipped ? (
+                          <span className="text-amber-300 flex items-center gap-1" title={r.detail ?? ''}><AlertTriangle className="h-3.5 w-3.5" />跳过</span>
+                        ) : (
+                          <span className="text-amber-300 flex items-center gap-1"><Loader2 className="h-3.5 w-3.5 animate-spin" />运行中</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2 text-slate-400 whitespace-nowrap">{fmtDuration(r.duration_ms)}</td>
+                      <td className="px-4 py-2 text-slate-400 max-w-md truncate" title={r.detail ?? ''}>
+                        {r.detail ?? '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
