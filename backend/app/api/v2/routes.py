@@ -191,7 +191,7 @@ _HOT_WINDOWS: dict[str, int] = {"24h": 24, "3d": 72, "7d": 168, "all": 8760}
 def hot_board(
     channel: str | None = None,
     window: str = Query("24h", pattern="^(24h|3d|7d|all)$"),
-    limit: int = Query(40, le=100),
+    limit: int = Query(40, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
     hours = _HOT_WINDOWS[window]
@@ -237,7 +237,7 @@ def hot_board(
 def articles_latest(
     channel: str | None = None,
     q: str | None = None,
-    limit: int = Query(50, le=500),
+    limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
@@ -306,7 +306,7 @@ def article_summary(article_id: int, db: Session = Depends(get_db)):
 
 @router.get("/events")
 def events_list(
-    limit: int = Query(30, le=200),
+    limit: int = Query(30, ge=1, le=200),
     offset: int = Query(0, ge=0),
     status: str | None = None,
     q: str | None = None,

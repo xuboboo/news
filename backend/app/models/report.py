@@ -1,5 +1,5 @@
 """科技日报模型（PRD 第 7 节）。"""
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, Date, DateTime, Integer, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB

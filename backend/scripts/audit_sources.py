@@ -94,7 +94,7 @@ def main() -> int:
             print(f"  {ch}: {n}")
         print(f"\n结果：匹配 {ok} · 频道不符 {mismatch} · 可疑 {suspicious} · 已滚出页面 {rotated}")
         if issues:
-            print(f"违规清单：")
+            print("违规清单：")
             for line in issues:
                 print(line)
         if rotated_notes:

@@ -38,8 +38,8 @@ def main() -> None:
             members = [
                 m
                 for m in (
-                    db.get(Article, l.article_id)
-                    for l in db.query(EventArticle).filter_by(event_id=ev.id).all()
+                    db.get(Article, lnk.article_id)
+                    for lnk in db.query(EventArticle).filter_by(event_id=ev.id).all()
                 )
                 if m is not None
             ]

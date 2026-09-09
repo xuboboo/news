@@ -55,7 +55,7 @@ def main() -> None:
         fixed_events = 0
         for ev in db.query(HotEvent).all():
             links = db.query(EventArticle).filter_by(event_id=ev.id).all()
-            members = [db.get(Article, l.article_id) for l in links]
+            members = [db.get(Article, lnk.article_id) for lnk in links]
             members = [m for m in members if m]
             if not members:
                 continue

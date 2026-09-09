@@ -66,9 +66,9 @@ def main() -> None:
         events = db.query(HotEvent).all()
         for ev in events:
             aids = [
-                l.article_id
-                for l in db.query(EventArticle).filter_by(event_id=ev.id).all()
-                if l.article_id in vecs
+                lnk.article_id
+                for lnk in db.query(EventArticle).filter_by(event_id=ev.id).all()
+                if lnk.article_id in vecs
             ][:MAX_MEMBERS_PER_EVENT]
             for a, b in combinations(aids, 2):
                 pos.append(cosine(vecs[a], vecs[b]))
@@ -82,7 +82,7 @@ def main() -> None:
         ids = list(vecs)
         same_pairs: set[frozenset] = set()
         for ev in events:
-            aids = [l.article_id for l in db.query(EventArticle).filter_by(event_id=ev.id).all()]
+            aids = [lnk.article_id for lnk in db.query(EventArticle).filter_by(event_id=ev.id).all()]
             for a, b in combinations(aids, 2):
                 same_pairs.add(frozenset((a, b)))
         neg: list[float] = []

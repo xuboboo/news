@@ -47,7 +47,6 @@ def build_payload(style: str, text: str) -> dict:
 
 
 def _collect_problems(db: Session) -> list[str]:
-    settings = get_settings()
     problems: list[str] = []
 
     redis_ok, _ = redis_ping()

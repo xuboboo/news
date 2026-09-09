@@ -26,7 +26,7 @@ from app.models.event import HotEvent
 from app.models.summary import ArticleSummary
 from app.models.task_run import TaskRun
 from app.models.usage import AiUsageLog, ModelPrice
-from app.models.user import ROLE_SUPER_ADMIN, User
+from app.models.user import ROLE_SUPER_ADMIN
 from app.services import audit_service, config_service, usage_service
 from app.services.embedding_service import get_embedding_fingerprint
 from app.services.infra_status import cadence_warnings, celery_workers_ping, redis_ping
@@ -454,7 +454,7 @@ def _compute_status(db: Session) -> dict:
 
 
 @router.get("/task-runs", dependencies=[Depends(require_admin)])
-def task_runs(limit: int = Query(50, le=200), db: Session = Depends(get_db)):
+def task_runs(limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)):
     rows = db.query(TaskRun).order_by(TaskRun.id.desc()).limit(limit).all()
     return {
         "items": [

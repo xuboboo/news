@@ -8,8 +8,12 @@ from sqlalchemy import text
 
 from app.core.db import new_session
 from app.models.article import Article
+from app.models.audit_log import AuditLog
 from app.models.event import EventArticle, HotEvent
 from app.models.summary import ArticleSummary
+from app.models.tenant import Tenant
+from app.models.user import User, ROLE_SUPER_ADMIN
+from app.models.user_session import UserSession
 
 db = new_session()
 print("== B3 字段质量 ==")
@@ -65,11 +69,8 @@ print(f"状态分布: {statuses}")
 
 
 print("== G 认证与多租户完整性 ==")
-from app.models.user import User, ROLE_SUPER_ADMIN
-from app.models.tenant import Tenant
-from app.models.user_session import UserSession
-from app.models.audit_log import AuditLog
-from datetime import datetime, timezone
+
+from datetime import datetime, timezone  # noqa: E402 脚本分节执行，置于此节使用处之前
 
 _now = datetime.now(timezone.utc)
 tenants = db.query(Tenant).all()
