@@ -75,23 +75,29 @@ _LINK_CHECKED: dict[str, float] = {}
 # 轮内请求间隔：单轮约 130 篇文章页请求，留礼貌间隔降低 403 风险（403 兜底走域名退避）
 _POLITENESS_SLEEP_SECONDS = 0.3
 
-_NID = re.compile(r"ithome\.com/0/(\d+)/(\d+)\.htm")
+# IT之家文章 URL 存在两种 scheme（2026-09 起新文启用 /1/ 段）：
+#   /0/973/447.htm → newsid 973447；/1/000/157.htm → newsid 1000157
+# 统一规则：三段数字拼接后去前导零（页面内 JS newsid 实测一致）
+_NID = re.compile(r"ithome\.com/(\d+)/(\d+)/(\d+)\.htm")
 
-_ARTICLE_HREF = re.compile(r'href="([^"]*/0/\d+/\d+\.htm)(?:[?#][^"]*)?"')
+_ARTICLE_HREF = re.compile(r'href="([^"]*/\d+/\d+/\d+\.htm)(?:[?#][^"]*)?"')
+
+_ARTICLE_URL = re.compile(r"^https://www\.ithome\.com/\d+/\d+/\d+\.htm$")
 
 
 def extract_news_id(link: str) -> str | None:
-    """https://www.ithome.com/0/998/992.htm → newsid 998992"""
+    """https://www.ithome.com/0/998/992.htm → 998992；/1/000/157.htm → 1000157"""
     m = _NID.search(link or "")
     if m:
-        return m.group(1) + m.group(2)
+        nid = "".join(m.groups()).lstrip("0")
+        return nid or None
     return None
 
 
 def extract_article_links(html: str) -> list[str]:
-    """页面里的文章链接，规范化为 https://www.ithome.com/0/... 绝对地址。
+    """页面里的文章链接，规范化为 https://www.ithome.com/<scheme>/<a>/<b>.htm 绝对地址。
 
-    兼容三种 href 形式：绝对 / 协议相对（//www...）/ 相对（/0/...）。
+    兼容三种 href 形式：绝对 / 协议相对（//www...）/ 相对（/0/...、/1/...）。
     """
     links: list[str] = []
     for raw in _ARTICLE_HREF.findall(html or ""):
@@ -101,7 +107,7 @@ def extract_article_links(html: str) -> list[str]:
             raw = "https://www.ithome.com" + raw
         elif raw.startswith("http://"):
             raw = "https://" + raw[len("http://"):]
-        if raw.startswith("https://www.ithome.com/0/"):
+        if _ARTICLE_URL.match(raw):
             links.append(raw)
     return list(dict.fromkeys(links))
 
