@@ -1,0 +1,618 @@
+
+<!DOCTYPE html>
+<html xmlns="//www.w3.org/1999/xhtml">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta http-equiv="Cache-Control" content="no-cache" />
+    <meta name="viewport" content="width=device-width, minimum-scale=1.0, maximum-scale=1.0,user-scalable=0" />
+    <meta name="keywords" content="手机驱动之家,驱动之家首页,新闻资讯,驱动之家新闻,驱动之家无线,手机驱动之家触屏版" />
+    <meta name="description" content="手机驱动之家是驱动之家的手机门户网站，为亿万用户打造一个手机联通世界的超级平台，提供24小时全面及时的中文IT资讯。手机驱动之家触屏版" />
+    <link href="//11.mydrivers.com/m/css/v1/main.min.css?v=1202" rel="stylesheet" type="text/css" />
+    <link rel="apple-touch-icon-precomposed" href="images/icons.png" />
+    <script type="text/javascript" src="//11.mydrivers.com/2018/news/jquery-1.7.2.min.js"></script>
+    <script type="text/javascript" src="//11.mydrivers.com/common/js/swipe.min.js"></script>
+    <title>快科技-科技改变生活</title>
+</head>
+<body>
+  <div class="box">    
+      
+
+<link href="//11.mydrivers.com/m/css/v1/user.min.css" rel="stylesheet" type="text/css" />
+ <div id="header">
+    <div class="logo"><a href="//m.mydrivers.com"><img src="//11.mydrivers.com/m/images/v1/kkj_hearlogo.png" width="81" height="19" alt="logo"></a></div>
+    <div class="moreinfo">
+      <ul>
+        <li><a href="https://haohuo.mydrivers.com/baobei/youhui.html?fr=m"><img src="//11.mydrivers.com/m/images/v1/fuli.svg" alt="福利" width="18" height="18"/></a></li>
+        <li><a href="https://rank.kkj.cn/"><img src="//11.mydrivers.com/m/images/v1/bangdan_m.svg" alt="榜单" width="18" height="18"/></a></li>
+        <li><a href="https://news.mydrivers.com/1/758/758016.htm"><img src="//11.mydrivers.com/m/images/v1/zhaopin_m.svg" alt="招聘"  width="18" height="18"></a></li>
+        <li><a href="/so/index.aspx"><img src="//11.mydrivers.com/m/images/v1/search_icon.svg" alt="搜索"  width="18" height="18"/></a></li>
+        <li><a href="javascript:;" onclick="showsetting()" style="padding-top: 1px;display: block;"><img src="//11.mydrivers.com/m/images/v1/install_icon.svg" width="16" height="16"></a></li>
+      </ul>
+    </div>
+  </div>
+
+<div class="user-menu_bg" style="display: none;"></div>
+ 
+<!--用户信息-->
+<div class="user_box" style="display: none;">
+<div class="user_head">
+<div class="userimg"><img src="//11.mydrivers.com/m/images/v1/photo.jpg" width="120" height="120" alt="img"/></div>
+<div class="username"><a href="javascript:;" onclick="gourl('login')">登录/注册<br></a></div>
+<div class="zhucetime">注册时间：<span>--</span></div>
+</div>
+<div class="userinfo">
+<a href="javascript:;">
+	<span class="unumber">--</span>
+	<span class="uleimu">金币</span>
+</a>
+	<a href="javascript:;">
+	<span class="unumber">--</span>
+	<span class="uleimu">经验</span>
+</a><a href="javascript:;">
+	<span class="unumber">--</span>
+	<span class="uleimu">粉丝</span>
+</a><a href="javascript:;" style="background:none;">
+	<span class="unumber">--</span>
+	<span class="uleimu">获赞</span>
+</a>	
+</div>
+	<div class="userlist">
+<ul>
+	<li><div class="ulist_left">纯文字版本</div><div class="ulist_right"><a href="javascript:;" style="display: none;"><img src="//11.mydrivers.com/m/images/v1/on_icon.svg" alt="开"/></a>
+	<a href="javascript:;"><img src="//11.mydrivers.com/m/images/v1/off_icon.svg" alt="关闭"/></a></div></li>
+	<li><div class="ulist_left">消息</div><div onclick="$('.user_box').hide();downapp_float();" id="sysnoticemsg" class="ulist_right toright">&nbsp;</div></li>
+	<li><div class="ulist_left">收藏</div><div id="myfav" class="ulist_right toright">&nbsp;</div></li>
+    <li style="border: 0;"><div class="ulist_left"><div id="logout">退出</div></div><div class="ulist_right"><a class="icon_close" href="javascript:;"></a></div></li>
+</ul>	
+</div>
+	</div>
+
+<!--菜单-->
+ 
+<script type="text/javascript">
+    var imgswitch = false;
+    var my_time;
+    $(function () {
+        var top = $('#header').offset().top;
+        $(window).scroll(function () {
+            var scrolls = $(this).scrollTop();
+            if (top < scrolls && $(window).width() > 300) {
+                $('#header').css({ 'position': 'fixed', 'top': 0, 'z-index': 1002 });
+                $('.user_box').css({ 'position': 'fixed', 'left': 'auto' });
+            } else {
+                $('#header').css({ 'position': '', 'top': '', 'z-index': '' });
+                $('.user_box').css({ 'position': '', 'left': '' });
+            }
+        });
+        $(".user_box .userlist .ulist_right").eq(0).children("a").click(function () {
+            setCookie("imgswitch", $(this).index());
+            initTextSwitch();
+        });
+        $(".flbox").click(function (e) {
+            $(".flbox,.user-menu_bg,#div_searchpop").hide();
+            e.stopPropagation();
+        });
+        $("#myfav").click(function (e) {
+            if (getCookie("mydrivers_usernumid") == null || getCookie("mydrivers_usernumid") == "" || getCookie("mydrivers_userid") == null || getCookie("mydrivers_userid") == "") {
+                alert("请先登录哦^v^");
+                return false;
+            }
+            parent.location = "/user/myshoucang.aspx";
+        }); 
+        $(".user-menu_bg,.icon_close").click(function () {
+            if ($("#win_editname_html").length > 0) {
+                return;
+            }
+            $(".flbox,.user-menu_bg,#div_searchpop,.classify_down,.user_box").hide();
+            $(this).css({ "top": "" });
+            if ($(".downapp").length > 0)
+                $(".downapp").remove();
+            if ($(".userinfo_box").length > 0)
+                $(".userinfo_box").remove();
+            if ($(".share_pic").length > 0)
+                $(".share_pic").hide();
+            $("#shareqrcodewinpop").length > 0 ? $("#shareqrcodewinpop").hide() : "";
+            $(".vedio_operate").length > 0 ? $(".vedio_operate").hide() : "";
+        });
+        inituser(); 
+    });
+     
+    function inituser()
+    {
+        var username = getCookie("mydrivers_userid");
+        var userid = getCookie("mydrivers_usernumid");
+        if (username != null && userid != null)
+        {
+            $.ajax({
+                url: '/user/info.ashx',
+                dataType: "json", 
+                success: function (data) { 
+                    if (data.code == 1 && data.code != null) {
+                        $(".user_box .userimg>img").attr("src", "//passport.mydrivers.com/comments/getusertouxiang.aspx?uid=" + data.data.UserID + "&size=medium&m="+Math.random().toString()); 
+                        $(".user_box .username>a").html("<a href=\"javascript:;\">" + data.data.Nickname + "<br><i>" + data.data.Level + "</i></a>");
+                        $(".user_box .userinfo>a").eq(0).find(".unumber").html(data.data.GoldCoin);
+                        $(".user_box .userinfo>a").eq(1).find(".unumber").html(data.data.TotalScore);
+                        $(".user_box .userinfo>a").eq(2).find(".unumber").html(data.data.UserFans);
+                        $(".user_box .userinfo>a").eq(3).find(".unumber").html(data.data.Support);
+                        $(".user_box .user_head .zhucetime").find('span').html(data.data.RegTime);
+                        $("#logout").click(function () { logout(); });
+                        my_time = window.setInterval(getInformcount, 1000 * 60 * 3);
+                        getInformcount();
+                    } else {
+                       // alert(data.msg);
+                    }
+                }
+            });
+        }
+    }
+
+    function getInformcount() {
+        var u = getCookie("mydrivers_usernumid");
+        var usertoken = getCookie("mydrivers_usertoken");
+        if (u == null || u == "" || usertoken == "" || usertoken == null) {
+            clearInterval(my_time);
+            return;
+        }
+        $.ajax({
+            type: "Get",
+            url: "//passport.mydrivers.com/ucount.ashx?uid=" + u + "&t=" + usertoken,
+            dataType: "jsonp",
+            jsonpCallback: "userinformcount",
+            error: function () {
+            },
+            success: function (data) {
+                if (data[0].count == -1001) {
+                    clearInterval(my_time); 
+                    return;
+                }
+                if (data[0].count > 0)
+                {
+                    $("#sysnoticemsg").html("<i onclick=\"emptyusermsg();\">" + data[0].count + "</i>"); 
+                }
+            }
+        });
+    }
+    function emptyusermsg() {
+        $("#sysnoticemsg").html("&nbsp;");
+        $('.user_box').hide();
+        downapp_float();
+        $.ajax({
+            type: "POST",
+            url: "/user/resetuserinform.ashx",
+            dataType: "json",
+            data: { u: getCookie("mydrivers_usernumid"), t: getCookie("mydrivers_usertoken"), ac: "clear" },
+            error: function () { },
+            success: function (data) { }
+        });
+    }
+    function gourl(t) {
+        var url = "";
+        if (t == "login") {
+            url = "https://passport.mydrivers.com/v2/m/login.aspx?ReturnUrl=" + window.location.href;
+        }
+        else if (t == "reg") {
+            url = "https://passport.mydrivers.com/v2/m/reg.aspx?ReturnUrl=" + window.location.href;
+        }
+
+        parent.location = url;
+    }
+
+    function initTextSwitch()
+    {
+        var v = getCookie("imgswitch"); 
+        if (v >= 0 && v < 2) { 
+            $(".user_box .userlist .ulist_right").eq(0).find("a").hide().eq(v == 0 ? 1 : 0).show();
+            v == 1 ? (imgswitch = true) : "";
+        }
+        initnoimg();
+    }
+
+    function initnoimg()
+    {
+        var v = getCookie("imgswitch");
+        if (v == 1)
+        {
+            var obj = ($("#mynewslist").length > 0 && !$("#mynewslist").is(':hidden')) ? $("#mynewslist li") : ($("#guanzhulist").length > 0 && !$("#guanzhulist").is(':hidden')) ? $("#guanzhulist li") : ($("#hotnewslist").length > 0 && !$("#hotnewslist").is(':hidden')) ? $("#hotnewslist li") : ($("#mynewsclasslist").length > 0 && !$("#mynewsclasslist").is(':hidden')) ? $("#mynewsclasslist li") : ($("#content").length > 0 && !$("#content").is(':hidden')) ? $("#content,#ul_relatednews li") : ($("#mynewstaglist").length > 0 && !$("#mynewstaglist").is(':hidden')) ? $("#mynewstaglist li") : null; 
+            if (obj == null)
+                return; 
+            obj.each(function () {
+                $(this).children(".newsimg3,.newsimg,.newsimg1").remove();
+                $(this).find("span.newst").attr("class", "newstnopic");
+                $(this).children(".news_title").addClass("news_title100");
+                $(this).find("p img").remove();
+            });
+        } else if (v == 0 && imgswitch)
+        {
+            var fthis = 0;
+            var obj = ($("#mynewslist").length > 0 && !$("#mynewslist").is(':hidden')) ? (fthis = 1, $("#mynewslist li")) : ($("#guanzhulist").length > 0 && !$("#guanzhulist").is(':hidden')) ? (fthis = 2, $("#guanzhulist li")) : ($("#hotnewslist").length > 0 && !$("#hotnewslist").is(':hidden')) ? (fthis = 3, $("#hotnewslist li")) : ($("#mynewsclasslist").length > 0 && !$("#mynewsclasslist").is(':hidden')) ? (fthis = 4, $("#mynewsclasslist li")) : ($("#content").length > 0 && !$("#content").is(':hidden')) ? (fthis = 5, $("#content,#ul_relatednews li")) : ($("#mynewstaglist").length > 0 && !$("#mynewstaglist").is(':hidden')) ? (fthis = 6, $("#mynewstaglist li")) : null;
+            if (obj == null)
+                return;
+            if (obj.children(".newsimg3,.newsimg,.newsimg1").length > 0 || obj.find("p img").length > 0) {
+                return;
+            }
+            else { 
+                if (fthis > 0) {
+                    fthis != 5 ? obj.parent().html('') : "";
+                    fthis == 1 ? initLoadNewList() : fthis == 2 ? getGuanZhuList() : fthis == 3 ? getHotList() : fthis == 4 ? initLoadNewClassList() : fthis == 5 ? (getNewsContent(), getNewsNoimgRelated()) : fthis == 6 ? initLoadNewTagList() : "";
+                }
+            }
+
+            //  imgswitch = false; 
+        }
+    }
+
+    function logout() { 
+         var usertoken = getCookie("mydrivers_usertoken");
+    var userid = getCookie("mydrivers_usernumid");
+    var url = "//passport.mydrivers.com/logout.aspx?ReturnUrl=" + window.location.href + "&u=" + userid + "&t=" + usertoken;
+    parent.location = url;
+    }
+    function showsetting() {
+        $(".user-menu_bg").show().css({ "top": "" });
+        $(".user_box").show();
+        $(".classify_down").hide(); 
+    }
+    function downapp_float() {
+        if ($(".userinfo_box").length > 0)
+            $(".userinfo_box").remove();
+
+        var str = ""; 
+        str += "<div class=\"downapp\">";
+        str += "<a href=\"javascript:;\" onclick=\"$('.user-menu_bg').click();\" class=\"close\"></a>";
+        str += "	<a aria-label=\"打开APP\" href=\"//dt.mydrivers.com/down/go.ashx?tid=2\"> <img src=\"//11.mydrivers.com/m/images/v1/downapp_img.png\" width=\"540\" height=\"716\" alt=\"\"\/> <\/a>";
+        str += "	<\/div>";
+        
+        $("body").append(str);
+        $(".user-menu_bg").show(); 
+    }
+    function search() {
+        var q = $("#q").val();
+        if (q == "请输入要搜索的关键字") {
+            alert("请输入要查询的关键词"); return;
+        }
+      
+        window.location.href = "/search.aspx?q=" + escape(q);
+    }
+    function getCookie(varname) {
+        var tmp_ary = new Array();
+        if (varname) {
+            var a = document.cookie.indexOf(varname + "=");
+            if (a != -1) {
+                var b = document.cookie.substring((a + varname.length + 1), document.cookie.length);
+                var c = b.split(";");
+                var d = c[0];
+                return d;
+            }
+        }
+    }
+    function setCookie(name, value) { 
+        var Days = 30;
+        var exp = new Date();
+        exp.setTime(exp.getTime() + Days * 24 * 60 * 60 * 1000);
+        document.cookie = name + "=" + escape(value) + ";expires=" + exp.toGMTString() + ";domain=.mydrivers.com;path=/";
+    }
+</script>
+        <!--菜单-->
+        <div class="subnav">
+            <ul>
+                <li><a class="cur" href="/">首页</a></li>
+                <li><a href="newsclass.aspx?bcid=801">电脑</a></li>
+                <li><a href="newsclass.aspx?bcid=802">手机</a></li>
+                <li><a href="newsclass.aspx?bcid=807">汽车</a></li>
+                <li><a href="newsclass.aspx?bcid=803">业界</a></li>
+                <li><a href="newsclass.aspx?tid=1000">科学</a></li>
+                <li><a href="newsclass.aspx?tid=1001">排行</a></li>
+                <li><a href="newsclass.aspx?tid=1002">评测</a></li>
+                <li><a href="newsclass.aspx?icid=121">安卓</a></li>
+                <li><a href="newsclass.aspx?cid=201">苹果</a></li>
+                <li><a href="newsclass.aspx?cid=13">CPU</a></li>
+                <li><a href="newsclass.aspx?cid=12">显卡</a></li>
+                <li><a href="newsclass.aspx?tid=1003">一图</a></li> 
+                <li style="margin-top:2px;"><a href="javascript:;" onclick="showmenu()"><img src="//11.mydrivers.com/m/images/v1/nav_more.svg" alt="" width="13" height="13"></a></li>
+            </ul>
+            <div style="clear: both"></div>
+        </div>
+       <!--筛选下拉-->
+    <div class="classify_down" style="display:none;">
+      <ul>
+        <li><a href="newsclass.aspx?icid=270">阿里</a></li>
+        <li><a href="newsclass.aspx?icid=90">微软</a></li>
+        <li><a href="newsclass.aspx?icid=67">百度</a></li>
+        <li><a href="newsclass.aspx?bcid=809">影视</a></li>
+        <li><a href="newsclass.aspx?bcid=806">游戏</a></li>
+        <li><a href="newsclass.aspx?cid=38">路由器</a></li>
+        <li><a href="newsclass.aspx?icid=6950">PS5</a></li>
+        <li><a href="newsclass.aspx?icid=194">Xbox</a></li>
+        <li><a href="newsclass.aspx?icid=136">华为</a></li>
+        <li><a href="newsclass.aspx?icid=148">OPPO</a></li>        
+		<li><a href="newsclass.aspx?icid=9355">小米</a></li>
+        <li><a href="newsclass.aspx?icid=288">VIVO</a></li>
+        <li><a href="newsclass.aspx?icid=154">三星</a></li>
+        <li><a href="newsclass.aspx?icid=140">魅族</a></li>
+        <li><a href="newsclass.aspx?icid=385">一加</a></li>
+        <li><a href="newsclass.aspx?icid=1193">特斯拉</a></li>
+        <li><a href="newsclass.aspx?icid=770">比亚迪</a></li>
+        <li><a href="newsclass.aspx?icid=7259">小鹏</a></li>
+        <li><a href="newsclass.aspx?icid=7318">蔚来</a></li>
+        <li><a href="newsclass.aspx?icid=12947">理想</a></li>
+        <li><a href="newsclass.aspx?icid=429">奔驰</a></li>
+        <li><a href="newsclass.aspx?icid=461">宝马</a></li>
+        <li><a href="newsclass.aspx?icid=481">大众</a></li>
+        <li><a href="https://haohuo.mydrivers.com/baobei/youhui.html?fr=mclass">福利</a></li>
+      </ul>
+	<span  class="navclose"><a href="javascript:;" onclick="showmenu(1)"></a></span>
+    </div>
+        <!--轮播大图-->
+        <div class="shidian">
+            <div id='mySwipe' style='margin: 0 auto' class='swipe'>
+                <div class='swipe-wrap'>
+                    <div>  <a href="newsview/1149234.html"><img src="https://img1.mydrivers.com/Img/20260907/title_190256080.jpg" width="100%" /></a>  <div class="mySwipeceng">    <div class="left" style="float: inherit;height: 26px;line-height: 26px;overflow: hidden;">全球首款阔直板手机！华为Pura X View发布：5999元起</div>  </div></div><div>  <a href="newsview/1149224.html"><img src="https://img1.mydrivers.com/Img/20260907/title_190202752.jpg" width="100%" /></a>  <div class="mySwipeceng">    <div class="left" style="float: inherit;height: 26px;line-height: 26px;overflow: hidden;">刘德华曾给华为手机提建议！Mate XT 2这次彻底解决了</div>  </div></div><div>  <a href="newsview/1149090.html"><img src="https://img1.mydrivers.com/Img/20260907/title_191048916.jpg" width="100%" /></a>  <div class="mySwipeceng">    <div class="left" style="float: inherit;height: 26px;line-height: 26px;overflow: hidden;">特斯拉大降价：Model Y直减10000元！</div>  </div></div><div>  <a href="newsview/1148975.html"><img src="https://img1.mydrivers.com/Img/20260905/title_231443539.jpg" width="100%" /></a>  <div class="mySwipeceng">    <div class="left" style="float: inherit;height: 26px;line-height: 26px;overflow: hidden;">iPhone 18 Pro灵动岛大变样！这就是苹果史上最美正颜</div>  </div></div><div>  <a href="newsview/1148965.html"><img src="https://img1.mydrivers.com/Img/20260905/title_231152097.jpg" width="100%" /></a>  <div class="mySwipeceng">    <div class="left" style="float: inherit;height: 26px;line-height: 26px;overflow: hidden;">罕见！华为热门影像旗舰从头到尾没涨价：价格很稳</div>  </div></div><div>  <a href="newsview/1148954.html"><img src="https://img1.mydrivers.com/Img/20260905/title_231128183.jpg" width="100%" /></a>  <div class="mySwipeceng">    <div class="left" style="float: inherit;height: 26px;line-height: 26px;overflow: hidden;">华为Mate 90 RS外观首曝：完美继承非凡大师的经典设计</div>  </div></div><div>  <a href="newsview/1148948.html"><img src="https://img1.mydrivers.com/Img/20260905/title_231106780.jpg" width="100%" /></a>  <div class="mySwipeceng">    <div class="left" style="float: inherit;height: 26px;line-height: 26px;overflow: hidden;">最贵华为手机 Mate XT 2起售价曝光：首发麒麟9050 Pro</div>  </div></div><div>  <a href="newsview/1148621.html"><img src="https://img1.mydrivers.com/Img/20260904/title_194059315.jpg" width="100%" /></a>  <div class="mySwipeceng">    <div class="left" style="float: inherit;height: 26px;line-height: 26px;overflow: hidden;">中国没把存储价格打下来 反而会卖更贵！长鑫坐稳全球第四</div>  </div></div>
+                </div> 
+               	<div class="circle">
+	            	<i class="cur"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+		        </div>
+
+            </div>
+        </div>
+		
+        <!--新闻列表-->  
+        <div class="newslist"><h3 id="newsEventSwitch"> <a href="javascript:;" class="cur">最新<i></i></a> <a href="javascript:;">关注<i></i></a> <a href="javascript:;">热门<i></i></a> </h3><ul id="mynewslist"> <li data-id="1148986">        <div class="news_title news_title100"> <span class="newst"><a href="/newsview/1148986.html">China GT上海站赛车起火 FIST车队不满救援：退出系列赛<i class="zhiding bor_red"><img src="//11.mydrivers.com/m/images/v1/zhiding_icon.svg" alt="zhiding"/></i><i class="zhiding bor_green"><img src="//11.mydrivers.com/m/images/v1/shipin_icon.svg" alt="video"/></i></a></span> </div><a href="/newsview/1148986.html" class="newsimg1"><img src="https://img1.mydrivers.com/img/20260906/edf7f2ce11b4440ebb57f321623aec62.png"></a>        <div style="clear:both"></div>        <span class="newsTips pt5">        <p class="tname"><a href="javascript:;">若风</a></p>        <p class="ttime">2026-09-06 07:50</p>        <p style="float:right;"> <a href="javascript:;" class="teye">13524</a> <a href="/comment/review.aspx?tid=1148986" class="tpinglun">592</a> </p>        </span> </li>   <li data-id="1148621">    <div class="news_title"> <span class="newst"><a href="/newsview/1148621.html">中国没把存储价格打下来 反而会卖更贵！长鑫坐稳全球第四<i class="zhiding bor_red"><img src="//11.mydrivers.com/m/images/v1/zhiding_icon.svg" alt="zhiding"/></i></a></span></div>  <a href="/newsview/1148621.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260904/2a781164a25c49d48db8adff8909d8e4.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">雪花</a></p>        <p class="ttime">2026-09-04 09:00</p>        <p style="float:right;"> <a href="javascript:;" class="teye">24094</a> <a href="/comment/review.aspx?tid=1148621" class="tpinglun">925</a> </p>        </span> </li>   <li data-id="1148383">    <div class="news_title"> <span class="newst"><a href="/newsview/1148383.html">蔡司：中国15年内会造出EUV光刻机！制裁会逼出技术疯子<i class="zhiding bor_red"><img src="//11.mydrivers.com/m/images/v1/zhiding_icon.svg" alt="zhiding"/></i></a></span></div>  <a href="/newsview/1148383.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260903/9388e0ab8cdf4fdb87185fb38a189f4f.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">红茶</a></p>        <p class="ttime">2026-09-03 12:07</p>        <p style="float:right;"> <a href="javascript:;" class="teye">36163</a> <a href="/comment/review.aspx?tid=1148383" class="tpinglun">1077</a> </p>        </span> </li>   <li data-id="1148002">    <div class="news_title"> <span class="newst"><a href="/newsview/1148002.html">告别机顶盒！中国广电一体化电视全国规模部署正式启动<i class="zhiding bor_red"><img src="//11.mydrivers.com/m/images/v1/zhiding_icon.svg" alt="zhiding"/></i></a></span></div>  <a href="/newsview/1148002.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260902/1f6a57c53215425297b82327ba68ebca.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">建嘉</a></p>        <p class="ttime">2026-09-02 07:24</p>        <p style="float:right;"> <a href="javascript:;" class="teye">44042</a> <a href="/comment/review.aspx?tid=1148002" class="tpinglun">1177</a> </p>        </span> </li>   <li data-id="1149350">    <div class="news_title"> <span class="newst"><a href="/newsview/1149350.html">医生取出藏女子脑内7年活虫 边“聊天”边抓虫</a></span></div>  <a href="/newsview/1149350.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260908/1353c7dac5b541feb9529ff200cf4166.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">益达兄</a></p>        <p class="ttime">2026-09-08 01:09</p>        <p style="float:right;"> <a href="javascript:;" class="teye">564</a> <a href="/comment/review.aspx?tid=1149350" class="tpinglun">0</a> </p>        </span> </li>   <li data-id="1149349">    <div class="news_title"> <span class="newst"><a href="/newsview/1149349.html">李沐宸回应《重案六组》演季洁争议：没接住 辜负期待</a></span></div>  <a href="/newsview/1149349.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260908/32b6b0d8a7f743d18cbe3bfc52352204.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">心态良好的胖子</a></p>        <p class="ttime">2026-09-08 01:05</p>        <p style="float:right;"> <a href="javascript:;" class="teye">316</a> <a href="/comment/review.aspx?tid=1149349" class="tpinglun">0</a> </p>        </span> </li>   <li data-id="1149348">    <div class="news_title"> <span class="newst"><a href="/newsview/1149348.html">床底天天沙沙响没当回事：竟是5斤重大蛇钻进床垫</a></span></div>  <a href="/newsview/1149348.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260908/317b50d9754342029de8f6b4d68eede2.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">哈尔</a></p>        <p class="ttime">2026-09-08 01:00</p>        <p style="float:right;"> <a href="javascript:;" class="teye">345</a> <a href="/comment/review.aspx?tid=1149348" class="tpinglun">1</a> </p>        </span> </li>   <li data-id="1149346">    <div class="news_title"> <span class="newst"><a href="/newsview/1149346.html">薄荷清香！冷酸灵抑菌抗敏牙膏日常54.9 今券后13.75元</a></span></div>  <a href="/newsview/1149346.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260908/6367356398aa40469ea43678bda2b546.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">一叶知秋</a></p>        <p class="ttime">2026-09-08 00:26</p>        <p style="float:right;"> <a href="javascript:;" class="teye">300</a> <a href="/comment/review.aspx?tid=1149346" class="tpinglun">0</a> </p>        </span> </li>   <li data-id="1149347">    <div class="news_title"> <span class="newst"><a href="/newsview/1149347.html">美系豪车换上中国大脑！凯迪拉克XT5 PHEV上市：25.99万起</a></span></div>  <a href="/newsview/1149347.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260908/8035c05e14704d90b8bbd58d9e658a04.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">哈尔</a></p>        <p class="ttime">2026-09-08 00:40</p>        <p style="float:right;"> <a href="javascript:;" class="teye">418</a> <a href="/comment/review.aspx?tid=1149347" class="tpinglun">0</a> </p>        </span> </li>   <li data-id="1149345">    <div class="news_title"> <span class="newst"><a href="/newsview/1149345.html">刚提车1天 就降价1万块！特斯拉限时降价惹怒新车主</a></span></div>  <a href="/newsview/1149345.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260908/433cffe552ea478d90995ab37c218f45.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">若风</a></p>        <p class="ttime">2026-09-08 00:21</p>        <p style="float:right;"> <a href="javascript:;" class="teye">527</a> <a href="/comment/review.aspx?tid=1149345" class="tpinglun">4</a> </p>        </span> </li>   <li data-id="1149344">    <div class="news_title"> <span class="newst"><a href="/newsview/1149344.html">抬手即用！腾讯WorkBuddy正式登陆华为鸿蒙智能手表</a></span></div>  <a href="/newsview/1149344.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260908/c2205e7df1d84e07a22d034a45f1918c.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">建嘉</a></p>        <p class="ttime">2026-09-08 00:12</p>        <p style="float:right;"> <a href="javascript:;" class="teye">570</a> <a href="/comment/review.aspx?tid=1149344" class="tpinglun">0</a> </p>        </span> </li>   <li data-id="1149325">    <div class="news_title"> <span class="newst"><a href="/newsview/1149325.html">361°男子春秋棒球服清仓大促：66.6元到手（30款可选）</a></span></div>  <a href="/newsview/1149325.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260907/ed1fd38668054e4c9856425ecef5b94e.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">小朱</a></p>        <p class="ttime">2026-09-07 22:02</p>        <p style="float:right;"> <a href="javascript:;" class="teye">1428</a> <a href="/comment/review.aspx?tid=1149325" class="tpinglun">0</a> </p>        </span> </li>   <li data-id="1149343">    <div class="news_title"> <span class="newst"><a href="/newsview/1149343.html">前8月累计销量突破100万辆！广汽集团：坚决不造“速成车”</a></span></div>  <a href="/newsview/1149343.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260908/a373ca46e51647eaa9ad008ee982a1b0.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">哈尔</a></p>        <p class="ttime">2026-09-08 00:11</p>        <p style="float:right;"> <a href="javascript:;" class="teye">438</a> <a href="/comment/review.aspx?tid=1149343" class="tpinglun">0</a> </p>        </span> </li>   <li data-id="1149342">    <div class="news_title"> <span class="newst"><a href="/newsview/1149342.html">华为又创造了一个爆款！Pura X View售罄：5999元起</a></span></div>  <a href="/newsview/1149342.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260908/982d6943b4e0480880b466b80fa33d33.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">振亭</a></p>        <p class="ttime">2026-09-08 00:02</p>        <p style="float:right;"> <a href="javascript:;" class="teye">937</a> <a href="/comment/review.aspx?tid=1149342" class="tpinglun">7</a> </p>        </span> </li>   <li data-id="1149341">    <div class="news_title"> <span class="newst"><a href="/newsview/1149341.html">949元！小米推出米家智能浴霸2：自带毫米波雷达 人感照明/</a></span></div>  <a href="/newsview/1149341.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260908/4281b47d938d4ecb9ac58ce2fc1b6144.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">建嘉</a></p>        <p class="ttime">2026-09-08 00:01</p>        <p style="float:right;"> <a href="javascript:;" class="teye">571</a> <a href="/comment/review.aspx?tid=1149341" class="tpinglun">1</a> </p>        </span> </li>   <li data-id="1149290">    <div class="news_title"> <span class="newst"><a href="/newsview/1149290.html">可水洗可放口袋！索爱T8剃须刀礼盒日常139元 今券后59到手</a></span></div>  <a href="/newsview/1149290.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260907/933c67e3acad46cca684eabec8afd286.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">一叶知秋</a></p>        <p class="ttime">2026-09-07 18:57</p>        <p style="float:right;"> <a href="javascript:;" class="teye">3032</a> <a href="/comment/review.aspx?tid=1149290" class="tpinglun">0</a> </p>        </span> </li>   <li data-id="1149340">    <div class="news_title"> <span class="newst"><a href="/newsview/1149340.html">大一医学新生名叫张仲景引热议 本人回应：不是刻意取的</a></span></div>  <a href="/newsview/1149340.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260907/d14161b1e88a46a2a665f430175a633b.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">哈尔</a></p>        <p class="ttime">2026-09-07 23:54</p>        <p style="float:right;"> <a href="javascript:;" class="teye">626</a> <a href="/comment/review.aspx?tid=1149340" class="tpinglun">3</a> </p>        </span> </li>   <li data-id="1149339">    <div class="news_title"> <span class="newst"><a href="/newsview/1149339.html">判断用不用你的软件 Agent只需500个Token</a></span></div>  <a href="/newsview/1149339.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260907/c7746d9eb86b49e587d2013bcef0f883.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">宇航猿</a></p>        <p class="ttime">2026-09-07 23:53</p>        <p style="float:right;"> <a href="javascript:;" class="teye">577</a> <a href="/comment/review.aspx?tid=1149339" class="tpinglun">1</a> </p>        </span> </li>   <li data-id="1149338">    <div class="news_title"> <span class="newst"><a href="/newsview/1149338.html">liquid Network遭突袭 3.2亿美元比特币遭白帽黑客盗窃</a></span></div>  <a href="/newsview/1149338.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260907/d49641e99945446e90a1d2c736539ea1.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">马兰</a></p>        <p class="ttime">2026-09-07 23:48</p>        <p style="float:right;"> <a href="javascript:;" class="teye">547</a> <a href="/comment/review.aspx?tid=1149338" class="tpinglun">0</a> </p>        </span> </li>   <li data-id="1149219">    <div class="news_title"> <span class="newst"><a href="/newsview/1149219.html">明目败火！徽春堂金丝皇菊50多：到手价仅5.9元</a></span></div>  <a href="/newsview/1149219.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260907/36b8022f15bf4c84acc8dac7f175057b.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">阿豪</a></p>        <p class="ttime">2026-09-07 16:17</p>        <p style="float:right;"> <a href="javascript:;" class="teye">3789</a> <a href="/comment/review.aspx?tid=1149219" class="tpinglun">0</a> </p>        </span> </li>   <li data-id="1149337">    <div class="news_title"> <span class="newst"><a href="/newsview/1149337.html">陈年回应没去发布会：去现场蹭不上雷军流量 已预订N90 Max</a></span></div>  <a href="/newsview/1149337.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260907/05d7b1df589040bdb5d5e9d3357aea1c.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">哈尔</a></p>        <p class="ttime">2026-09-07 23:34</p>        <p style="float:right;"> <a href="javascript:;" class="teye">773</a> <a href="/comment/review.aspx?tid=1149337" class="tpinglun">0</a> </p>        </span> </li>   <li data-id="1149336">    <div class="news_title"> <span class="newst"><a href="/newsview/1149336.html">小米最高端手机！一图读懂小米18 Fold：10999元起</a></span></div>  <a href="/newsview/1149336.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260907/b1d98d2cf74c4e43994c22d4f50860b1.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">振亭</a></p>        <p class="ttime">2026-09-07 23:14</p>        <p style="float:right;"> <a href="javascript:;" class="teye">1791</a> <a href="/comment/review.aspx?tid=1149336" class="tpinglun">19</a> </p>        </span> </li>   <li data-id="1149335">    <div class="news_title"> <span class="newst"><a href="/newsview/1149335.html">20.99万起 小米再造爆款车！小米澎程上市4分钟大定破万台</a></span></div>  <a href="/newsview/1149335.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260907/b7208a84e6cb42f69a621fd4ea7b3865.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">若风</a></p>        <p class="ttime">2026-09-07 23:08</p>        <p style="float:right;"> <a href="javascript:;" class="teye">1300</a> <a href="/comment/review.aspx?tid=1149335" class="tpinglun">0</a> </p>        </span> </li>   <li data-id="1149334">    <div class="news_title"> <span class="newst"><a href="/newsview/1149334.html">西方游戏产业遇冷 中国年入3476亿！顶5个英国</a></span></div>  <a href="/newsview/1149334.html" class="newsimg"><img src="https://img1.mydrivers.com/img/20260907/8ffacbdc1050462aa76311358ac4ff7c.png"></a>        <div style="clear:both"></div>        <span class="newsTips">        <p class="tname"><a href="javascript:;">何念穿堂风</a></p>        <p class="ttime">2026-09-07 23:02</p>        <p style="float:right;"> <a href="javascript:;" class="teye">1070</a> <a href="/comment/review.aspx?tid=1149334" class="tpinglun">0</a> </p>        </span> </li></ul><ul id="guanzhulist"></ul><ul id="hotnewslist" style="display:none;"></ul></div><div class="jzmore" style="border: 0;">更多新闻加载中</div>
+      
+        <div class="fh_top" id="gotop" style="display:none;"><img src="//11.mydrivers.com/m/images/v1/go_top.svg" width="36" height="36"></div>
+
+        <script type="text/javascript">
+            var currPage = 1,
+                    winscrollType = 0,
+                    stoploading = false,
+                    winH = $(window).height(),
+                    guanzhuPage = 1;
+            function showmenu(t) {
+                var o = $(".user-menu_bg");
+                var i = $(".classify_down");
+                t == 1 ? (o.hide().css({ "top": "" }), i.hide()) : (o.show().css({ "top": "110px" }), i.show()); 
+            }
+
+            function setredstyle(index)
+            {
+                $("#mySwipe .circle i").removeClass('cur').eq(index).addClass('cur');
+            }
+              
+            $(function () {
+                
+                var elem = document.getElementById('mySwipe');
+                window.mySwipe = Swipe(elem, {
+                    startSlide: 0,
+                    auto: 3000,
+                    continuous: true,
+                    disableScroll: true,
+                    stopPropagation: true, 
+                    callback: function (index, element) { setredstyle(index); },
+                    transitionEnd: function (index, element) { }
+                });
+                 
+                $(".jzmore").click(function () { 
+                    switch (winscrollType) {
+                        case 0:
+                            initLoadNewList();
+                            break;
+                        case 1:
+                            getGuanZhuList();
+                            break;
+                    }
+                });
+                  
+                $(window).scroll(function () {
+                    var pageH = $(document.body).height(); 
+                    var scrollT = window.pageYOffset || document.documentElement.scrollTop;
+                    var aa = (pageH - winH - scrollT) / winH; 
+                    if (aa < 1) { 
+                        switch (winscrollType) {
+                            case 0:
+                                if (currPage > 3) {
+                                    $(".jzmore").html("点击加载更多新闻"); 
+                                }
+                                else {
+                                    initLoadNewList();
+                                }
+                                break;
+                            case 1: 
+                                if (guanzhuPage > 4) {
+                                    $(".jzmore").html("点击加载更多");
+                                }
+                                else {
+                                    getGuanZhuList();
+                                } 
+                                break;
+                        }
+                    }
+                    jumptop();
+                });
+                  
+                $("#newsEventSwitch a").click(function () {
+                    var index = $(this).index();
+                    if (index == 1 && (getCookie("mydrivers_usernumid") == null || getCookie("mydrivers_usernumid") == "" || getCookie("mydrivers_userid") == null || getCookie("mydrivers_userid") == "")) {
+                        alert("请先登录哦^v^");
+                        return false;
+                    }
+                    index == 2 ? $(".jzmore").hide() : $(".jzmore").show();
+                    winscrollType = index;
+                    $("#newsEventSwitch a").removeClass('cur').eq(index).addClass('cur');
+                    $(".newslist ul").hide().eq(index).show(); 
+                    if (index == 1 && $("#guanzhulist").text() == "") {
+                        getGuanZhuList();
+                    }
+                    else if (index == 2 && $("#hotnewslist").text() == "") {
+                        getHotList();
+                    }
+                    else { initnoimg(); }
+                });
+                   
+            });
+            function getCookie(varname) {
+                var tmp_ary = new Array();
+                if (varname) {
+                    var a = document.cookie.indexOf(varname + "=");
+                    if (a != -1) {
+                        var b = document.cookie.substring((a + varname.length + 1), document.cookie.length);
+                        var c = b.split(";");
+                        var d = c[0];
+                        return d;
+                    }
+                }
+            }
+
+            function initLoadNewList() {
+                if (stoploading == false) {
+                    stoploading = true;
+                    $(".jzmore").html("更多新闻加载中");
+                    currPage++;
+                    $.ajax({
+                        type: 'GET',
+                        url: '/m/newslist.ashx?ac=index&minid=' + $("#mynewslist [data-id]").last().attr("data-id"),
+                        // data to be added to query string:
+                        data: {},
+                        // type of data we are expecting in return:
+                        dataType: 'text',
+                        timeout: 10000,
+                        success: function (data) {
+                            $("#mynewslist").is(":empty") ? $("#mynewslist").html(data) : $("#mynewslist").append(data);
+                            initnoimg();
+                            $(".jzmore").html("更多新闻加载中");
+                            stoploading = false;
+                        },
+                        error: function (xhr, type) {
+                            //alert('Ajax error!')
+                        }
+                    });
+                }
+            }
+
+            function getGuanZhuList() {
+                if (stoploading == false) {
+                    stoploading = true;
+                    guanzhuPage++;
+                    $.ajax({
+                        type: 'POST',
+                        url: '/m/homeattention.ashx',
+                        data: { minid: $("#guanzhulist [data-id]").length > 0 ? $("#guanzhulist [data-id]").last().attr("data-id") : 0 },
+                        dataType: 'json',
+                        timeout: 10000,
+                        success: function (data) {
+                            if (data.code == 1) {
+                                if (data.data != '') {
+                                    $("#guanzhulist").is(":empty") ? $("#guanzhulist").html(UnicodeConverter.ToStr(data.data)) : $("#guanzhulist").append(UnicodeConverter.ToStr(data.data));
+                                    initnoimg();
+                                }
+                                else {
+                                    $("#guanzhulist").append("暂无关注");
+                                }
+                            }
+                            else { alert(code.msg); }
+                            stoploading = false;
+                        },
+                        error: function (xhr, type) {
+                        }
+                    });
+                }
+            }
+
+            function getHotList() {
+                $.ajax({
+                    type: 'get',
+                    url: '/m/newslist.ashx',
+                    data: { ac: 'hot' },
+                    dataType: 'text',
+                    timeout: 10000,
+                    success: function (data) {
+                        $("#hotnewslist").html(data);
+                        initnoimg();
+                    },
+                    error: function (xhr, type) {
+                    }
+                });
+            }
+            var UnicodeConverter = {
+                ToStr: function (str) {
+                    return unescape(str.replace(/\\u/gi, '%u'));
+                }
+            };
+        </script>
+      
+
+<div class="footer"><a href="https://www.mydrivers.com">电脑版</a> |<a href="https://m.mydrivers.com/" class="cur">移动版</a> | <a href="http://app.kkj.cn">安卓版</a> | <a href="http://app.kkj.cn">苹果版</a>| <a href="//pad.mydrivers.com">Pad版</a>
+  <p></p>
+  <span>
+      <a target="_blank" href="https://beian.miit.gov.cn/">豫ICP备2023031922号-1</a>
+      <br></span> 
+	</div>
+	<div class="others" style="padding-bottom:50px;">
+        <a href="https://app.kkj.cn/">
+    <img src="//11.mydrivers.com/m/images/v1/kkjapp_down.gif" width="640" height="155" alt=""/>
+        </a>
+    </div>
+
+<div style="display:none;">
+<script> 
+    if ($.isFunction(window.initTextSwitch))
+        initTextSwitch(); 
+$("#gotop").on("click", function () {
+    $("html,body").animate({
+        scrollTop: 0
+    }, 200), !1
+    $("#gotop").hide();
+});
+function jumptop() {
+    var t; Y = 0;
+    document.documentElement && document.documentElement.scrollTop ? t = document.documentElement.scrollTop : document.body &&
+        (t = document.body.scrollTop);
+    percent = .1 * (t - Y);
+    percent = percent > 0 ? Math.ceil(percent) : Math.floor(percent);
+    Y = Y + percent;
+    Y < 100 ? $("#gotop").hide() : $("#gotop").show();
+}
+function getParameterByName(name) {
+    name = name.replace(/[\[]/, "\\\[").replace(/[\]]/, "\\\]");
+    var regexS = "[\\?&]" + name + "=([^&#]*)";
+    var regex = new RegExp(regexS);
+    var results = regex.exec(window.location.search);
+    if (results == null)
+        return "";
+    else
+        return decodeURIComponent(results[1].replace(/\+/g, " "));
+}
+</script>
+</div>
+<div style="display:none;">
+<script type="text/javascript">
+    var _bdhmProtocol = (("https:" == document.location.protocol) ? " https://" : " http://");
+    document.write(unescape("%3Cscript src='" + _bdhmProtocol + "hm.baidu.com/h.js%3Ffa993fdd33f32c39cbb6e7d66096c422' type='text/javascript'%3E%3C/script%3E"));
+</script>
+<script>
+    var _hmt = _hmt || [];
+    (function () {
+        var hm = document.createElement("script");
+        hm.src = "https://hm.baidu.com/hm.js?bcaf283589babf2bdd06cab74a795ebb";
+        var s = document.getElementsByTagName("script")[0];
+        s.parentNode.insertBefore(hm, s);
+    })();
+</script>
+
+    <!-- Global site tag (gtag.js) - Google Analytics -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=UA-2034714-43"></script>
+<script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag() { dataLayer.push(arguments); }
+    gtag('js', new Date());
+
+    gtag('config', 'UA-2034714-43');
+</script>
+
+</div>
+
+
+
+      
+      
+  </div> 
+</body>
+</html>
