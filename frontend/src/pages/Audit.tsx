@@ -31,6 +31,7 @@ const ACTION_STYLES: Record<string, { label: string; cls: string }> = {
   'user.unlocked': { label: '解除锁定', cls: 'bg-emerald-500/10 text-emerald-300 border-emerald-400/20' },
   'admin.config_updated': { label: '配置修改', cls: 'bg-cyan-500/10 text-cyan-300 border-cyan-400/30' },
   'admin.price_updated': { label: '价目变更', cls: 'bg-cyan-500/10 text-cyan-300 border-cyan-400/30' },
+  'admin.price_deleted': { label: '价目删除', cls: 'bg-red-500/10 text-red-300 border-red-400/30' },
   'admin.test_llm': { label: 'LLM 测试', cls: 'bg-slate-500/10 text-slate-300 border-slate-400/20' },
   'admin.test_embedding': { label: 'Embedding 测试', cls: 'bg-slate-500/10 text-slate-300 border-slate-400/20' },
   'admin.trigger_crawl': { label: '手动采集', cls: 'bg-sky-500/10 text-sky-300 border-sky-400/30' },
@@ -91,6 +92,12 @@ function detailText(action: string, d: Record<string, unknown>): string {
       const fmt = (p: Record<string, unknown> | null | undefined) =>
         p ? `入 ${p.price_input} / 出 ${p.price_output} / 缓存 ${p.price_cache ?? '按输入价'}` : '无';
       return `${d.op === 'create' ? '新增' : '更新'} ${d.model}：${fmt(oldP)} → ${fmt(newP)}`;
+    }
+    case 'admin.price_deleted': {
+      const del = d.deleted as Record<string, unknown> | undefined;
+      return del
+        ? `删除 ${d.model}：入 ${del.price_input} / 出 ${del.price_output} / 缓存 ${del.price_cache ?? '按输入价'}`
+        : `删除 ${d.model}`;
     }
     case 'admin.test_llm':
     case 'admin.test_embedding': {

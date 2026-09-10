@@ -21,7 +21,9 @@ from app.services.usage_service import (
     MAX_MODEL_PRICE,
     CSV_HEADERS,
     calc_cost,
+    cleanup_expired_usage,
     csv_safe_cell,
+    delete_price,
     extract_openai_usage,
     list_prices,
     price_dict,
@@ -150,6 +152,31 @@ def test_upsert_price_create_update_and_created_flag(db):
     assert d["price_cache"] is None
     assert set(CSV_HEADERS) >= {"cached_tokens", "cost"}  # 导出列含缓存与成本
     assert [p.model for p in list_prices(db)] == ["mx"]
+
+
+def test_delete_price(db):
+    """删除存在的价目 → True 且行消失；再删 → False（API 据此 404）。"""
+    upsert_price(db, "del-me", 1.0, 2.0)
+    assert delete_price(db, "del-me") is True
+    assert list_prices(db) == []
+    assert delete_price(db, "del-me") is False
+
+
+def test_cleanup_expired_usage(db):
+    """保留期清理：只删超期行；0/负数 = 永久保留，跳过。"""
+    now = datetime.now(timezone.utc)
+    _add_log(db, created_at=now - timedelta(days=400), model="old-model")
+    _add_log(db, created_at=now - timedelta(days=1), model="new-model")
+
+    assert cleanup_expired_usage(db, 0) == 0   # 0 = 永久保留
+    assert cleanup_expired_usage(db, -5) == 0
+    assert usage_logs(db)["total"] == 2
+
+    assert cleanup_expired_usage(db, 365) == 1
+    remaining = usage_logs(db)
+    assert remaining["total"] == 1
+    assert remaining["items"][0]["model"] == "new-model"
+    assert cleanup_expired_usage(db, 365) == 0  # 幂等
 
 
 def test_upsert_price_sanitizes_bad_values(db):

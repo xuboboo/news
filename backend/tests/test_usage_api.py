@@ -217,3 +217,73 @@ def test_usage_summary_api_shape(super_client):
     assert usage_service.LOG_TASK_TYPES == (
         "summary", "event_summary", "embedding", "report", "conn_test",
     )
+
+
+# ———————————————————— 价目删除 ————————————————————
+
+def test_price_delete_roundtrip(super_client, db):
+    """DELETE：存在 → 200 + 行消失 + 审计留痕；再删 → 404。"""
+    r = super_client.post(
+        "/api/v2/admin/usage/prices",
+        json={"model": "typo-model", "price_input": 1, "price_output": 2},
+        headers=H,
+    )
+    assert r.status_code == 200
+
+    r = super_client.delete("/api/v2/admin/usage/prices/typo-model", headers=H)
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "model": "typo-model"}
+    s = db.factory()
+    try:
+        assert s.get(ModelPrice, "typo-model") is None
+        import json as _json
+
+        from app.models.audit_log import AuditLog
+
+        audits = s.query(AuditLog).filter(AuditLog.action == "admin.price_deleted").all()
+        assert len(audits) == 1
+        assert _json.dumps(audits[0].detail, ensure_ascii=False).count("typo-model") >= 1
+    finally:
+        s.close()
+
+    assert super_client.delete("/api/v2/admin/usage/prices/typo-model", headers=H).status_code == 404
+
+
+def test_price_delete_reenables_unpriced_warning(super_client):
+    """删除 0 价声明后盲区告警重新出现——价目删除的自愈可见性。"""
+    super_client.post(
+        "/api/v2/admin/usage/prices",
+        json={"model": "self-hosted-x", "price_input": 0, "price_output": 0},
+        headers=H,
+    )
+    r = super_client.get("/api/v2/admin/usage/summary", params={"period": "30d", "daily": 0, "groups": 0})
+    assert r.json()["unpriced_models"] == []
+    assert super_client.delete("/api/v2/admin/usage/prices/self-hosted-x", headers=H).status_code == 200
+
+
+# ———————————————————— 导出带流水过滤 ————————————————————
+
+def test_export_with_log_filters(super_client, db, usage_in_testdb):
+    """导出透传明细页筛选：只导出命中 task_type+status 的行。"""
+    s = db.factory()
+    s.add(AiUsageLog(task_type="summary", trigger="auto", model="llm-a",
+                     status="success", total_tokens=10))
+    s.add(AiUsageLog(task_type="embedding", trigger="auto", model="emb-a",
+                     status="api_fail", error="boom", total_tokens=20))
+    s.commit()
+    s.close()
+
+    r = super_client.get(
+        "/api/v2/admin/usage/export",
+        params={"task_type": "embedding", "status": "api_fail"},
+    )
+    assert r.status_code == 200
+    text = r.content.decode("utf-8-sig")
+    assert "emb-a" in text and "boom" in text
+    assert "llm-a" not in text
+
+    # 白名单外的过滤值 → 422（Query pattern 校验）
+    assert (
+        super_client.get("/api/v2/admin/usage/export", params={"task_type": "nope"}).status_code
+        == 422
+    )

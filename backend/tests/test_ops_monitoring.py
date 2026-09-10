@@ -224,3 +224,36 @@ def test_health_light_and_deep(client, monkeypatch):
     assert deep["checks"]["redis"] is True
     assert deep["checks"]["celery"] is True
     assert deep["checks"]["crawler"] is None  # 从未运行过：不判停
+
+
+# ———————————————————— AI 日成本预算告警（成本看板域 × 告警域） ————————————————————
+
+def test_budget_alert_triggers_and_clears(db, monkeypatch):
+    """ai_daily_cost_budget > 0 且今日成本超限 → 进 problems；预算 0 = 关闭。"""
+    from app.models.usage import AiUsageLog
+    from conftest import set_config
+
+    # 基础设施项全部正常，隔离出预算检查的信号
+    monkeypatch.setattr(infra_status, "redis_ping", lambda timeout=2.0: (True, 1))
+    monkeypatch.setattr(infra_status, "celery_workers_ping", lambda timeout=4.0: (["celery@a"], None))
+    monkeypatch.setattr(alert_service, "cadence_warnings", lambda db, interval, skip=None: [])
+
+    s = db.factory()
+    s.add(AiUsageLog(task_type="summary", trigger="auto", model="llm-a",
+                     status="success", cost=5.0,
+                     created_at=datetime.now(timezone.utc)))
+    s.commit()
+    s.close()
+
+    # 预算 0（默认，env 未配置）= 关闭，不产生预算问题
+    problems = alert_service._collect_problems(db.factory())
+    assert all("预算" not in p for p in problems)
+
+    set_config(db, "ai_daily_cost_budget", "2")
+    problems = alert_service._collect_problems(db.factory())
+    assert any("AI 日成本超预算" in p and "250%" in p for p in problems)
+
+    # 未超限的预算不误报
+    set_config(db, "ai_daily_cost_budget", "100")
+    problems = alert_service._collect_problems(db.factory())
+    assert all("预算" not in p for p in problems)

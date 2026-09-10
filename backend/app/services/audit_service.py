@@ -45,6 +45,7 @@ ACTIONS = {
     # —— 运维管理（管理面板敏感操作）——
     "admin.config_updated",
     "admin.price_updated",
+    "admin.price_deleted",
     "admin.test_llm",
     "admin.test_embedding",
     "admin.trigger_crawl",

@@ -26,6 +26,7 @@ import {
   UsageLogFilters,
   UsageLogItem,
   UsageSummary,
+  deleteUsagePrice,
   exportUsageCsv,
   getUsageLogs,
   getUsagePrices,
@@ -213,10 +214,28 @@ export default function Usage() {
         exportRange === 'all'
           ? undefined
           : { start: isoDaysAgo(exportRange === '7d' ? 6 : 29), end: utcToday() };
-      await exportUsageCsv(range);
-      flash(true, exportRange === 'all' ? 'CSV 已开始下载（全量，含对账口径注释行）' : `CSV 已开始下载（近 ${exportRange === '7d' ? '7' : '30'} 天）`);
+      // 明细区的任务/状态筛选一并透传给导出（按钮就放在筛选器旁边，行为要与所见一致）
+      const hasFilters = Boolean(filtersRef.current.task_type || filtersRef.current.status);
+      await exportUsageCsv(range, filtersRef.current);
+      const scopeText =
+        exportRange === 'all' ? '全量' : `近 ${exportRange === '7d' ? '7' : '30'} 天`;
+      flash(true, `CSV 已开始下载（${scopeText}${hasFilters ? ' · 含当前筛选' : ''}，含对账口径注释行）`);
     } catch (e: any) {
       flash(false, `导出失败：${e?.message ?? e}`);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const deletePrice = async (model: string) => {
+    if (!window.confirm(`确定删除「${model}」的价目？删除后该模型的新调用按未计价处理（盲区告警会重新提示）`)) return;
+    setBusy(`price-del-${model}`);
+    try {
+      await deleteUsagePrice(model);
+      setPrices((list) => list.filter((p) => p.model !== model));
+      flash(true, `价目已删除：${model}`);
+    } catch (e: any) {
+      flash(false, `删除失败：${e?.message ?? e}`);
     } finally {
       setBusy('');
     }
@@ -476,14 +495,23 @@ export default function Usage() {
                         <PriceInput value={edit ? edit.cache : p.price_cache == null ? '' : String(p.price_cache)} onChange={(v) => setPriceEdits((m) => ({ ...m, [p.model]: { in: m[p.model]?.in ?? String(p.price_input), out: m[p.model]?.out ?? String(p.price_output), cache: v } }))} ariaLabel={`编辑 ${p.model} 缓存命中单价（留空按输入价）`} placeholder="按输入价" />
                       </td>
                       <td className="px-2 py-2 text-slate-500 whitespace-nowrap">{fmtTime(p.updated_at)}</td>
-                      <td className="px-4 py-2 text-right">
+                      <td className="px-4 py-2 text-right whitespace-nowrap">
                         <button
                           onClick={() => savePrice(p.model, edit?.in ?? String(p.price_input), edit?.out ?? String(p.price_output), edit?.cache ?? (p.price_cache == null ? '' : String(p.price_cache)))}
                           disabled={!changed || busy === `price-${p.model}`}
-                          className="chip bg-accent/90 hover:bg-accent text-white border border-accent/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                          className="chip bg-accent/90 hover:bg-accent text-white border border-accent/50 disabled:opacity-40 disabled:cursor-not-allowed mr-1.5"
                         >
                           {busy === `price-${p.model}` ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
                           保存
+                        </button>
+                        <button
+                          onClick={() => void deletePrice(p.model)}
+                          disabled={busy.startsWith('price-del-')}
+                          aria-label={`删除 ${p.model} 价目`}
+                          className="chip border border-red-400/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {busy === `price-del-${p.model}` ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                          删除
                         </button>
                       </td>
                     </tr>

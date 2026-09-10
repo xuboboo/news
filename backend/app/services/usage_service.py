@@ -14,6 +14,7 @@ from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import new_session
@@ -193,16 +194,55 @@ def upsert_price(
             raise ValueError(f"{name} 超过防呆上限 {MAX_MODEL_PRICE} 元/百万 token，疑似录入错误")
     row = db.get(ModelPrice, model)
     created = row is None
-    if row is None:
-        row = ModelPrice(model=model, price_input=price_input, price_output=price_output)
-        db.add(row)
-    else:
+    try:
+        if row is None:
+            row = ModelPrice(model=model, price_input=price_input, price_output=price_output)
+            db.add(row)
+        else:
+            row.price_input = price_input
+            row.price_output = price_output
+        row.price_cache = price_cache
+        db.commit()
+    except IntegrityError:
+        # 并发双击「新增」：两个请求同时走到 INSERT，唯一键冲突的那个转更新路径重放一次，
+        # 避免 500（价格后写者胜，与无并发时的最终态一致）
+        db.rollback()
+        row = db.get(ModelPrice, model)
+        if row is None:
+            raise
+        created = False
         row.price_input = price_input
         row.price_output = price_output
-    row.price_cache = price_cache
-    db.commit()
+        row.price_cache = price_cache
+        db.commit()
     db.refresh(row)
     return row, created
+
+
+def delete_price(db: Session, model: str) -> bool:
+    """删除某模型价目（误录入的模型名得以移除；删除后盲区告警会重新提示，自愈可见）。
+    返回是否存在（供 API 区分 404）。历史流水按入库时锁定的单价计，不受影响。"""
+    row = db.get(ModelPrice, model)
+    if row is None:
+        return False
+    db.delete(row)
+    db.commit()
+    return True
+
+
+def cleanup_expired_usage(db: Session, retention_days: int) -> int:
+    """物理删除超过保留期的用量流水（周清理任务调用；0 = 永久保留，跳过）。
+    长期归档先用 CSV 导出（/usage/export），删除不可逆。"""
+    if not retention_days or retention_days <= 0:
+        return 0
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    deleted = (
+        db.query(AiUsageLog)
+        .filter(AiUsageLog.created_at < cutoff)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return deleted
 
 
 def price_dict(p: ModelPrice) -> dict:

@@ -3,7 +3,8 @@
 检查项（与运维面板同口径，复用 infra_status）：
 - Redis 连通、Celery worker 存活；
 - 任务节奏心跳（event/crawler/stats/report 停摆；stats 被面板热停时豁免）；
-- 最近失败任务未恢复。
+- 最近失败任务未恢复；
+- AI 日成本超预算（ai_daily_cost_budget > 0 时启用；UTC 日界，跨日成本归零即"恢复"）。
 
 推送策略（状态存 Redis key alert:watch）：
 - ok → bad：立即推送；bad 持续期间每 30 分钟重复提醒一次；
@@ -112,6 +113,22 @@ def _collect_problems(db: Session) -> list[str]:
             problems.append(
                 f"任务连续降级：{name} 最近 3 轮均为 degraded（部分来源持续失败），"
                 f"最新明细：{(recent[0].detail or '')[:150]}"
+            )
+
+    # AI 日成本超预算（成本看板域的预算告警；沿用上方状态机去重节奏）
+    try:
+        budget = float(config_service.get_effective(db, "ai_daily_cost_budget") or 0)
+    except Exception:
+        budget = 0.0
+    if budget > 0:
+        from app.services.usage_service import usage_day_summary
+
+        today = datetime.now(timezone.utc).date()
+        spent = usage_day_summary(db, today)["cost"]
+        if spent > budget:
+            problems.append(
+                f"AI 日成本超预算：今日已计 ¥{spent:.2f}，超过预算 ¥{budget:.2f}"
+                f"（{spent / budget * 100:.0f}%，UTC 日界，跨日自动解除）"
             )
 
     return problems

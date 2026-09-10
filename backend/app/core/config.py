@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     report_push_feishu_webhook_url: str = ""
     report_push_feishu_secret: str = ""  # 飞书机器人开启「签名校验」时必填，未开启留空
 
+    # —— AI 成本治理（面板可热调） ——
+    ai_daily_cost_budget: float = 0.0    # 单日（UTC 日界）AI 成本预算（元）；0 = 不告警
+    ai_usage_retention_days: int = 365   # ai_usage_log 流水保留天数；0 = 永久保留
+
     # —— 安全 ——
     cors_origins: str = "http://localhost,http://127.0.0.1"  # 允许跨域的前端来源（逗号分隔）
     allow_private_ai_urls: bool = False  # 允许 LLM/Embedding 地址指向私网（仅内网部署）

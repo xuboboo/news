@@ -536,11 +536,14 @@ def _usage_csv_stream(
     db: Session,
     start: datetime | None = None,
     end: datetime | None = None,
+    task_type: str | None = None,
+    status: str | None = None,
 ):
     """分批产出 CSV 行（UTF-8 BOM 由首段携带；首行为对账口径注释）。
 
-    start/end：可选 UTC 时间范围（左闭右开）。外部文本字段过 csv_safe_cell
-    防公式注入；cost 固定 6 位小数，避免极小值变科学计数法。
+    start/end：可选 UTC 时间范围（左闭右开）；task_type/status：可选流水过滤
+    （与 /usage/logs 同一白名单）。外部文本字段过 csv_safe_cell 防公式注入；
+    cost 固定 6 位小数，避免极小值变科学计数法。
     """
     yield "\ufeff"  # UTF-8 BOM，方便 Excel 直接打开
     yield f"# {usage_service.CSV_NOTE}\n"
@@ -557,15 +560,24 @@ def _usage_csv_stream(
             q = q.filter(AiUsageLog.created_at >= start)
         if end is not None:
             q = q.filter(AiUsageLog.created_at < end)
+        if task_type:
+            q = q.filter(AiUsageLog.task_type == task_type)
+        if status:
+            q = q.filter(AiUsageLog.status == status)
         rows = q.order_by(AiUsageLog.id).limit(batch).all()
         if not rows:
             break
         last_id = rows[-1].id  # id 游标：深翻页不因 OFFSET 退化为 O(N²)
-        titles = {
-            a.id: a.title
-            for a in db.query(Article)
-            .filter(Article.id.in_([r.article_id for r in rows if r.article_id])).all()
-        }
+        art_ids = [r.article_id for r in rows if r.article_id]
+        # 空批次不查 article（此前无条件 IN 查询，本批无文章引用时也白打一条 SQL）
+        titles = (
+            {
+                a.id: a.title
+                for a in db.query(Article).filter(Article.id.in_(art_ids)).all()
+            }
+            if art_ids
+            else {}
+        )
         buf = io.StringIO()
         writer = csv.writer(buf)
         for r in rows:
@@ -593,21 +605,35 @@ def _usage_csv_stream(
 def usage_export(
     start: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     end: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    task_type: str | None = Query(
+        None, pattern="^(" + "|".join(usage_service.LOG_TASK_TYPES) + ")$"
+    ),
+    status: str | None = Query(
+        None, pattern="^(" + "|".join(usage_service.LOG_STATUSES) + ")$"
+    ),
     db: Session = Depends(get_db),
 ):
     """流水导出 CSV（UTF-8 BOM；首行注释说明本地计费与供应商账单的口径差异）。
 
-    start/end 可选（含端点、按 UTC 日界），不传 = 全量导出。
+    start/end 可选（含端点、按 UTC 日界），task_type/status 可选（与明细页过滤
+    同白名单，前端把当前筛选一并透传），不传 = 全量导出。
     """
     start_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc) if start else None
     end_dt = (
         datetime.fromisoformat(end).replace(tzinfo=timezone.utc) + timedelta(days=1) if end else None
     )
     filename = "ai-usage"
+    scope = []
     if start or end:
-        filename += f"-{start or 'begin'}-{end or 'now'}"
+        scope.append(f"{start or 'begin'}-{end or 'now'}")
+    if task_type:
+        scope.append(task_type)
+    if status:
+        scope.append(status)
+    if scope:
+        filename += "-" + "-".join(scope)
     return StreamingResponse(
-        _usage_csv_stream(db, start_dt, end_dt),
+        _usage_csv_stream(db, start_dt, end_dt, task_type=task_type, status=status),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename={filename}.csv"},
     )
@@ -655,3 +681,22 @@ def usage_prices_post(data: dict, request: Request, db: Session = Depends(get_db
         },
     )
     return {"ok": True, "created": created, "item": usage_service.price_dict(row)}
+
+
+@router.delete("/usage/prices/{model}", dependencies=[Depends(require_admin)])
+def usage_prices_delete(model: str, request: Request, db: Session = Depends(get_db)):
+    """删除某模型价目（误录入的模型名得以移除；404 = 价目不存在）。
+
+    历史流水按入库时锁定的单价计，删除只影响之后的新调用（无价记 token、cost=0，
+    盲区告警会重新提示——自愈可见）。删除写审计（admin.price_deleted，含被删价目）。
+    """
+    old = db.get(ModelPrice, model)
+    if old is None:
+        raise HTTPException(404, f"价目不存在：{model}")
+    if not usage_service.delete_price(db, model):
+        raise HTTPException(404, f"价目不存在：{model}")
+    audit_service.record(
+        db, "admin.price_deleted", request=request, user=current_user_of(request),
+        detail={"model": model, "deleted": usage_service.price_dict(old)},
+    )
+    return {"ok": True, "model": model}

@@ -49,6 +49,9 @@ ALLOWED_KEYS: dict[str, type] = {
     "report_push_wecom_webhook_url": str,
     "report_push_feishu_webhook_url": str,
     "report_push_feishu_secret": str,
+    # —— AI 成本治理（成本看板域） ——
+    "ai_daily_cost_budget": float,
+    "ai_usage_retention_days": int,
 }
 
 # 数值键的合法区间（min, max）：与前端 NUMERIC_RULES 保持一致。
@@ -69,6 +72,9 @@ CONFIG_RANGES: dict[str, tuple[int | float, int | float]] = {
     "login_ip_throttle_window_seconds": (60, 86400),
     "audit_retention_days": (30, 3650),
     "stats_poll_batch": (1, 50),
+    # 预算 0 = 关闭告警；流水保留 0 = 永久保留（财务记录可全量归档不删）
+    "ai_daily_cost_budget": (0, 100000),
+    "ai_usage_retention_days": (0, 3650),
 }
 
 # 脱敏展示的字段（alert_webhook_url 通常内嵌钉钉/企微机器人 token）

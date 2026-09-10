@@ -210,14 +210,15 @@ def alert_watch_task():
 
 @celery_app.task(name="auth_cleanup_task")
 def auth_cleanup_task():
-    """每周清理：物理删除过期/已吊销会话 + 超过保留期的审计日志 + 超保留期的任务运行记录。
+    """每周清理：物理删除过期/已吊销会话 + 超过保留期的审计日志 + 超保留期的任务运行记录
+    + 超保留期的 AI 用量流水（ai_usage_retention_days，0 = 永久保留）。
 
     task_run 以每 10-15 分钟一行的频率增长（event/stats/crawler），不清理会无限膨胀；
-    运维排查一般只看近期，保留 90 天足够。
+    运维排查一般只看近期，保留 90 天足够。ai_usage_log 是财务流水、增长慢，默认留 1 年。
     """
     from app.auth import sessions as session_store
     from app.models.task_run import TaskRun
-    from app.services import audit_service, config_service
+    from app.services import audit_service, config_service, usage_service
 
     db = new_session()
     try:
@@ -234,16 +235,22 @@ def auth_cleanup_task():
         task_runs_deleted = (
             db.query(TaskRun).filter(TaskRun.started_at < cutoff).delete(synchronize_session=False)
         )
+        try:
+            usage_days = int(config_service.get_effective(db, "ai_usage_retention_days"))
+        except Exception:
+            usage_days = 365
+        usage_deleted = usage_service.cleanup_expired_usage(db, usage_days)
         db.commit()
         logger.info(
-            "auth_cleanup: stale_disabled_sessions=%s sessions=%s audit_logs=%s task_runs=%s",
-            stale_revoked, sessions_deleted, audits_deleted, task_runs_deleted,
+            "auth_cleanup: stale_disabled_sessions=%s sessions=%s audit_logs=%s task_runs=%s usage_logs=%s",
+            stale_revoked, sessions_deleted, audits_deleted, task_runs_deleted, usage_deleted,
         )
         return {
             "stale_disabled_sessions_revoked": stale_revoked,
             "sessions_deleted": sessions_deleted,
             "audit_deleted": audits_deleted,
             "task_runs_deleted": task_runs_deleted,
+            "usage_logs_deleted": usage_deleted,
         }
     finally:
         db.close()
