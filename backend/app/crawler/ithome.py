@@ -149,11 +149,13 @@ def _fetch(url: str, timeout: float = 15) -> httpx.Response | None:
         return None
     try:
         # max_redirects=5：httpx 默认 20 跳且每跳各有完整超时预算，重定向循环会
-        # 拖垮调用方的轮次时长预算（互动轮询另有硬截止兜底）；正常页面 ≤2 跳
-        resp = httpx.get(
-            url, headers={"User-Agent": UA}, timeout=timeout,
+        # 拖垮调用方的轮次时长预算（互动轮询另有硬截止兜底）；正常页面 ≤2 跳。
+        # 注意顶层 httpx.get() 不收 max_redirects，须走 Client
+        with httpx.Client(
+            headers={"User-Agent": UA}, timeout=timeout,
             follow_redirects=True, max_redirects=5,
-        )
+        ) as client:
+            resp = client.get(url)
     except Exception as exc:
         logger.warning("fetch failed %s: %s", url, exc)
         return None
