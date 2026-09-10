@@ -89,7 +89,9 @@ def stats_task(trigger: str = "auto"):
                 run.detail = "轮询 %d · 成功 %d · 失败 %d · 放弃 %d" % (
                     r["polled"], r["ok"], r["failed"], r["gave_up"],
                 )
-                if r["aborted_backoff"]:
+                if r.get("skipped_backoff"):
+                    run.detail += " ｜ 域名限流跳过 %d 篇（保持到期下轮再试）" % r["skipped_backoff"]
+                elif r["aborted_backoff"]:
                     run.detail += " ｜ 目标域名限流提前收尾"
                 return r
             finally:

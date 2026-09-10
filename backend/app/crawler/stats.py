@@ -22,6 +22,11 @@ IT之家：
 调度模型（分层衰减节奏）：文章越新采越勤、越旧越疏，超采集窗口停采。
 状态语义见 Article.stats_* 字段注释；失败绝不覆写已有数据（接口各自独立，
 哪个成功更新哪个，防止把真实互动数冲掉）。
+
+运维注意：进程内退避表与 lock:stats 互斥锁都以「worker/crawler 单进程持有」为前提，
+排查时勿用 docker exec 直调 poll_due_articles 绕锁（冷退避表会重复打已限流的域名、
+并与 beat 轮次形成双跑；数据幂等无害但浪费请求配额）。手动触发走
+POST /api/v2/admin/stats 或等 beat 15 分钟节奏。
 """
 import json
 import logging
@@ -57,8 +62,12 @@ _COUNT_RE_FALLBACK = re.compile(r"ccd[^\n]*innerHTML\s*=\s*'(\d+)'")
 # 点赞 JS：`<span class="s" id="sgrade2"><a>有价值</a><br><div>68</div></span>`
 _GRADE_LIKE_RE = re.compile(r'id="sgrade2">\s*<a>有价值</a>\s*<br>\s*<div>(\d+)</div>')
 
-# 快科技 action.ashx：JSONP 包裹的 JSON 对象（news_info({...})），取最内层花括号
-_KJ_ACTION_JSON_RE = re.compile(r"\{[^{}]*\}")
+# 快科技 action.ashx：JSONP 包裹的 JSON 对象，回调名固定 news_info（不带 callback 参数
+# 时端点也返回该默认名，生产实抓确认）。锚定前缀防止 HTML 错误页/JSON-LD 等无关
+# 花括号块被误解析成"合法零值"清掉真实互动数据
+_KJ_ACTION_JSON_RE = re.compile(r"news_info\(\s*(\{[^{}]*\})\s*\)")
+# 判定"有效业务响应"的键：非空 dict 至少含其一，否则视为错误体（如 {"errcode":-1}）
+_KJ_KNOWN_KEYS = {"rcount", "rcanyu", "goodnums"}
 
 # 分层采集节奏：(文章年龄上限小时, 采集间隔分钟)，取第一个命中的档
 _POLL_TIERS = [
@@ -73,8 +82,9 @@ _FAIL_BACKOFF_MAX_MIN = 120
 GIVE_UP_FAILS = 6             # 连续失败该次数后放弃（停采终态）
 _POLITENESS_SLEEP_SECONDS = 0.5  # 轮内请求间隔
 # 单轮批次上限：httpx 标量 timeout 按阶段计（connect/read 各 8s），单请求最坏 ~16s，
-# 单篇双端点+间隔最坏 ~33s → 60 篇 ≈ 33min……取 50 留余量（50×33s ≈ 28min < 锁 TTL 30min）
+# 单篇双端点+间隔最坏 ~33s → 取 50（50×33s ≈ 28min），与下方轮次硬截止双保险 < 锁 TTL 30min
 _MAX_BATCH = 50
+_ROUND_DEADLINE_SECONDS = 25 * 60  # 单轮硬截止：重定向链等最坏耗时无法精确估算，超时收尾保锁不失效
 
 
 def parse_comment_count(text: str) -> int | None:
@@ -88,22 +98,27 @@ def parse_kj_action_stats(text: str) -> tuple[int, int] | None:
     评论数 = rcount + rcanyu（站点文章页 initnews_info() 的展示口径，与用户所见一致）；
     点赞 = goodnums。字段缺失按 0 计（站点 JS 同款语义），负值防御性截 0；
     空 JSON `{}` 也算有效响应（该文确实零互动），不能当失败——否则零互动文章
-    会被失败退避反复重试直至放弃终态。
+    会被失败退避反复重试直至放弃终态。非空 dict 必须至少含一个已知业务键，
+    否则按错误体拒收（防 {"errcode":-1} 之类静默归零真实数据）。
     """
     m = _KJ_ACTION_JSON_RE.search(text or "")
     if m is None:
         return None
     try:
-        data = json.loads(m.group(0))
+        data = json.loads(m.group(1))
     except ValueError:
         return None
     if not isinstance(data, dict):
         return None
+    if data and not (_KJ_KNOWN_KEYS & data.keys()):
+        return None
 
     def _int(key: str) -> int:
         try:
-            return max(0, int(data.get(key) or 0))
-        except (TypeError, ValueError):
+            # 钳制上限防 >2^63 大整数在 PostgreSQL BigInteger 落库时炸整轮
+            return max(0, min(int(data.get(key) or 0), 10**12))
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError：JSON 的 1e999/Infinity 解析为 inf，int(inf) 抛它
             return 0
 
     comments = _int("rcount") + _int("rcanyu")
@@ -144,13 +159,14 @@ def next_poll_after_failure(fail_count: int, now: datetime) -> datetime | None:
     return now + timedelta(minutes=minutes)
 
 
-def _stats_backoff_active(source: str) -> bool:
-    """该来源互动接口的目标域名是否处于限流退避期（复用 ithome 的进程内退避表）。"""
-    hosts = _SOURCE_STATS_HOSTS.get(source)
-    if not hosts:
-        return True
+def _backed_off_sources() -> set[str]:
+    """当前处于限流退避期的来源集合（按来源域名集判定，复用 ithome 的进程内退避表）。"""
     now_ts = time.time()
-    return any(_FETCH_BACKOFF.get(h, 0) > now_ts for h in hosts)
+    return {
+        source
+        for source, hosts in _SOURCE_STATS_HOSTS.items()
+        if any(_FETCH_BACKOFF.get(h, 0) > now_ts for h in hosts)
+    }
 
 
 def _get_parsed(url: str, parser) -> tuple[object | None, str]:
@@ -206,13 +222,19 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
     except Exception:
         batch = get_settings().stats_poll_batch
     batch = min(max(1, int(batch)), _MAX_BATCH)  # 防面板误设：既不为 0 也不得突破锁 TTL
+    # 退避来源整体排除在 LIMIT 之外：若只在 Python 侧逐篇跳过，被跳过的文章仍占满
+    # 批次名额，批间饿死健康来源（与"复采瀑布饿死回填尾"同构，只是触发面换成退避）
+    backed_off = _backed_off_sources()
+    range_conditions = [stats_source_filter()]
+    if backed_off:
+        range_conditions.append(Article.source.notin_(tuple(backed_off)))
     due = (
         db.query(Article)
         .filter(
             # 范围 = stats_source_filter()（IT之家 + 快科技）；views/shares 不排期无妨，
             # 那两列不依赖轮询。范围外的来源（未来新源）必须在此挡住，否则会被下方
             # "从未轮询"回填分支捞走打错误接口连败 6 次，且挤占批次饿死已接入来源
-            stats_source_filter(),
+            *range_conditions,
             or_(
                 and_(Article.stats_next_poll_at.isnot(None), Article.stats_next_poll_at <= now),
                 and_(
@@ -232,29 +254,53 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
         .limit(batch)
         .all()
     )
-    logger.info("stats poll round: due=%s batch_limit=%s", len(due), batch)
+    logger.info(
+        "stats poll round: due=%s batch_limit=%s backed_off_sources=%s",
+        len(due), batch, sorted(backed_off) or "none",
+    )
 
     polled = ok = failed = gave_up = no_nid = 0
+    skipped_backoff = 0
     aborted_backoff = False
+    # 轮次硬截止（< 锁 TTL 30min）：重定向链/慢响应的最坏耗时无法精确估算，
+    # 超时即收尾，剩余文章保持到期下轮再试——锁 TTL 从"估算约束"变"硬约束"
+    deadline = time.monotonic() + _ROUND_DEADLINE_SECONDS
 
     for article in due:
         if not article.news_id:
-            # URL 不含文章 ID（理论不该出现）：标记放弃终态，避免每轮重复扫描
+            # URL 不含文章 ID（理论不该出现）：标记放弃终态，避免每轮重复扫描。
+            # 不写 stats_polled_at：它语义是"成功轮询过"，误写会污染 admin「近24h成功」口径；
+            # fail_count 达 GIVE_UP 后回填分支与 due 条件天然排除，无需其他标记
             no_nid += 1
             article.stats_fail_count = GIVE_UP_FAILS
-            article.stats_polled_at = now
             article.stats_next_poll_at = None
             db.commit()
             logger.warning("stats skip no news_id: id=%s url=%s", article.id, article.url)
             continue
-        if _stats_backoff_active(article.source):
-            # 只跳过该来源（保持到期，下轮再试）：退避按来源域名分流，
-            # 单源限流不中断整轮、不饿死健康来源
+        if article.source in _backed_off_sources():
+            # 轮中新增的退避（查询后才触发）兜底跳过：正常情况已在 SQL 侧整源排除
+            skipped_backoff += 1
             aborted_backoff = True
             logger.info("stats skip in-backoff host: id=%s source=%s", article.id, article.source)
             continue
+        if time.monotonic() > deadline:
+            skipped_by_deadline = len(due) - polled
+            logger.warning(
+                "stats round deadline (%ds) hit, %s due articles left for next round",
+                _ROUND_DEADLINE_SECONDS, skipped_by_deadline,
+            )
+            break
 
-        comments_new, likes_new, count_err, grade_err = _poll_article(article)
+        try:
+            comments_new, likes_new, count_err, grade_err = _poll_article(article)
+        except Exception as exc:
+            # 单篇意外异常（解析层已兜 OverflowError 等，此处最后防线）：
+            # 并入下方失败路径退避，绝不让单篇毒响应带崩整轮
+            logger.exception(
+                "stats poll unexpected error id=%s newsid=%s", article.id, article.news_id
+            )
+            comments_new = likes_new = None
+            count_err = grade_err = "unexpected: %s" % exc
 
         if comments_new is None and likes_new is None:
             # 该篇全部接口失败：退避重试，已有数据一字不动
@@ -270,7 +316,7 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
                 )
             else:
                 logger.warning(
-                    "stats both endpoints failed id=%s newsid=%s fail_no=%s（count: %s / grade: %s）",
+                    "stats all endpoints failed id=%s newsid=%s fail_no=%s（count: %s / grade: %s）",
                     article.id, article.news_id, article.stats_fail_count, count_err[:80], grade_err[:80],
                 )
             db.commit()
@@ -299,8 +345,10 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
 
     polled = ok + failed + no_nid
     logger.info(
-        "stats poll done: due=%s polled=%s ok=%s failed=%s gave_up=%s no_nid=%s aborted_backoff=%s",
-        len(due), polled, ok, failed, gave_up, no_nid, aborted_backoff,
+        "stats poll done: due=%s polled=%s ok=%s failed=%s gave_up=%s no_nid=%s "
+        "skipped_backoff=%s deadline_hit=%s",
+        len(due), polled, ok, failed, gave_up, no_nid, skipped_backoff,
+        skipped_backoff == 0 and aborted_backoff,
     )
     return {
         "due": len(due),
@@ -309,5 +357,6 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
         "failed": failed,
         "gave_up": gave_up,
         "no_nid": no_nid,
+        "skipped_backoff": skipped_backoff,
         "aborted_backoff": aborted_backoff,
     }

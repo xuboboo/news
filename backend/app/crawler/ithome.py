@@ -148,7 +148,12 @@ def _fetch(url: str, timeout: float = 15) -> httpx.Response | None:
         logger.info("backoff skip %s（剩约 %d 分钟）", host, int((until - now_ts) / 60))
         return None
     try:
-        resp = httpx.get(url, headers={"User-Agent": UA}, timeout=timeout, follow_redirects=True)
+        # max_redirects=5：httpx 默认 20 跳且每跳各有完整超时预算，重定向循环会
+        # 拖垮调用方的轮次时长预算（互动轮询另有硬截止兜底）；正常页面 ≤2 跳
+        resp = httpx.get(
+            url, headers={"User-Agent": UA}, timeout=timeout,
+            follow_redirects=True, max_redirects=5,
+        )
     except Exception as exc:
         logger.warning("fetch failed %s: %s", url, exc)
         return None

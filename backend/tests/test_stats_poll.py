@@ -57,6 +57,30 @@ def test_parse_kj_action_stats_non_numeric_values():
     assert parse_kj_action_stats('news_info({"goodnums":"abc","rcount":null})') == (0, 0)
 
 
+def test_parse_kj_action_stats_requires_jsonp_anchor():
+    # HTML 错误页/页面里的 JSON-LD 等无关花括号块：没有 news_info( 前缀一律拒收，
+    # 防止被误判成"合法零互动"清掉真实数据
+    assert parse_kj_action_stats('{"rcount":999,"goodnums":999}') is None
+    assert parse_kj_action_stats('<script>{"@context":"https://schema.org","x":1}</script>') is None
+    assert parse_kj_action_stats('other_cb({"rcount":5,"goodnums":2})') is None
+
+
+def test_parse_kj_action_stats_error_object_rejected():
+    # 非空 dict 但不含任何已知业务键：按错误体拒收（走失败退避），不得静默归零
+    assert parse_kj_action_stats('news_info({"errcode":-1,"msg":"forbidden"})') is None
+
+
+def test_parse_kj_action_stats_infinity_and_huge_numbers():
+    # JSON 的 1e999/Infinity 解析为 inf，int(inf) 抛 OverflowError——必须兜住归 0
+    assert parse_kj_action_stats('news_info({"rcount":1e999,"goodnums":Infinity})') == (0, 0)
+    # > 2^63 大整数钳制到 10^12，防 PostgreSQL BigInteger 落库炸整轮
+    assert parse_kj_action_stats('news_info({"rcount":1,"rcanyu":0,"goodnums":99999999999999999})') == (1, 10**12)
+
+
+def test_parse_kj_action_stats_string_numbers_ok():
+    assert parse_kj_action_stats('news_info({"rcount":"8","rcanyu":"2","goodnums":"15"})') == (10, 15)
+
+
 # ———————————————————— 既有 IT之家解析器回归 ————————————————————
 
 def test_parse_comment_count():
@@ -186,10 +210,10 @@ def test_poll_dispatches_both_sources_in_one_round(db, monkeypatch):
     assert (it.comments, it.likes) == (226, 68)
 
 
-def test_poll_source_backoff_skips_only_that_source(db, monkeypatch):
-    kj = _mk_article(db, "快科技", "2001")
-    it = _mk_article(db, "IT之家", "2002")
-    # 快科技接口域名限流中
+def test_poll_source_backoff_excluded_from_batch(db, monkeypatch):
+    """退避来源在 SQL 侧整体排除：不占批次名额，健康来源不被批间饿死。"""
+    kj = _mk_article(db, "快科技", "2001", hours_old=0.5)  # 更新 → 原 order 下应排最前
+    it = _mk_article(db, "IT之家", "2002", hours_old=2)
     stats_mod._FETCH_BACKOFF["count.mydrivers.com"] = datetime.now(timezone.utc).timestamp() + 600
 
     polled_urls: list[str] = []
@@ -207,13 +231,96 @@ def test_poll_source_backoff_skips_only_that_source(db, monkeypatch):
     finally:
         stats_mod._FETCH_BACKOFF.pop("count.mydrivers.com", None)
 
-    # 快科技被跳过（保持到期），IT之家正常轮询不被饿死
-    assert result["ok"] == 1 and result["aborted_backoff"] is True
+    # 快科技被整源排除（due 里根本没有它），IT之家正常轮询
+    assert result["due"] == 1 and result["ok"] == 1
+    assert result["skipped_backoff"] == 0 and result["aborted_backoff"] is False
     assert polled_urls and all("action.ashx" not in u for u in polled_urls)
     db.refresh(kj)
     db.refresh(it)
     assert kj.comments == 0 and kj.stats_polled_at is None
     assert (it.comments, it.likes) == (11, 22)
+
+
+def test_poll_poison_article_does_not_kill_round(db, monkeypatch):
+    """单篇意外异常（如毒响应）按失败退避并入批次，绝不带崩整轮。"""
+    poison = _mk_article(db, "快科技", "5001", hours_old=1)
+    healthy = _mk_article(db, "IT之家", "5002", hours_old=2)
+
+    def respond(url):
+        if "action.ashx" in url:
+            raise RuntimeError("boom: simulated poison response")
+        if "comment/count" in url:
+            return (33, "")
+        assert "grade" in url
+        return (44, "")
+
+    _stub_no_network(monkeypatch, respond)
+    result = poll_due_articles(db)
+    assert result["ok"] == 1 and result["failed"] == 1
+
+    db.refresh(poison)
+    db.refresh(healthy)
+    assert poison.stats_fail_count == 1 and poison.stats_next_poll_at is not None
+    assert poison.comments == 0  # 已有数据一字不动
+    assert (healthy.comments, healthy.likes) == (33, 44)
+
+
+def test_poll_mixed_success_and_failure_independent(db, monkeypatch):
+    fail_kj = _mk_article(db, "快科技", "6001", hours_old=1, comments=9, likes=8)
+    ok_it = _mk_article(db, "IT之家", "6002", hours_old=2)
+
+    def respond(url):
+        if "action.ashx" in url:
+            return (None, "Object moved")
+        if "comment/count" in url:
+            return (7, "")
+        assert "grade" in url
+        return (0, "")
+
+    _stub_no_network(monkeypatch, respond)
+    result = poll_due_articles(db)
+    assert (result["ok"], result["failed"]) == (1, 1)
+
+    db.refresh(fail_kj)
+    db.refresh(ok_it)
+    # 失败侧数据与计数独立：不覆写、退避排期
+    assert (fail_kj.comments, fail_kj.likes, fail_kj.stats_fail_count) == (9, 8, 1)
+    # 成功侧即使点赞为 0 也算成功（合法零值）
+    assert (ok_it.comments, ok_it.likes, ok_it.stats_fail_count) == (7, 0, 0)
+
+
+def test_poll_no_nid_terminal_without_polluting_polled_stamp(db, monkeypatch):
+    """news_id 缺失 → 放弃终态，但不写 stats_polled_at（它语义=成功轮询过，
+    误写会污染 admin「近24h成功轮询」水位口径）。"""
+    bad = Article(
+        title="t",
+        url="https://example.com/no-nid",
+        channel="c",
+        source="快科技",
+        news_id=None,
+        content="body",
+        publish_time=datetime.now(timezone.utc) - timedelta(hours=1),
+        views=0,
+        comments=0,
+        shares=0,
+        likes=0,
+        ai_status="pending",
+    )
+    db.add(bad)
+    db.commit()
+
+    _stub_no_network(monkeypatch, lambda url: (None, "must not be called"))
+    first = poll_due_articles(db)
+    assert first["no_nid"] == 1 and first["polled"] == 1
+
+    db.refresh(bad)
+    assert bad.stats_fail_count == GIVE_UP_FAILS
+    assert bad.stats_polled_at is None
+    assert bad.stats_next_poll_at is None
+
+    # 终态收敛：下一轮不再被回填分支捞起
+    second = poll_due_articles(db)
+    assert second["due"] == 0 and second["polled"] == 0
 
 
 def test_poll_ignores_sources_outside_scope(db, monkeypatch):
