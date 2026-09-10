@@ -74,8 +74,8 @@ def main() -> None:
         recompute_event_scores(db)
         print(f"[4/5] 聚类完成：{stats}，事件热度已重算")
 
-        # 5) 重建当日日报
-        row = generate_daily_report(db, date_type.today())
+        # 5) 重建当日日报（历史/当日补算口径：不触发群推送）
+        row, _ = generate_daily_report(db, date_type.today())
         print(f"[5/5] 日报重建完成：{row.date.isoformat()} 第 {row.issue_no} 期")
     finally:
         db.close()

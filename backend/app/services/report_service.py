@@ -262,11 +262,16 @@ def build_report(db: Session, day: date_type) -> dict:
     }
 
 
-def generate_daily_report(db: Session, day: date_type | None = None) -> DailyReport:
-    """生成某日日报并落库（content 为 JSONB 快照，生成后不随数据变化）。
+def generate_daily_report(db: Session, day: date_type | None = None) -> tuple[DailyReport, str]:
+    """生成某日日报并落库，返回 (日报行, 推送状态串)。
 
     day 缺省取「昨日（UTC）」——最近一个已结束的自然日，保证窗口内有完整数据；
     当天数据须等次日生成或显式传 day 补算。
+
+    推送策略（2026-09-10 审计收紧）：仅当生成日恰为昨日（每日 08:00 自动口径的
+    当期新刊，手动不传日期重算同属此列）且内容非空时才自动推送——补算历史日期
+    或修复脚本重算当天不再向群通道灌旧闻/空报告；推送状态随返回值写入
+    task_run.detail，面板可见，不再静默丢弃。
     """
     day = day or (datetime.now(timezone.utc) - timedelta(days=1)).date()
     # 同日并发生成（定时 + 手动触发）会撞 uq_report_date：会话级 advisory lock 串行化，
@@ -282,7 +287,12 @@ def generate_daily_report(db: Session, day: date_type | None = None) -> DailyRep
         db.add(row)
     db.commit()
     db.refresh(row)
-    # 生成/重算后按配置推送（面板/env 双通道，默认关；失败不影响已落库的日报）
+    push_status = ""
     if push_enabled(db):
-        push_report(db, content)
-    return row
+        if content["articles_total"] <= 0:
+            push_status = "内容为空，未推送"
+        elif day == (datetime.now(timezone.utc) - timedelta(days=1)).date():
+            push_status = push_report(db, content)
+        else:
+            push_status = "历史日期补算，未推送"
+    return row, push_status

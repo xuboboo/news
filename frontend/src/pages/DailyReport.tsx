@@ -238,9 +238,13 @@ export default function DailyReport() {
     if (r.articlesTotal != null) lines.push(`> 共收录 **${r.articlesTotal}** 篇报道`, '');
     if (r.topEvents.length) {
       lines.push('### 当日 TOP 热点', '');
-      r.topEvents.forEach((e, i) =>
-        lines.push(`${i + 1}. **${e.title}**（热度 ${formatScore(e.hotScore)}）`)
-      );
+      r.topEvents.forEach((e, i) => {
+        const stats: string[] = [`热度 ${formatScore(e.hotScore)}`];
+        if (e.reportArticles != null) {
+          stats.push(`${e.reportArticles} 篇${e.reportSources ? `/${e.reportSources} 源` : ''}`);
+        }
+        lines.push(`${i + 1}. **${e.title}**（${stats.join('，')}）`);
+      });
       lines.push('');
     }
     if (r.industryChanges.length) {
@@ -404,6 +408,12 @@ export default function DailyReport() {
                         <EventStatusTag status={e.status} />
                       </div>
                       <p className="text-xs text-slate-400 leading-relaxed line-clamp-2">{e.summary}</p>
+                      {(e.reportArticles != null || e.reportSources != null) && (
+                        <div className="text-[10px] text-slate-500 mt-1">
+                          {e.reportArticles ?? 0} 篇报道
+                          {(e.reportSources ?? 0) > 1 && <> · {e.reportSources} 家来源交叉</>}
+                        </div>
+                      )}
                     </div>
                     <div className="text-right shrink-0">
                       <div className="text-sm font-bold text-orange-300 tabular-nums">

@@ -16,6 +16,7 @@ import {
   Play,
   RefreshCw,
   Save,
+  Send,
   Server,
   ShieldCheck,
   ShieldX,
@@ -36,6 +37,7 @@ import {
   putConfig,
   testEmbedding,
   testLlm,
+  testReportPush,
   triggerCrawl,
   triggerEvents,
   triggerReport,
@@ -100,6 +102,8 @@ const NUMERIC_RULES: Record<string, { min: number; max: number }> = {
   login_ip_throttle_window_seconds: { min: 60, max: 86400 },
   audit_retention_days: { min: 30, max: 3650 },
   stats_poll_batch: { min: 1, max: 100 },
+  ai_daily_cost_budget: { min: 0, max: 100000 },
+  ai_usage_retention_days: { min: 0, max: 3650 },
 };
 
 const WEBHOOK_STYLES: { value: string; label: string }[] = [
@@ -167,6 +171,11 @@ const GROUPS: { title: string; hint: string; keys: string[] }[] = [
       'report_push_feishu_secret',
     ],
   },
+  {
+    title: 'AI 成本治理',
+    hint: '日预算超限经告警 webhook 推送（0 = 关闭，UTC 日界）；成本看板流水保留天数超期由周清理删除（0 = 永久保留，归档请先用看板导出 CSV）',
+    keys: ['ai_daily_cost_budget', 'ai_usage_retention_days'],
+  },
 ];
 
 function fmtTime(iso: string | null): string {
@@ -193,6 +202,7 @@ export default function Admin() {
   const [busy, setBusy] = useState('');
   const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null);
   const [testResult, setTestResult] = useState<{ llm?: string; embedding?: string }>({});
+  const [pushTestResult, setPushTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [revealKeys, setRevealKeys] = useState<Set<string>>(new Set());
   const [reportDate, setReportDate] = useState('');
 
@@ -358,6 +368,23 @@ export default function Admin() {
       setTestResult((res) => ({ ...res, [which]: text }));
     } catch (e: any) {
       setTestResult((res) => ({ ...res, [which]: `失败：${e?.message ?? e}` }));
+    } finally {
+      setBusy('');
+    }
+  };
+
+  // 日报推送自检：立即推最新一期到已配置通道，配置对不对当场见分晓（不必等次日 08:00）
+  const runPushTest = async () => {
+    setBusy('test-push');
+    setPushTestResult(null);
+    try {
+      const { results } = await testReportPush();
+      const allOk = results.split('；').every((r) => r.endsWith(':ok'));
+      setPushTestResult({ ok: allOk, text: allOk ? `推送成功：${results}` : `部分失败：${results}` });
+      flash(allOk, `日报测试推送：${results}`);
+    } catch (e: any) {
+      setPushTestResult({ ok: false, text: `失败：${e?.message ?? e}` });
+      flash(false, `日报测试推送失败：${e?.message ?? e}`);
     } finally {
       setBusy('');
     }
@@ -708,7 +735,7 @@ export default function Admin() {
                     disabled={busy === 'test-llm' || busy === 'test-embedding'}
                     className="chip border border-radar-border bg-radar-panel text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40"
                   >
-                    {busy.startsWith('test-') ? (
+                    {busy === 'test-llm' || busy === 'test-embedding' ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
                       <Play className="h-3.5 w-3.5" />
@@ -724,6 +751,28 @@ export default function Admin() {
                       }`}
                     >
                       {testResult[g.title.startsWith('LLM') ? 'llm' : 'embedding']}
+                    </span>
+                  )}
+                </div>
+              )}
+              {g.title.startsWith('日报推送') && (
+                <div className="mt-3 flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => void runPushTest()}
+                    disabled={busy === 'test-push'}
+                    title="立即推送最新一期日报到已配置通道，验证 webhook 配置"
+                    className="chip border border-radar-border bg-radar-panel text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40"
+                  >
+                    {busy === 'test-push' ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Send className="h-3.5 w-3.5" />
+                    )}
+                    测试推送（发送最新一期）
+                  </button>
+                  {pushTestResult && (
+                    <span className={`text-xs ${pushTestResult.ok ? 'text-emerald-300' : 'text-red-400'}`}>
+                      {pushTestResult.text}
                     </span>
                   )}
                 </div>

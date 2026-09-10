@@ -3,7 +3,15 @@ import base64
 import hashlib
 import hmac as hmac_mod
 
-from app.services.report_push import _feishu_sign, build_payload, render_report_markdown
+import pytest
+
+from app.services.report_push import (
+    _feishu_sign,
+    build_payload,
+    clip_markdown_bytes,
+    push_targets,
+    render_report_markdown,
+)
 from app.services.report_service import _clean_change_text, _compose_overview, _dedupe_texts
 
 
@@ -156,3 +164,75 @@ def test_feishu_sign_known_vector():
     # 与飞书官方文档算法一致的构造：仅验证 key 拼接与摘要确定性
     assert _feishu_sign("s", "123") == _feishu_sign("s", "123")
     assert _feishu_sign("s", "123") != _feishu_sign("s2", "123")
+
+
+# ———— 企微 markdown 字节上限守卫（2026-09-10 审计） ————
+
+def test_clip_markdown_bytes_keeps_short_content():
+    assert clip_markdown_bytes("短内容") == "短内容"
+
+
+def test_clip_markdown_bytes_truncates_at_line_boundary():
+    md = "\n".join(f"- 第{i}条 " + "内容描述" * 30 for i in range(50))
+    out = clip_markdown_bytes(md)
+    assert len(out.encode("utf-8")) <= 4000
+    assert out.endswith("（内容过长，已截断）")
+    # 在行界截断：最后一个保留行完整（不以半个多字节字符或半行结尾）
+    last_line = out.rstrip("…（内容过长，已截断）\n").split("\n")[-1]
+    assert last_line.startswith("- 第")
+
+
+def test_push_targets_skip_private_webhook(monkeypatch):
+    """推送路径 SSRF 复核：env 直配的内网 webhook 被跳过（写入路径有校验，这里挡历史/直配值）。
+    get_settings 带 lru_cache，本地 .env 可能为 true，须直接改缓存实例属性。"""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "allow_private_ai_urls", False)
+    monkeypatch.setenv("REPORT_PUSH_ENABLED", "true")
+    monkeypatch.setenv("REPORT_PUSH_WEBHOOK_URL", "https://192.168.1.9/cgi-bin/webhook/send")
+    monkeypatch.delenv("REPORT_PUSH_FEISHU_WEBHOOK_URL", raising=False)
+    assert push_targets(None) == []
+
+
+def test_push_targets_public_wecom_and_feishu_env_secret(monkeypatch):
+    """公网 URL 正常入列；飞书签名密钥支持 env 回退（db=None 路径此前读不到 env）。"""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "allow_private_ai_urls", False)
+    monkeypatch.setenv("REPORT_PUSH_ENABLED", "true")
+    monkeypatch.setenv("REPORT_PUSH_WEBHOOK_URL", "https://1.2.3.4/webhook")
+    monkeypatch.setenv("REPORT_PUSH_FEISHU_WEBHOOK_URL", "https://5.6.7.8/hook")
+    monkeypatch.setenv("REPORT_PUSH_FEISHU_SECRET", "s3cret")
+    targets = push_targets(None)
+    assert ("wecom", "https://1.2.3.4/webhook", "") in targets
+    assert ("feishu", "https://5.6.7.8/hook", "s3cret") in targets
+
+
+def test_push_targets_disabled_by_switch(monkeypatch):
+    monkeypatch.setenv("REPORT_PUSH_ENABLED", "false")
+    monkeypatch.setenv("REPORT_PUSH_WEBHOOK_URL", "https://1.2.3.4/webhook")
+    assert push_targets(None) == []
+
+
+# ———— /admin/report 入队前校验（2026-09-10 审计） ————
+
+def test_trigger_report_rejects_bad_date_format():
+    from fastapi import HTTPException
+
+    from app.api.v2.routes import trigger_report
+
+    with pytest.raises(HTTPException) as ei:
+        trigger_report(date="not-a-date", request=None, db=None)
+    assert ei.value.status_code == 400
+
+
+def test_trigger_report_rejects_future_date():
+    from datetime import datetime, timedelta, timezone
+    from fastapi import HTTPException
+
+    from app.api.v2.routes import trigger_report
+
+    future = (datetime.now(timezone.utc) + timedelta(days=2)).date().isoformat()
+    with pytest.raises(HTTPException) as ei:
+        trigger_report(date=future, request=None, db=None)
+    assert ei.value.status_code == 400

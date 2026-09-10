@@ -174,10 +174,18 @@ function mapApiEvent(ev: any, articleMap: Map<string, ArticleWithScore>): EventW
   };
 }
 
+/** 日报页 TOP 热点视图：事件本体 + 当日窗口内的成员统计（build_report 双口径中的窗口口径） */
+export type ReportEventView = EventWithScore & {
+  /** 日报窗口内聚合报道篇数 */
+  reportArticles?: number;
+  /** 日报窗口内交叉报道来源数 */
+  reportSources?: number;
+};
+
 export interface DailyReportView {
   date: string;
   issueNo: number;
-  topEvents: EventWithScore[];
+  topEvents: ReportEventView[];
   quickNews: ArticleWithScore[];
   industryChanges: string[];
   sourceStats: { source: string; count: number }[];
@@ -211,7 +219,9 @@ function mapApiReport(date: string, data: any, articleMap: Map<string, ArticleWi
       articles: [],
       firstTime: new Date(),
       lastTime: new Date(),
-    })) as unknown as EventWithScore[],
+      reportArticles: typeof e.articles_count === 'number' ? e.articles_count : undefined,
+      reportSources: typeof e.sources_count === 'number' ? e.sources_count : undefined,
+    })) as ReportEventView[],
     quickNews: (data.quick_news ?? [])
       .map((n: any) => articleMap.get(String(n.id)) ?? briefToArticle(n)) as ArticleWithScore[],
     industryChanges: data.industry_changes ?? [],

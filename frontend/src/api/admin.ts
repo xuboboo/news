@@ -202,6 +202,10 @@ export const triggerStats = () => request<{ queued: boolean; task_id: string }>(
 export const triggerReport = (date?: string) =>
   request<{ queued: boolean; task_id: string }>(`/report${date ? `?date=${date}` : ''}`, { method: 'POST' });
 
+/** 日报推送自检：立即把最新一期推到已配置通道，results 如 "wecom:ok；feishu:ok" */
+export const testReportPush = () =>
+  request<{ results: string }>('/report/push-test', { method: 'POST' });
+
 // ———————————————————— Token 用量与成本 ————————————————————
 
 export type UsagePeriod = 'today' | '7d' | '30d' | 'month';
@@ -316,12 +320,23 @@ export const upsertUsagePrice = (item: {
     body: JSON.stringify(item),
   });
 
+/** 删除某模型价目（误录入的模型名得以移除；404 = 价目不存在）。 */
+export const deleteUsagePrice = (model: string) =>
+  request<{ ok: boolean; model: string }>(`/usage/prices/${encodeURIComponent(model)}`, {
+    method: 'DELETE',
+  });
+
 /** 导出流水 CSV：会话 Cookie 同源自动携带，fetch + blob 触发浏览器下载。
- * range 可选（含端点、UTC 日界），不传 = 全量导出。 */
-export async function exportUsageCsv(range?: { start?: string; end?: string }): Promise<void> {
+ * range 可选（含端点、UTC 日界）；filters 可选（与明细页过滤同白名单），不传 = 全量导出。 */
+export async function exportUsageCsv(
+  range?: { start?: string; end?: string },
+  filters?: UsageLogFilters,
+): Promise<void> {
   const qs = new URLSearchParams();
   if (range?.start) qs.set('start', range.start);
   if (range?.end) qs.set('end', range.end);
+  if (filters?.task_type) qs.set('task_type', filters.task_type);
+  if (filters?.status) qs.set('status', filters.status);
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   const resp = await fetch(`${API_BASE}/api/v2/admin/usage/export${suffix}`, {
     cache: 'no-store',
@@ -347,7 +362,8 @@ export async function exportUsageCsv(range?: { start?: string; end?: string }): 
   const a = document.createElement('a');
   a.href = url;
   const scope = range?.start || range?.end ? `-${range.start ?? 'begin'}-${range.end ?? 'now'}` : '';
-  a.download = `ai-usage${scope}-${new Date().toISOString().slice(0, 10)}.csv`;
+  const fscope = `${filters?.task_type ? `-${filters.task_type}` : ''}${filters?.status ? `-${filters.status}` : ''}`;
+  a.download = `ai-usage${scope}${fscope}-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }

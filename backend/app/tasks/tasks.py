@@ -181,8 +181,10 @@ def report_task(date_str: str | None = None, trigger: str = "auto"):
                 day = datetime.fromisoformat(date_str).date()
             else:
                 day = (datetime.now(timezone.utc) - timedelta(days=1)).date()
-            row = generate_daily_report(db, day)
+            row, push_status = generate_daily_report(db, day)
             run.detail = "第 %d 期（%s）" % (row.issue_no, row.date.isoformat())
+            if push_status:
+                run.detail += " ｜ 推送：" + push_status
             return {"date": row.date.isoformat(), "issue_no": row.issue_no}
         finally:
             db.close()

@@ -331,6 +331,7 @@ def test_recompute_event_scores_sums_members_and_flips_status(pg):
     finally:
         db.close()
 
+
 # ———— build_report：日报窗口口径（审计 P1） ————
 
 def test_build_report_event_stats_window_scoped(pg):
@@ -378,23 +379,69 @@ def test_generate_daily_report_issue_no_and_idempotency(pg):
     db = pg()
     try:
         day = (NOW - timedelta(days=2)).date()
-        row1 = generate_daily_report(db, day)
+        row1, _ = generate_daily_report(db, day)
         issue1 = row1.issue_no
         assert row1.date == day
 
         # 同日重复生成：幂等——同一行、同期号（手动重触发/定时撞车不产生重复期）
-        row2 = generate_daily_report(db, day)
+        row2, _ = generate_daily_report(db, day)
         assert row2.id == row1.id
         assert row2.issue_no == issue1
 
         # 次日：新行 + 期号递增
-        row3 = generate_daily_report(db, day + timedelta(days=1))
+        row3, _ = generate_daily_report(db, day + timedelta(days=1))
         assert row3.id != row1.id
         assert row3.issue_no == issue1 + 1
 
         # 跳一天生成：期号按日期差递增（不要求连续生成）
-        row4 = generate_daily_report(db, day + timedelta(days=3))
+        row4, _ = generate_daily_report(db, day + timedelta(days=3))
         assert row4.issue_no == issue1 + 3
+    finally:
+        db.close()
+
+
+# ———— generate_daily_report：推送策略（2026-09-10 审计收紧） ————
+
+def test_generate_daily_report_push_policy(pg, monkeypatch):
+    """自动推送仅限「昨日（当期新刊）」且内容非空：空报告不推、历史补算不推；
+    推送状态经返回值透出（task_run.detail 由此写入，面板可见）。"""
+    from app.services import report_service
+
+    pushed: list[str] = []
+    monkeypatch.setattr(report_service, "push_enabled", lambda db: True)
+    monkeypatch.setattr(
+        report_service, "push_report",
+        lambda db, content: pushed.append(content["date"]) or "wecom:ok",
+    )
+
+    db = pg()
+    try:
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+
+        # 空报告：不推送（采集停摆时不向群里灌空刊，任务停摆另有告警通道）
+        _, status = report_service.generate_daily_report(db, yesterday)
+        assert status == "内容为空，未推送"
+        assert pushed == []
+
+        # 当期新刊（昨日）且有内容：推送并透出状态
+        v = _vec([1.0, 0.0])
+        day_start = datetime(yesterday.year, yesterday.month, yesterday.day, tzinfo=timezone.utc)
+        _mk_article(db, title="昨日有内容的报道", source="IT之家", vec=v,
+                    published=day_start + timedelta(hours=9))
+        db.commit()
+        _, status = report_service.generate_daily_report(db, yesterday)
+        assert status == "wecom:ok"
+        assert pushed == [yesterday.isoformat()]
+
+        # 历史日期补算：即使有内容也不推（不再向群通道灌旧闻）
+        old_day = yesterday - timedelta(days=5)
+        old_start = datetime(old_day.year, old_day.month, old_day.day, tzinfo=timezone.utc)
+        _mk_article(db, title="五天前的旧闻", source="快科技", vec=v,
+                    published=old_start + timedelta(hours=9))
+        db.commit()
+        _, status = report_service.generate_daily_report(db, old_day)
+        assert status == "历史日期补算，未推送"
+        assert pushed == [yesterday.isoformat()]
     finally:
         db.close()
 
