@@ -222,7 +222,13 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
                 ),
             ),
         )
-        .order_by(Article.publish_time.desc())  # 越新的文章互动变化越快，优先服务
+        # 首采优先于复采（两段排序）：从未轮询的文章（新来源接入回填/停机积压）先拿第一份
+        # 数据——否则 publish_time 倒序下，复采瀑布（到期即重排 +30min~12h，永远占着新鲜
+        # 排）会长期饿死排在其后的回填尾；各类内部仍按"越新互动变化越快"优先
+        .order_by(
+            Article.stats_polled_at.is_(None).desc(),
+            Article.publish_time.desc(),
+        )
         .limit(batch)
         .all()
     )

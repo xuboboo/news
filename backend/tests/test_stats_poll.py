@@ -222,3 +222,36 @@ def test_poll_ignores_sources_outside_scope(db, monkeypatch):
     _stub_no_network(monkeypatch, lambda url: (None, "should not be called"))
     result = poll_due_articles(db)
     assert result["due"] == 0 and result["polled"] == 0
+
+
+def test_poll_first_time_backfill_beats_reschedule_queue(db, monkeypatch):
+    """首采优先于复采：从未轮询的旧文必须先于「到期复采」的较新文拿到首份数据。
+
+    复采瀑布（轮询后 +30min~12h 重排、永远占着新鲜排）在 publish_time 倒序下会
+    长期饿死回填尾（停机积压/新来源接入），本测试锁定两段排序语义。
+    """
+    _mk_article(db, "快科技", "4001", hours_old=24 * 10)  # 从未轮询（回填桶）
+    fresh_it = _mk_article(db, "IT之家", "4002", hours_old=1)
+    fresh_it.stats_polled_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    fresh_it.stats_next_poll_at = datetime.now(timezone.utc) - timedelta(minutes=5)  # 到期复采
+    db.commit()
+
+    # 批次压到 1：一轮只服务一篇文章
+    class _S:
+        stats_poll_batch = 1
+
+    monkeypatch.setattr(stats_mod, "get_settings", _S)
+
+    polled: list[str] = []
+
+    def respond(url):
+        polled.append(url)
+        return ((5, 5), "") if "action.ashx" in url else (7, "")
+
+    _stub_no_network(monkeypatch, respond)
+
+    result = poll_due_articles(db)
+    assert result["ok"] == 1
+    assert any("action.ashx?tid=4001" in u for u in polled), f"首采被饿死: {polled}"
+    db.refresh(fresh_it)
+    assert fresh_it.comments == 0  # 复采文本轮未被服务
