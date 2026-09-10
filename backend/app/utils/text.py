@@ -47,14 +47,6 @@ def extract_keywords(text: str, topk: int = 8) -> List[str]:
     return [t for t in tags if len(t) > 1]
 
 
-def keyword_jaccard(a: str, b: str) -> float:
-    """两标题的关键词 Jaccard 相似度（用于事件聚合的标题关键词判断）。"""
-    ka, kb = set(extract_keywords(a, 10)), set(extract_keywords(b, 10))
-    if not ka or not kb:
-        return 0.0
-    return len(ka & kb) / len(ka | kb)
-
-
 def truncate(text: str, limit: int = 60) -> str:
     text = (text or "").strip()
     return text if len(text) <= limit else text[: limit - 1] + "…"

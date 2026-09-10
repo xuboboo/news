@@ -644,8 +644,11 @@ def recompute_event_scores(db: Session) -> None:
 
     单条 JOIN + GROUP BY 下推 DB（复用 hot_score_expr），替代逐事件逐成员
     的 N+1 查询；无成员的事件记 0（与旧实现一致）。
+    load_only 只取重算涉及的四个列：事件行携带 384 维 centroid 与
+    timeline/impacts JSONB 大字段，全表每 10 分钟拖一遍纯属浪费。
     """
     from sqlalchemy import func
+    from sqlalchemy.orm import load_only
 
     from app.algorithms.hot_score import hot_score_expr
 
@@ -659,7 +662,12 @@ def recompute_event_scores(db: Session) -> None:
         .all()
     )
     scores = {eid: round(float(total or 0.0), 2) for eid, total in rows}
-    for ev in db.query(HotEvent).all():
+    events = (
+        db.query(HotEvent)
+        .options(load_only(HotEvent.id, HotEvent.hot_score, HotEvent.last_time, HotEvent.status))
+        .all()
+    )
+    for ev in events:
         ev.hot_score = scores.get(ev.id, 0.0)
         if ev.last_time:
             # 状态全量刷新：事件状态此前只在被聚类命中时更新，长时间无新报道的

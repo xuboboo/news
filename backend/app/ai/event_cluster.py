@@ -98,7 +98,7 @@ def _tz(t: datetime) -> datetime:
 
 
 def keyword_jaccard_of(ka: Set[str], kb: Set[str]) -> float:
-    """预计算关键词集合的 Jaccard 相似度（keyword_jaccard 的免分词版本）。"""
+    """预计算关键词集合的 Jaccard 相似度（分词在 ClusterItem 构造时一次性完成）。"""
     if not ka or not kb:
         return 0.0
     return len(ka & kb) / len(ka | kb)

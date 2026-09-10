@@ -65,10 +65,3 @@ def hot_score_expr(model):
     hours = func.extract("epoch", func.now() - model.publish_time) / 3600.0
     decay = func.exp(-s.decay_per_hour * func.greatest(hours, 0.0))
     return case((engagement <= 0, decay * 100.0), else_=engagement * decay)
-
-
-def normalize_to_100(raw: float, max_raw: float) -> float:
-    """相对归一化到 0-100 区间，便于展示与排序。"""
-    if max_raw <= 0:
-        return 0.0
-    return round((raw / max_raw) * 100, 1)

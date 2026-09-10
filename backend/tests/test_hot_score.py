@@ -11,7 +11,6 @@ from datetime import datetime, timedelta, timezone
 from app.algorithms.hot_score import (
     hot_score,
     hot_score_expr,
-    normalize_to_100,
     raw_engagement,
     time_decay,
 )
@@ -88,13 +87,3 @@ def test_hot_score_expr_compiles_with_same_semantics():
     assert "coalesce" in sql.lower()
     assert "greatest" in sql.lower()  # 未来发布时间钳 0，与 Python max(0.0, ...) 一致
     assert "exp" in sql.lower()
-
-
-# ———— normalize_to_100 ————
-
-def test_normalize_to_100_bounds():
-    assert normalize_to_100(0, 0) == 0.0
-    assert normalize_to_100(50, 0) == 0.0  # 基准为 0（窗口空）时不放大
-    assert normalize_to_100(100, 100) == 100.0
-    assert normalize_to_100(25, 200) == 12.5
-    assert normalize_to_100(200, 100) == 200.0  # 相对归一化允许超 100（新王登基窗口）

@@ -10,11 +10,21 @@ import { fullTime, formatScore, timeAgo } from '../utils/format';
 
 const STATUS_FILTERS = ['全部', '发酵中', '持续关注', '已平息', '多来源聚合'] as const;
 
+// 时间窗筛选：按 last_time（事件全量成员的最新报道时间，后端 event_article 全量口径）。
+// 与热榜的 24h/3d/7d 窗口同语义，补齐事件页缺失的「最近热点」视图。
+const WINDOWS = [
+  { key: 'all', label: '全部时间', ms: 0 },
+  { key: '24h', label: '24小时内', ms: 24 * 3600_000 },
+  { key: '3d', label: '3天内', ms: 3 * 24 * 3600_000 },
+  { key: '7d', label: '7天内', ms: 7 * 24 * 3600_000 },
+] as const;
+
 export default function Events() {
   const bootReady = useBootstrapReady();
   const navigate = useNavigate();
   const dataVer = useDataVersion();
   const [statusFilter, setStatusFilter] = useState<string>('全部');
+  const [windowKey, setWindowKey] = useState<string>('all');
   // 「加载更多」状态：exhaustedAt 记录耗尽时的数据版本，新数据回流后自动可再加载
   const [loadingMore, setLoadingMore] = useState(false);
   const [exhaustedAt, setExhaustedAt] = useState<number | null>(null);
@@ -23,17 +33,26 @@ export default function Events() {
 
   usePageTitle('热点事件');
 
-  // dataVer：后台同步后重新排序（依赖数组处的豁免注释）；
-  // 「多来源聚合」滤掉单报道事件（本地降级模式下占大头，单独看聚合结果更聚焦）
+  // 窗口先行、状态叠加：状态 chip 的计数基于窗口内事件，两行数字口径一致。
+  // lastTime 为后端全量口径；缓存外事件（超出首页 100 个）不参与窗口计数。
+  const inWindow = useMemo(() => {
+    const win = WINDOWS.find((w) => w.key === windowKey) ?? WINDOWS[0];
+    if (win.ms === 0) return EVENTS_WITH_SCORE;
+    const since = Date.now() - win.ms;
+    return EVENTS_WITH_SCORE.filter((e) => e.lastTime.getTime() >= since);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVer/windowKey 变化触发重算
+  }, [dataVer, windowKey]);
+
   const events = useMemo(
     () =>
-      EVENTS_WITH_SCORE.filter((e) => {
-        if (statusFilter === '全部') return true;
-        if (statusFilter === '多来源聚合') return e.articlesCount >= 2;
-        return e.status === statusFilter;
-      }).sort((a, b) => b.hotScore - a.hotScore),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVer 变化触发重算
-    [dataVer, statusFilter]
+      inWindow
+        .filter((e) => {
+          if (statusFilter === '全部') return true;
+          if (statusFilter === '多来源聚合') return e.articlesCount >= 2;
+          return e.status === statusFilter;
+        })
+        .sort((a, b) => b.hotScore - a.hotScore),
+    [inWindow, statusFilter]
   );
 
   if (!bootReady) return <Loading />;
@@ -46,13 +65,38 @@ export default function Events() {
       />
 
       <div className="flex items-center gap-2 mb-4 flex-wrap">
+        {WINDOWS.map((w) => {
+          const n =
+            w.ms === 0
+              ? EVENTS_WITH_SCORE.length
+              : EVENTS_WITH_SCORE.filter(
+                  (e) => e.lastTime.getTime() >= Date.now() - w.ms
+                ).length;
+          const active = windowKey === w.key;
+          return (
+            <button
+              key={w.key}
+              onClick={() => setWindowKey(w.key)}
+              className={`chip px-3 py-1.5 text-xs border transition-colors cursor-pointer ${
+                active
+                  ? 'bg-accent/15 text-accent border-accent/40'
+                  : 'bg-radar-card text-slate-400 border-radar-border hover:text-slate-200'
+              }`}
+            >
+              {w.label} · {n}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
         {STATUS_FILTERS.map((s) => {
           const n =
             s === '全部'
-              ? EVENTS_WITH_SCORE.length
+              ? inWindow.length
               : s === '多来源聚合'
-                ? EVENTS_WITH_SCORE.filter((e) => e.articlesCount >= 2).length
-                : EVENTS_WITH_SCORE.filter((e) => e.status === s).length;
+                ? inWindow.filter((e) => e.articlesCount >= 2).length
+                : inWindow.filter((e) => e.status === s).length;
           const active = statusFilter === s;
           return (
             <button
@@ -142,7 +186,7 @@ export default function Events() {
                   </span>
                 </div>
                 <span className="text-[11px] text-slate-500">
-                  首发 {e.articles.length > 0 ? fullTime(e.firstTime) : '—'}
+                  首发 {fullTime(e.firstTime)}
                 </span>
               </div>
             </div>
