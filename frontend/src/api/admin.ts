@@ -228,8 +228,12 @@ export interface UsageSummary {
   total_cost: number;
   /** 缓存命中的输入 token 合计（按缓存价/输入价计，见价目表 price_cache） */
   total_cached: number;
+  /** 输入 token 合计（缓存命中率的分母） */
+  total_prompt: number;
   by_task_type: UsageGroup[];
   by_model: UsageGroup[];
+  /** 近窗口有调用但未配价、且非本地降级模型的模型（成本按 0 计的盲区告警） */
+  unpriced_models: UsageGroup[];
   summary_total: number;
   llm_coverage: number;
   embedding_api_fail: number;

@@ -128,6 +128,25 @@ def _normalize_base(base_url: str) -> str:
     return (base_url or "").rstrip("/")
 
 
+def _safe_json(resp) -> dict:
+    """响应体转 dict；非 JSON（HTML 错误页等）返回空 dict。"""
+    try:
+        return resp.json()
+    except Exception:
+        return {}
+
+
+def _log_conn_usage(model: str, status: str, latency_ms: int,
+                    error: str | None = None, body: dict | None = None) -> None:
+    """「测试连接」的用量落账：真实供应商调用烧 token，必须与业务调用同一本账，
+    否则看板成本低估（ai_usage_log 完整性）。失败早于 usage 提取时 body 缺省=全 0。"""
+    usage_service.record_usage(
+        task_type="conn_test", trigger="manual", model=model, status=status,
+        latency_ms=latency_ms, error=error,
+        **usage_service.extract_openai_usage(body),
+    )
+
+
 @router.post("/test/llm", dependencies=[Depends(require_admin)])
 def test_llm(payload: dict | None = None, request: Request = None, db: Session = Depends(get_db)):
     """用一条最小请求验证 LLM 连通性；可传入未保存的 base_url/api_key/model 先测后存。"""
@@ -164,20 +183,25 @@ def test_llm(payload: dict | None = None, request: Request = None, db: Session =
             json=body, headers=headers, timeout=25,
         )
     except httpx.HTTPError as exc:
+        _log_conn_usage(model, "api_fail", int((time.monotonic() - start) * 1000), error=str(exc))
         audit_service.record(db, "admin.test_llm", request=request, user=actor,
                              detail={"ok": False, "model": model, "error": str(exc)[:200]})
         raise HTTPException(502, f"无法连接 {base_url}：{exc}")
     latency = int((time.monotonic() - start) * 1000)
     if resp.status_code != 200:
+        _log_conn_usage(model, "api_fail", latency, error=f"HTTP {resp.status_code}",
+                        body=_safe_json(resp))
         audit_service.record(db, "admin.test_llm", request=request, user=actor,
                              detail={"ok": False, "model": model, "http_status": resp.status_code})
         raise HTTPException(502, f"HTTP {resp.status_code}：{resp.text[:300]}")
     try:
         content = resp.json()["choices"][0]["message"]["content"]
     except Exception:
+        _log_conn_usage(model, "parse_fail", latency, error="响应格式异常", body=_safe_json(resp))
         audit_service.record(db, "admin.test_llm", request=request, user=actor,
                              detail={"ok": False, "model": model, "error": "响应格式异常"})
         raise HTTPException(502, f"响应格式异常：{resp.text[:300]}")
+    _log_conn_usage(model, "success", latency, body=_safe_json(resp))
     audit_service.record(db, "admin.test_llm", request=request, user=actor,
                          detail={"ok": True, "model": model, "latency_ms": latency})
     return {"ok": True, "latency_ms": latency, "model": model, "reply": (content or "").strip()[:80]}
@@ -213,20 +237,25 @@ def test_embedding(payload: dict | None = None, request: Request = None, db: Ses
             json={"model": model, "input": "连通性测试"}, headers=headers, timeout=25,
         )
     except httpx.HTTPError as exc:
+        _log_conn_usage(model, "api_fail", int((time.monotonic() - start) * 1000), error=str(exc))
         audit_service.record(db, "admin.test_embedding", request=request, user=actor,
                              detail={"ok": False, "model": model, "error": str(exc)[:200]})
         raise HTTPException(502, f"无法连接 {base_url}：{exc}")
     latency = int((time.monotonic() - start) * 1000)
     if resp.status_code != 200:
+        _log_conn_usage(model, "api_fail", latency, error=f"HTTP {resp.status_code}",
+                        body=_safe_json(resp))
         audit_service.record(db, "admin.test_embedding", request=request, user=actor,
                              detail={"ok": False, "model": model, "http_status": resp.status_code})
         raise HTTPException(502, f"HTTP {resp.status_code}：{resp.text[:300]}")
     try:
         dim = len(resp.json()["data"][0]["embedding"])
     except Exception:
+        _log_conn_usage(model, "parse_fail", latency, error="响应格式异常", body=_safe_json(resp))
         audit_service.record(db, "admin.test_embedding", request=request, user=actor,
                              detail={"ok": False, "model": model, "error": "响应格式异常"})
         raise HTTPException(502, f"响应格式异常：{resp.text[:300]}")
+    _log_conn_usage(model, "success", latency, body=_safe_json(resp))
     expected = get_settings().embed_dim
     audit_service.record(db, "admin.test_embedding", request=request, user=actor,
                          detail={"ok": True, "model": model, "dim": dim, "latency_ms": latency})
@@ -490,8 +519,13 @@ def usage_summary_api(
 def usage_logs_api(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    task_type: str | None = Query(None, pattern="^(summary|event_summary|embedding|report)$"),
-    status: str | None = Query(None, pattern="^(success|parse_fail|api_fail)$"),
+    # pattern 从 usage_service 常量拼装（单一事实来源；conn_test 也允许过滤）
+    task_type: str | None = Query(
+        None, pattern="^(" + "|".join(usage_service.LOG_TASK_TYPES) + ")$"
+    ),
+    status: str | None = Query(
+        None, pattern="^(" + "|".join(usage_service.LOG_STATUSES) + ")$"
+    ),
     db: Session = Depends(get_db),
 ):
     """AI 调用流水分页明细（联 article 取标题，error 截断为摘要；可按任务/状态过滤）。"""
@@ -606,7 +640,11 @@ def usage_prices_post(data: dict, request: Request, db: Session = Depends(get_db
         raise HTTPException(400, "单价不能为负数")
 
     old = db.get(ModelPrice, model)
-    row, created = usage_service.upsert_price(db, model, price_input, price_output, price_cache)
+    try:
+        row, created = usage_service.upsert_price(db, model, price_input, price_output, price_cache)
+    except ValueError as exc:
+        # 服务层防呆（非有限值/负数/超上限）→ 400，不产生半截审计
+        raise HTTPException(400, str(exc))
     audit_service.record(
         db, "admin.price_updated", request=request, user=current_user_of(request),
         detail={

@@ -5,8 +5,9 @@ P0 回归教训：extract_openai_usage 曾返回 total_tokens 而 record_usage �
 test_record_usage_accepts_extracted_usage 即该缺陷的永久哨兵。
 
 DB 相关测试用 SQLite 内存库，仅建 AiUsageLog/ModelPrice 两张表
-（article 含 pgvector Vector 列，SQLite 建不了）；usage_summary 的按日趋势
-用 func.timezone（PG 专用），一律 include_daily=False 规避。
+（article 含 pgvector Vector 列，SQLite 建不了）；日趋势的 UTC 日桶表达式已做
+方言自适应（PG=timezone('UTC', ts)，SQLite=date()），include_daily=True 可直接测
+零填充整日桶（见 test_usage_daily_zero_fill）。
 """
 import inspect
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models.usage import AiUsageLog, ModelPrice
 from app.services.usage_service import (
+    MAX_MODEL_PRICE,
     CSV_HEADERS,
     calc_cost,
     csv_safe_cell,
@@ -43,6 +45,14 @@ def test_record_usage_accepts_extracted_usage():
         usage = extract_openai_usage(body)
         # bind() 在参数不匹配时抛 TypeError——正是 P0 的爆炸点
         inspect.signature(_record_usage_ref()).bind(task_type="summary", model="m", **usage)
+
+
+def test_local_models_cover_legacy_names():
+    """v1 时代的本地兜底模型名（改名前的历史流水）必须计入本地名单，
+    否则抽取式摘要被当成真实 LLM 成功，覆盖率分子虚高（2026-09-10 实测 412 条）。"""
+    from app.services.usage_service import LOCAL_MODELS
+
+    assert {"extractive-textrank-v1", "local-hash-256"} <= LOCAL_MODELS
 
 
 def _record_usage_ref():
@@ -142,6 +152,19 @@ def test_upsert_price_create_update_and_created_flag(db):
     assert [p.model for p in list_prices(db)] == ["mx"]
 
 
+def test_upsert_price_sanitizes_bad_values(db):
+    """防呆：负数 / 非有限值 / 超上限（手滑多打零）一律 ValueError，不得落库。"""
+    for kwargs in (
+        {"price_input": -1.0, "price_output": 2.0},
+        {"price_input": float("nan"), "price_output": 2.0},
+        {"price_input": 1.0, "price_output": float("inf")},
+        {"price_input": 1.0, "price_output": 2.0, "price_cache": MAX_MODEL_PRICE + 0.01},
+    ):
+        with pytest.raises(ValueError):
+            upsert_price(db, "bad", **kwargs)
+    assert list_prices(db) == []  # 校验失败不留半截行
+
+
 # ———————————————————— 聚合与明细（SQLite，include_daily=False） ————————————————————
 
 def _add_log(db, **kw):
@@ -170,6 +193,7 @@ def test_usage_summary_totals_coverage_groups(db):
     assert s["total_calls"] == 5
     assert s["total_tokens"] == 470
     assert s["total_cached"] == 50
+    assert s["total_prompt"] == 500  # 缓存命中率分母
     assert s["total_cost"] == pytest.approx(0.17, abs=1e-9)
     assert s["summary_total"] == 3
     assert s["llm_coverage"] == pytest.approx(33.3, abs=0.1)  # 仅 1 次 LLM 成功
@@ -190,6 +214,48 @@ def test_usage_period_boundaries(db):
     assert usage_summary(db, "30d", include_daily=False)["total_calls"] == 2
     month_calls = usage_summary(db, "month", include_daily=False)["total_calls"]
     assert month_calls in (1, 2)  # 取决于"现在"是否月初 48h 内，只验证不炸且口径 >= today
+
+
+def test_usage_summary_unpriced_models(db):
+    """未计价模型盲区：API 模型没配价必须告警；本地降级模型与空模型名不算。"""
+    _add_log(db, model="glm-4-flash", prompt_tokens=100, total_tokens=150, cost=0.1)
+    upsert_price(db, "glm-4-flash", 2.0, 8.0)
+    _add_log(db, model="mystery-llm", prompt_tokens=200, total_tokens=300, cost=0.0)
+    _add_log(db, model="local-hash-256-v2", prompt_tokens=0, total_tokens=0, cost=0.0,
+             task_type="embedding")
+
+    s = usage_summary(db, "today", include_daily=False)
+    keys = [g["key"] for g in s["unpriced_models"]]
+    assert keys == ["mystery-llm"]
+    assert s["unpriced_models"][0]["calls"] == 1
+    assert s["unpriced_models"][0]["tokens"] == 300
+
+
+def test_usage_daily_zero_fill(db):
+    """日趋势恒为 30 个整 UTC 日桶：缺失日补零、有数日聚合、末桶=今天。"""
+    # 锚定 UTC 正午：now-1h/2h 恒落在今天，避免 UTC 0-1 点跑测跨日
+    now = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+    _add_log(db, total_tokens=150, cost=0.1, created_at=now - timedelta(hours=1))
+    _add_log(db, total_tokens=150, cost=0.1, created_at=now - timedelta(hours=2))
+    _add_log(db, total_tokens=90, cost=0.3, created_at=now - timedelta(days=3, hours=1))
+
+    s = usage_summary(db, "30d", include_daily=True, include_groups=False)
+    days = s["daily"]
+    assert len(days) == 30
+    # 日期连续且最后一桶是今天（UTC）
+    assert days[-1]["date"] == now.date().isoformat()
+    expected_dates = {
+        (now - timedelta(days=i)).date().isoformat() for i in range(30)
+    }
+    assert {d["date"] for d in days} == expected_dates
+    by_date = {d["date"]: d for d in days}
+    assert by_date[days[-1]["date"]]["calls"] == 2
+    assert by_date[days[-1]["date"]]["tokens"] == 300
+    assert by_date[(now - timedelta(days=3)).date().isoformat()]["tokens"] == 90
+    # 无调用日补零
+    empty = [d for d in days if d["calls"] == 0]
+    assert len(empty) == 28
+    assert all(d["tokens"] == 0 and d["cost"] == 0 for d in empty)
 
 
 def test_usage_day_summary(db):
@@ -237,6 +303,8 @@ def test_usage_logs_filters_and_pagination(db):
     ("-正常标题", "'-正常标题"),
     ("@cmd", "'@cmd"),
     ("\tTAB", "'\tTAB"),
+    ("\rCR", "'\rCR"),
+    ("\n=cmd", "'\n=cmd"),
     ("普通标题", "普通标题"),
     (None, ""),
     (123, "123"),

@@ -9,6 +9,7 @@ record_usage 使用独立数据库会话落账：业务事务成败不影响已�
 """
 import inspect
 import logging
+import math
 from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 
@@ -24,7 +25,14 @@ logger = logging.getLogger(__name__)
 # 降级 / 本地模型标识：非真实 API 调用，不计入 LLM 覆盖率分子。
 # extractive-textrank-v2 ↔ app/ai/summary.py；local-hash-256-v2 ↔ app/ai/embedding.py
 # 的 LOCAL_EMBED_MODEL（此处用字面量，反向 import 会循环依赖）——改名需两处同步。
-LOCAL_MODELS = {"extractive-textrank-v2", "local-hash-256-v2", "compose-facts"}
+# v1 旧名（extractive-textrank-v1 / local-hash-256）：改名前的历史流水仍在 30 天
+# 窗口内，不入名单会把本地兜底当成真实 LLM 成功，覆盖率虚高（2026-09-10 审计，
+# 实测 412 条 v1 流水被误计入分子）。
+LOCAL_MODELS = {
+    "extractive-textrank-v2", "extractive-textrank-v1",
+    "local-hash-256-v2", "local-hash-256",
+    "compose-facts",
+}
 
 # CSV 导出首行注释（对账口径说明）
 CSV_NOTE = (
@@ -40,9 +48,14 @@ CSV_HEADERS = [
     "latency_ms", "cost", "error",
 ]
 
-# 明细流水允许的过滤值（API 层校验用）
-LOG_TASK_TYPES = ("summary", "event_summary", "embedding", "report")
+# 明细流水允许的过滤值（API 层校验 pattern 由此拼装，勿在端点另写死一份）。
+# conn_test：运维页「测试连接」按钮的真实 API 调用——同样烧 token，必须落账。
+LOG_TASK_TYPES = ("summary", "event_summary", "embedding", "report", "conn_test")
 LOG_STATUSES = ("success", "parse_fail", "api_fail")
+
+# 单价防呆上限（元/百万 token）。最贵商用模型也在千元级；超过即几乎必是
+# 手滑多打零（如 2 写成 20000），在服务层拦下，防止之后每条流水按天价锁定。
+MAX_MODEL_PRICE = 10_000
 
 
 def extract_openai_usage(body: dict) -> dict:
@@ -166,8 +179,18 @@ def upsert_price(
     """新增 / 更新某模型单价（每百万 token，元）。调价只影响之后的新记录。
 
     price_cache=None 表示清掉缓存价（回落输入价全价口径）。
+    单价防呆：非有限值 / 负数 / 超过 MAX_MODEL_PRICE（几乎必为手滑多打零）
+    抛 ValueError，由 API 层转 400。
     返回 (行, 是否新建)——供 API 区分"新增"与"改价"（提示语 + 审计 detail）。
     """
+    for name, val in (("price_input", price_input), ("price_output", price_output),
+                      ("price_cache", price_cache)):
+        if val is None:
+            continue
+        if not math.isfinite(float(val)) or float(val) < 0:
+            raise ValueError(f"{name} 必须为非负数值")
+        if float(val) > MAX_MODEL_PRICE:
+            raise ValueError(f"{name} 超过防呆上限 {MAX_MODEL_PRICE} 元/百万 token，疑似录入错误")
     row = db.get(ModelPrice, model)
     created = row is None
     if row is None:
@@ -193,10 +216,10 @@ def price_dict(p: ModelPrice) -> dict:
 
 
 def csv_safe_cell(value) -> str:
-    """CSV 公式注入防护：以 = + - @ 或制表/回车开头的单元格加 ' 前缀，
+    """CSV 公式注入防护：以 = + - @ 或制表/回车/换行开头的单元格加 ' 前缀，
     防 Excel/WPS 当公式执行（OWASP CSV Injection 惯例）。非字符串原样转 str。"""
     s = "" if value is None else str(value)
-    if s[:1] in ("=", "+", "-", "@", "\t", "\r"):
+    if s[:1] in ("=", "+", "-", "@", "\t", "\r", "\n"):
         return "'" + s
     return s
 
@@ -232,6 +255,17 @@ def _group_stats(q, col) -> list[dict]:
     ]
 
 
+def _utc_day_expr(db: Session):
+    """按 UTC 日界取日的可移植表达式。
+
+    PG 必须用 timezone('UTC', timestamptz) 钉死 UTC（否则随会话时区漂移）；
+    SQLite（测试库）无 timezone 函数，退回 date()（SQLite 无时区概念，天然 UTC）。
+    """
+    if db.get_bind().dialect.name == "postgresql":
+        return func.date(func.timezone("UTC", AiUsageLog.created_at))
+    return func.date(AiUsageLog.created_at)
+
+
 def usage_summary(
     db: Session,
     period: str = "today",
@@ -240,9 +274,13 @@ def usage_summary(
 ) -> dict:
     """用量/成本看板聚合：总量、分组、覆盖率、失败数、近 30 天按日趋势。
 
-    include_daily / include_groups：today/month 等短周期请求可关掉 30 天日趋势
-    与分组统计（前端仅 30d 视图消费），避免一次刷新重复全表扫描。
-    关闭时对应键返回空列表（响应形状不变，前端类型稳定）。
+    include_groups：短周期请求可关掉分组统计（前端仅 30d 视图消费）；
+    关闭时 by_task_type/by_model 返回空列表（响应形状不变）。
+    include_daily：关掉 30 天日趋势。日趋势恒为 30 个整 UTC 日桶（缺数据日补零），
+    与窗口起点取整到日界，图形不再把无调用日误读成缺数据。
+
+    unpriced_models 与分组无关、恒返回：近窗口有调用但价目表没配单价、且非
+    本地降级模型的模型（本地模型 cost=0 是设计使然）——账面成本被低估的盲区告警。
     """
     now = datetime.now(timezone.utc)
     start, period = _period_start(period, now)
@@ -253,7 +291,16 @@ def usage_summary(
         func.coalesce(func.sum(AiUsageLog.total_tokens), 0),
         func.coalesce(func.sum(AiUsageLog.cost), 0),
         func.coalesce(func.sum(AiUsageLog.cached_tokens), 0),
+        func.coalesce(func.sum(AiUsageLog.prompt_tokens), 0),
     ).one()
+
+    # 模型分组恒算一份：by_model 与 unpriced_models 共用这一次扫描
+    model_groups = _group_stats(q, AiUsageLog.model)
+    priced = {p.model for p in list_prices(db)}
+    unpriced = [
+        g for g in model_groups
+        if g["key"] and g["key"] not in priced and g["key"] not in LOCAL_MODELS
+    ]
 
     # LLM 覆盖率 = LLM 摘要成功数 / 总摘要数（降级与失败都拉低覆盖率）
     summary_total = q.filter(AiUsageLog.task_type == "summary").count()
@@ -277,8 +324,11 @@ def usage_summary(
 
     daily: list[dict] = []
     if include_daily:
-        # 近 30 天按日趋势（UTC 日界，与 today 口径一致；func.timezone 为 PG 专用）
-        utc_day = func.date(func.timezone("UTC", AiUsageLog.created_at))
+        # 近 30 个整 UTC 日（含今天）：起点取整到日界，缺失日补零
+        day_start = (now - timedelta(days=29)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        utc_day = _utc_day_expr(db)
         daily_rows = (
             db.query(
                 utc_day,
@@ -286,20 +336,20 @@ def usage_summary(
                 func.coalesce(func.sum(AiUsageLog.total_tokens), 0),
                 func.coalesce(func.sum(AiUsageLog.cost), 0),
             )
-            .filter(AiUsageLog.created_at >= now - timedelta(days=30))
+            .filter(AiUsageLog.created_at >= day_start)
             .group_by(utc_day)
-            .order_by(utc_day)
             .all()
         )
-        daily = [
-            {
-                "date": str(r[0]),
-                "calls": int(r[1]),
-                "tokens": int(r[2] or 0),
-                "cost": round(float(r[3] or 0), 6),
-            }
-            for r in daily_rows
-        ]
+        by_date = {str(r[0]): r for r in daily_rows}
+        for i in range(30):
+            d = (day_start + timedelta(days=i)).date().isoformat()
+            r = by_date.get(d)
+            daily.append({
+                "date": d,
+                "calls": int(r[1]) if r else 0,
+                "tokens": int(r[2] or 0) if r else 0,
+                "cost": round(float(r[3] or 0), 6) if r else 0.0,
+            })
 
     return {
         "period": period,
@@ -308,8 +358,10 @@ def usage_summary(
         "total_tokens": int(totals[0] or 0),
         "total_cost": round(float(totals[1] or 0), 6),
         "total_cached": int(totals[2] or 0),
+        "total_prompt": int(totals[3] or 0),
         "by_task_type": _group_stats(q, AiUsageLog.task_type) if include_groups else [],
-        "by_model": _group_stats(q, AiUsageLog.model) if include_groups else [],
+        "by_model": model_groups if include_groups else [],
+        "unpriced_models": unpriced,
         "summary_total": summary_total,
         "llm_coverage": round(llm_ok / summary_total * 100, 1) if summary_total else 0,
         "embedding_api_fail": embedding_api_fail,

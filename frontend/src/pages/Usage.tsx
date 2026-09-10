@@ -38,6 +38,7 @@ const TASK_LABELS: Record<string, string> = {
   event_summary: '事件总结',
   embedding: '向量化',
   report: '日报',
+  conn_test: '连通性测试',
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -293,9 +294,21 @@ export default function Usage() {
 
   const totalPages = Math.max(1, Math.ceil(logTotal / PAGE_SIZE));
   const todayStr = utcToday();
-  // 后端按日期升序返回；倒序展示让最新数据首屏可见，今天高亮
+  // 后端恒返回 30 个整 UTC 日桶（缺数据日补零）；倒序展示让最新数据首屏可见，今天高亮
   const daily = [...(summary30d?.daily ?? [])].reverse();
   const dailyMax = Math.max(1, ...daily.map((d) => d.tokens));
+  // 近 7 天日均成本：尾部 7 个整日桶即最近 7 天（含今天）
+  const avg7Cost = daily.length > 0 ? daily.slice(-7).reduce((s, d) => s + d.cost, 0) / 7 : 0;
+  // 月末预估：月累计 / 已过 UTC 天数 × 当月天数（月初首日 elapsed=1 起即可折算）
+  const nowUtc = new Date();
+  const elapsedDays = nowUtc.getUTCDate();
+  const daysInMonth = new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth() + 1, 0)).getUTCDate();
+  const monthProjection = elapsedDays > 0 ? ((summaryMonth?.total_cost ?? 0) / elapsedDays) * daysInMonth : 0;
+  // 缓存命中率 = 缓存命中 token / 输入 token（未配缓存价时也可见节省空间）
+  const cacheRate =
+    summaryToday && summaryToday.total_prompt > 0
+      ? Math.round((summaryToday.total_cached / summaryToday.total_prompt) * 100)
+      : null;
 
   return (
     <div className="space-y-6">
@@ -330,13 +343,27 @@ export default function Usage() {
         </div>
       )}
 
+      {/* ———— 未计价模型盲区告警（30 天口径） ———— */}
+      {(summary30d?.unpriced_models?.length ?? 0) > 0 && (
+        <div className="card px-4 py-2.5 text-xs text-amber-200 flex items-start gap-2">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <div>
+            以下模型近 30 天有调用但未配置单价，成本按 ¥0 计、账面被低估：
+            {summary30d!.unpriced_models.map((m) => (
+              <span key={m.key} className="font-mono text-amber-100 mx-1">{m.key}</span>
+            ))}
+            <span className="text-slate-400">—— 请在下方「模型价目」补配单价</span>
+          </div>
+        </div>
+      )}
+
       {/* ———— 顶部卡 ———— */}
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard
           icon={<Coins className="h-4 w-4" />}
           label="今日成本"
           value={fmtMoney(summaryToday?.total_cost)}
-          sub={`${summaryToday?.total_calls ?? 0} 次调用 · ${fmtTokens(summaryToday?.total_tokens)} tokens${(summaryToday?.total_cached ?? 0) > 0 ? ` · 缓存命中 ${fmtTokens(summaryToday?.total_cached)}` : ''}`}
+          sub={`${summaryToday?.total_calls ?? 0} 次调用 · ${fmtTokens(summaryToday?.total_tokens)} tokens${(summaryToday?.total_cached ?? 0) > 0 ? ` · 缓存命中 ${fmtTokens(summaryToday?.total_cached)}${cacheRate != null ? ` (${cacheRate}%)` : ''}` : ''}`}
         />
         <StatCard icon={<Coins className="h-4 w-4" />} label="本月累计成本" value={fmtMoney(summaryMonth?.total_cost)} sub={`${summaryMonth?.total_calls ?? 0} 次调用 · ${fmtTokens(summaryMonth?.total_tokens)} tokens`} />
         <StatCard icon={<Tag className="h-4 w-4" />} label="今日调用数" value={String(summaryToday?.total_calls ?? 0)} sub={`摘要 ${summaryToday?.summary_total ?? 0} 次 · 覆盖率 ${summaryToday?.llm_coverage ?? 0}%`} />
@@ -365,11 +392,18 @@ export default function Usage() {
       {/* ———— 近 30 天趋势 + 分组 ———— */}
       <section className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         <div className="card p-4 lg:col-span-2">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-1.5">
             <h2 className="text-sm font-semibold text-slate-300">近 30 天 Token / 成本趋势</h2>
-            <span className="text-[11px] text-slate-500">最新在上 · 条形按 token 归一化</span>
+            <span className="text-[11px] text-slate-500">最新在上 · 条形按 token 归一化 · 无调用日补零</span>
           </div>
-          {daily.length === 0 ? (
+          {daily.length > 0 && (
+            <div className="text-[11px] text-slate-400 mb-2.5 flex flex-wrap gap-x-4 gap-y-0.5">
+              <span>近 7 天日均成本 <span className="text-amber-300/90 tabular-nums">{fmtMoney(avg7Cost)}</span></span>
+              <span>本月预估 <span className="text-amber-300/90 tabular-nums">{fmtMoney(monthProjection)}</span>
+                <span className="text-slate-500">（月累计 ÷ 已过 {elapsedDays} 天 × 当月 {daysInMonth} 天，UTC）</span></span>
+            </div>
+          )}
+          {!daily.some((d) => d.calls > 0) ? (
             <p className="text-xs text-slate-500 py-6 text-center">暂无调用记录（流水线跑起来后自动积累）</p>
           ) : (
             <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
@@ -381,7 +415,7 @@ export default function Usage() {
                   <div className="flex-1 h-2.5 rounded bg-radar-border/60 overflow-hidden">
                     <div
                       className="h-full rounded bg-gradient-to-r from-accent/70 to-cyan-300"
-                      style={{ width: `${Math.max(2, (d.tokens / dailyMax) * 100)}%` }}
+                      style={{ width: `${d.tokens > 0 ? Math.max(2, (d.tokens / dailyMax) * 100) : 0}%` }}
                     />
                   </div>
                   <span className="text-slate-400 w-16 text-right tabular-nums">{fmtTokens(d.tokens)}</span>
@@ -590,8 +624,8 @@ export default function Usage() {
                     <td className="px-2 py-2 text-right text-amber-300/90 tabular-nums whitespace-nowrap">{fmtMoney(r.cost)}</td>
                     <td className="px-2 py-2 text-right text-slate-400 whitespace-nowrap">{fmtDuration(r.latency_ms)}</td>
                     <td className="px-2 py-2 whitespace-nowrap">
-                      <span className={`chip text-[10px] ${r.trigger === 'manual_repair' ? 'bg-sky-500/10 text-sky-300' : 'bg-slate-500/10 text-slate-400'}`}>
-                        {r.trigger === 'manual_repair' ? '补数据' : '自动'}
+                      <span className={`chip text-[10px] ${r.trigger === 'manual_repair' ? 'bg-sky-500/10 text-sky-300' : r.trigger === 'manual' ? 'bg-violet-500/10 text-violet-300' : 'bg-slate-500/10 text-slate-400'}`}>
+                        {r.trigger === 'manual_repair' ? '补数据' : r.trigger === 'manual' ? '手动' : '自动'}
                       </span>
                     </td>
                     <td className="px-4 py-2 text-red-300/80 max-w-[200px] truncate" title={r.error ?? ''}>{r.error ?? '—'}</td>

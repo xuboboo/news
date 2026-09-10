@@ -7,7 +7,6 @@ compose 栈。仅注册用户/租户域所需表；涉及 pgvector/JSONB 专有�
 非 PG 方言下自动跳过，见 audit_service.record）。
 """
 import types
-from contextlib import contextmanager
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,7 +19,11 @@ from app.core.db import Base, get_db
 from app.main import app
 
 # 用户/租户域 + 运维监控域测试所需的最小表集（不含 article 等需要 pgvector 的表）
-_TEST_TABLES = ("tenant", "app_user", "user_session", "audit_log", "system_setting", "task_run")
+# ai_usage_log / model_price：成本看板域（usage API、连通性测试落账）均为 SQLite 兼容类型
+_TEST_TABLES = (
+    "tenant", "app_user", "user_session", "audit_log", "system_setting", "task_run",
+    "ai_usage_log", "model_price",
+)
 
 # 统一测试密码（弱口令表会拒绝 12345678 等，此串不在其中）
 PW = "Str0ng-Test-Pw!"
