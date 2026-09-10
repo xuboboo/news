@@ -98,8 +98,11 @@ _ARTICLE_HREF = re.compile(
     r'href="((?:https:)?//news\.mydrivers\.com/1/\d+/\d+\.htm)(?:[?#][^"]*)?"'
 )
 
-# RSS feed <item> 内的链接与发布时间（feed 为 UTF-8 XML，链接是绝对地址）
+# RSS feed <item> 内的链接与发布时间（feed 为 UTF-8 XML，链接是绝对地址）。
+# 发布时间只认 <pubDate> 字段：item 内 description 等字段可能含日期样文本，
+# 整段扫描会误取发布时间造成窗口预过滤静默丢文
 _FEED_LINK_RE = re.compile(r"<link>(https://news\.mydrivers\.com/1/\d+/\d+\.htm)</link>")
+_FEED_PUBDATE_RE = re.compile(r"<pubDate>([^<]*)</pubDate>")
 
 # 文章页元信息行（.news_bt1_left）内的发布时间，如「2026-09-07 19:38:32」（北京时间）
 _PAGE_TIME_RE = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?")
@@ -136,21 +139,22 @@ def extract_feed_items(xml: str) -> list[tuple[str, datetime | None]]:
     items: list[tuple[str, datetime | None]] = []
     seen: set[str] = set()
     for item_body in re.findall(r"<item>.*?</item>", xml or "", re.S):
-        m = _FEED_LINK_RE.search(item_body)
-        if not m or m.group(1) in seen:
+        link_m = _FEED_LINK_RE.search(item_body)
+        if not link_m or link_m.group(1) in seen:
             continue
-        seen.add(m.group(1))
+        seen.add(link_m.group(1))
         published = None
-        t = _PAGE_TIME_RE.search(item_body)
-        if t:
+        pub_m = _FEED_PUBDATE_RE.search(item_body)
+        time_m = _PAGE_TIME_RE.search(pub_m.group(1)) if pub_m else None
+        if time_m:
             try:
                 published = datetime(
-                    int(t.group(1)), int(t.group(2)), int(t.group(3)),
-                    int(t.group(4)), int(t.group(5)), tzinfo=SH_TZ,
+                    int(time_m.group(1)), int(time_m.group(2)), int(time_m.group(3)),
+                    int(time_m.group(4)), int(time_m.group(5)), tzinfo=SH_TZ,
                 ).astimezone(timezone.utc)
             except ValueError:
                 published = None
-        items.append((m.group(1), published))
+        items.append((link_m.group(1), published))
     return items
 
 

@@ -148,12 +148,12 @@ def _fetch(url: str, timeout: float = 15) -> httpx.Response | None:
         logger.info("backoff skip %s（剩约 %d 分钟）", host, int((until - now_ts) / 60))
         return None
     try:
-        # max_redirects=5：httpx 默认 20 跳且每跳各有完整超时预算，重定向循环会
-        # 拖垮调用方的轮次时长预算（互动轮询另有硬截止兜底）；正常页面 ≤2 跳。
+        # max_redirects=2：httpx 默认 20 跳且每跳各有完整超时预算，重定向循环会
+        # 拖垮调用方的轮次时长预算（互动轮询另有硬截止兜底）；正常页面 ≤1 跳。
         # 注意顶层 httpx.get() 不收 max_redirects，须走 Client
         with httpx.Client(
             headers={"User-Agent": UA}, timeout=timeout,
-            follow_redirects=True, max_redirects=5,
+            follow_redirects=True, max_redirects=2,
         ) as client:
             resp = client.get(url)
     except Exception as exc:

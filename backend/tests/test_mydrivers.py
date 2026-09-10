@@ -175,3 +175,19 @@ def test_extract_feed_items():
 def test_extract_feed_items_empty():
     assert extract_feed_items("") == []
     assert extract_feed_items("<rss><channel></channel></rss>") == []
+
+
+def test_extract_feed_items_pubdate_field_not_body_text():
+    """发布时间只认 <pubDate> 字段：description 等字段里的日期样文本不得误当
+    发布时间（否则窗口预过滤会静默丢文）。"""
+    xml = """<rss><channel>
+<item><title>t</title>
+<link>https://news.mydrivers.com/1/1149/1149700.htm</link>
+<description>回顾 2019-05-01 10:00 的旧闻与新计划</description>
+<pubDate>2026-09-10 09:30:00</pubDate></item>
+</channel></rss>"""
+    items = extract_feed_items(xml)
+    assert len(items) == 1 and items[0][0].endswith("1149700.htm")
+    # pubDate 2026-09-10 09:30 北京时间 → UTC 01:30；若误取 description 里的
+    # 2019-05-01 则文章会被窗口预过滤丢弃
+    assert items[0][1] is not None and items[0][1].year == 2026

@@ -89,9 +89,15 @@ def test_parse_comment_count():
     assert parse_comment_count("ccd.innerHTML = '226'") == 226
 
 
+def test_parse_comment_count_huge_number_clamped():
+    # 端点异常返回 >2^63 大整数：钳到 10^12，防 BigInteger 落库炸整轮（与 KJ 侧对称）
+    assert parse_comment_count("ccd.innerHTML = '99999999999999999999'") == 10**12
+
+
 def test_parse_grade_likes():
     html = '<span class="s" id="sgrade2"><a>有价值</a><br><div>68</div></span>'
     assert parse_grade_likes(html) == 68
+    assert parse_grade_likes('id="sgrade2"><a>有价值</a><br><div>99999999999999999999</div>') == 10**12
 
 
 # ———————————————————— 来源过滤范围与排期 ————————————————————

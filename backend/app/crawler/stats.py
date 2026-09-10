@@ -27,6 +27,14 @@ IT之家：
 排查时勿用 docker exec 直调 poll_due_articles 绕锁（冷退避表会重复打已限流的域名、
 并与 beat 轮次形成双跑；数据幂等无害但浪费请求配额）。手动触发走
 POST /api/v2/admin/stats 或等 beat 15 分钟节奏。
+
+合规态势（2026-09-11 实测记录）：count/dt.mydrivers.com 与 cmt/dyn.ithome.com
+四个互动接口域名的 robots.txt 均为 Disallow: /。本模块维持轮询的依据：这些端点
+是文章页对匿名浏览器自加载的公开计数接口，请求与访客浏览器逐字节对等（同端点、
+同 JSONP 响应、只读 GET、无鉴权绕过）；量级有硬上界（分层节奏 + 14 天停采窗 +
+单批 ≤50，单来源日请求量数百次级，远低于任一真实访客的浏览量）；指数退避与
+403 熔断已内置。若站点侧出现 403 升级/措辞警告，熔断路径 = 面板热停
+stats_poll_enabled 或下线对应来源，勿绕过限流硬闯。
 """
 import json
 import logging
@@ -88,9 +96,15 @@ _MAX_BATCH = 50
 _ROUND_DEADLINE_SECONDS = 25 * 60  # 单轮硬截止：重定向链等最坏耗时无法精确估算，超时收尾保锁不失效
 
 
+def _clamp_count(v: str) -> int:
+    """互动数值统一钳制：防端点异常返回 >2^63 大整数在 BigInteger 落库时炸整轮
+    （IT之家与快科技两侧行为对称；正则只捕获 \\d+，int 不会失败）。"""
+    return max(0, min(int(v), 10**12))
+
+
 def parse_comment_count(text: str) -> int | None:
     m = _COUNT_RE.search(text or "") or _COUNT_RE_FALLBACK.search(text or "")
-    return int(m.group(1)) if m else None
+    return _clamp_count(m.group(1)) if m else None
 
 
 def parse_kj_action_stats(text: str) -> tuple[int, int] | None:
@@ -143,7 +157,7 @@ def stats_source_filter():
 
 def parse_grade_likes(text: str) -> int | None:
     m = _GRADE_LIKE_RE.search(text or "")
-    return int(m.group(1)) if m else None
+    return _clamp_count(m.group(1)) if m else None
 
 
 def next_poll_after(publish_time: datetime, now: datetime) -> datetime | None:
@@ -348,8 +362,18 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
         article.stats_fail_count = 0
         article.stats_polled_at = now
         article.stats_next_poll_at = next_poll_after(article.publish_time, now)
+        try:
+            db.commit()
+        except Exception:
+            # 落库异常的残余场景（如数值超列宽的未知路径）：回滚后该篇回到处理前
+            # 状态（保持到期，下轮再试），绝不让单篇落库失败带崩整轮
+            db.rollback()
+            logger.exception(
+                "stats commit failed id=%s newsid=%s（已回滚，保持到期）",
+                article.id, article.news_id,
+            )
+            continue
         ok += 1
-        db.commit()
 
     polled = ok + failed + no_nid
     logger.info(
