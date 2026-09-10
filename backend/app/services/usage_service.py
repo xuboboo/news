@@ -13,7 +13,7 @@ import math
 from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func
+from sqlalchemy import and_, case, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -326,13 +326,32 @@ def usage_summary(
     start, period = _period_start(period, now)
 
     q = db.query(AiUsageLog).filter(AiUsageLog.created_at >= start)
-    total_calls = q.count()
+
+    # 单次条件聚合算完总量与全部健康指标（此前是 6 次独立窗口扫描；看板每次刷新
+    # 调 today/month/30d 三次本接口，扫描次数直接 ×3）。响应语义与拆分版完全一致。
+    is_summary = AiUsageLog.task_type == "summary"
     totals = q.with_entities(
+        func.count(),
         func.coalesce(func.sum(AiUsageLog.total_tokens), 0),
         func.coalesce(func.sum(AiUsageLog.cost), 0),
         func.coalesce(func.sum(AiUsageLog.cached_tokens), 0),
         func.coalesce(func.sum(AiUsageLog.prompt_tokens), 0),
+        # 摘要总数（LLM 覆盖率分母）
+        func.coalesce(func.sum(case((is_summary, 1), else_=0)), 0),
+        # LLM 摘要成功数（覆盖率分子；本地降级模型与失败都不计入）
+        func.coalesce(func.sum(case((
+            and_(is_summary, AiUsageLog.status == "success", AiUsageLog.model.notin_(LOCAL_MODELS)),
+            1,
+        ), else_=0)), 0),
+        # Embedding API 失败数
+        func.coalesce(func.sum(case((
+            and_(AiUsageLog.task_type == "embedding", AiUsageLog.status == "api_fail"), 1,
+        ), else_=0)), 0),
     ).one()
+    total_calls = int(totals[0])
+    summary_total = int(totals[5])
+    llm_ok = int(totals[6])
+    embedding_api_fail = int(totals[7])
 
     # 模型分组恒算一份：by_model 与 unpriced_models 共用这一次扫描
     model_groups = _group_stats(q, AiUsageLog.model)
@@ -342,17 +361,6 @@ def usage_summary(
         if g["key"] and g["key"] not in priced and g["key"] not in LOCAL_MODELS
     ]
 
-    # LLM 覆盖率 = LLM 摘要成功数 / 总摘要数（降级与失败都拉低覆盖率）
-    summary_total = q.filter(AiUsageLog.task_type == "summary").count()
-    llm_ok = q.filter(
-        AiUsageLog.task_type == "summary",
-        AiUsageLog.status == "success",
-        AiUsageLog.model.notin_(LOCAL_MODELS),
-    ).count()
-
-    embedding_api_fail = q.filter(
-        AiUsageLog.task_type == "embedding", AiUsageLog.status == "api_fail"
-    ).count()
     event_calls_24h = (
         db.query(func.count(AiUsageLog.id))
         .filter(
@@ -395,10 +403,10 @@ def usage_summary(
         "period": period,
         "start": start.isoformat(),
         "total_calls": total_calls,
-        "total_tokens": int(totals[0] or 0),
-        "total_cost": round(float(totals[1] or 0), 6),
-        "total_cached": int(totals[2] or 0),
-        "total_prompt": int(totals[3] or 0),
+        "total_tokens": int(totals[1] or 0),
+        "total_cost": round(float(totals[2] or 0), 6),
+        "total_cached": int(totals[3] or 0),
+        "total_prompt": int(totals[4] or 0),
         "by_task_type": _group_stats(q, AiUsageLog.task_type) if include_groups else [],
         "by_model": model_groups if include_groups else [],
         "unpriced_models": unpriced,
@@ -436,8 +444,9 @@ def usage_logs(
     page_size: int = 50,
     task_type: str | None = None,
     status: str | None = None,
+    model: str | None = None,
 ) -> dict:
-    """流水明细分页（倒序），联 article 取标题；支持按任务类型/状态过滤。"""
+    """流水明细分页（倒序），联 article 取标题；支持按任务类型/状态/模型过滤。"""
     page = max(1, page)
     page_size = max(1, min(page_size, 200))
     q = db.query(AiUsageLog).order_by(AiUsageLog.id.desc())
@@ -445,6 +454,8 @@ def usage_logs(
         q = q.filter(AiUsageLog.task_type == task_type)
     if status:
         q = q.filter(AiUsageLog.status == status)
+    if model:
+        q = q.filter(AiUsageLog.model == model)
     total = q.count()
     rows = q.offset((page - 1) * page_size).limit(page_size).all()
 

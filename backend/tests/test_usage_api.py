@@ -207,16 +207,32 @@ def test_usage_logs_filter_accepts_conn_test(super_client, db, usage_in_testdb):
 
 
 def test_usage_summary_api_shape(super_client):
-    """summary 响应含盲区告警与缓存分母新键（前端横幅/命中率依赖）。"""
+    """summary 响应含盲区告警/缓存分母/当日预算键（前端横幅/命中率/预算进度依赖）。"""
     r = super_client.get("/api/v2/admin/usage/summary", params={"period": "30d"})
     assert r.status_code == 200
     body = r.json()
     assert "unpriced_models" in body
     assert "total_prompt" in body
+    assert "daily_budget" in body  # 面板预算随汇总返回（0 = 未启用）
     assert len(body["daily"]) == 30  # 恒 30 个整 UTC 日桶
     assert usage_service.LOG_TASK_TYPES == (
         "summary", "event_summary", "embedding", "report", "conn_test",
     )
+
+
+def test_usage_logs_filter_by_model(super_client, db):
+    """model 精确过滤（Query max_length=64；盲区告警点击联动）。"""
+    s = db.factory()
+    s.add(AiUsageLog(task_type="summary", trigger="auto", model="llm-x", status="success"))
+    s.add(AiUsageLog(task_type="summary", trigger="auto", model="llm-y", status="success"))
+    s.commit()
+    s.close()
+
+    r = super_client.get("/api/v2/admin/usage/logs", params={"model": "llm-x"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["items"][0]["model"] == "llm-x"
 
 
 # ———————————————————— 价目删除 ————————————————————

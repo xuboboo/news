@@ -207,6 +207,14 @@ export default function Usage() {
     void loadLogs(1, next); // 过滤条件变化回到第 1 页
   };
 
+  // 盲区告警/分组行的模型名点击 → 精确筛选流水并滚到明细区
+  const filterByModel = (model: string) => {
+    changeFilter({ model });
+    requestAnimationFrame(() => {
+      document.getElementById('usage-logs')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  };
+
   const doExport = async () => {
     setBusy('export');
     try {
@@ -328,6 +336,12 @@ export default function Usage() {
     summaryToday && summaryToday.total_prompt > 0
       ? Math.round((summaryToday.total_cached / summaryToday.total_prompt) * 100)
       : null;
+  // 预算用量（面板 ai_daily_cost_budget > 0 时展示；超限文案与告警 webhook 同源语义）
+  const dailyBudget = summaryToday?.daily_budget ?? 0;
+  const budgetText =
+    dailyBudget > 0
+      ? ` · 预算 ¥${dailyBudget} 已用 ${Math.round(((summaryToday?.total_cost ?? 0) / dailyBudget) * 100)}%${(summaryToday?.total_cost ?? 0) > dailyBudget ? '（超限，已触发告警）' : ''}`
+      : '';
 
   return (
     <div className="space-y-6">
@@ -362,16 +376,22 @@ export default function Usage() {
         </div>
       )}
 
-      {/* ———— 未计价模型盲区告警（30 天口径） ———— */}
+      {/* ———— 未计价模型盲区告警（30 天口径；点模型名直接筛选流水） ———— */}
       {(summary30d?.unpriced_models?.length ?? 0) > 0 && (
         <div className="card px-4 py-2.5 text-xs text-amber-200 flex items-start gap-2">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
           <div>
-            以下模型近 30 天有调用但未配置单价，成本按 ¥0 计、账面被低估：
+            以下模型近 30 天有调用但未配置单价，成本按 ¥0 计、账面被低估（点击查看其调用流水）：
             {summary30d!.unpriced_models.map((m) => (
-              <span key={m.key} className="font-mono text-amber-100 mx-1">{m.key}</span>
+              <button
+                key={m.key}
+                onClick={() => filterByModel(m.key)}
+                className="font-mono text-amber-100 mx-1 underline decoration-dotted underline-offset-2 hover:text-accent"
+              >
+                {m.key}
+              </button>
             ))}
-            <span className="text-slate-400">—— 请在下方「模型价目」补配单价</span>
+            <span className="text-slate-400">—— 请在下方「模型价目」补配单价（自托管模型可配 0 价声明）</span>
           </div>
         </div>
       )}
@@ -382,7 +402,7 @@ export default function Usage() {
           icon={<Coins className="h-4 w-4" />}
           label="今日成本"
           value={fmtMoney(summaryToday?.total_cost)}
-          sub={`${summaryToday?.total_calls ?? 0} 次调用 · ${fmtTokens(summaryToday?.total_tokens)} tokens${(summaryToday?.total_cached ?? 0) > 0 ? ` · 缓存命中 ${fmtTokens(summaryToday?.total_cached)}${cacheRate != null ? ` (${cacheRate}%)` : ''}` : ''}`}
+          sub={`${summaryToday?.total_calls ?? 0} 次调用 · ${fmtTokens(summaryToday?.total_tokens)} tokens${(summaryToday?.total_cached ?? 0) > 0 ? ` · 缓存命中 ${fmtTokens(summaryToday?.total_cached)}${cacheRate != null ? ` (${cacheRate}%)` : ''}` : ''}${budgetText}`}
         />
         <StatCard icon={<Coins className="h-4 w-4" />} label="本月累计成本" value={fmtMoney(summaryMonth?.total_cost)} sub={`${summaryMonth?.total_calls ?? 0} 次调用 · ${fmtTokens(summaryMonth?.total_tokens)} tokens`} />
         <StatCard icon={<Tag className="h-4 w-4" />} label="今日调用数" value={String(summaryToday?.total_calls ?? 0)} sub={`摘要 ${summaryToday?.summary_total ?? 0} 次 · 覆盖率 ${summaryToday?.llm_coverage ?? 0}%`} />
@@ -448,7 +468,7 @@ export default function Usage() {
 
         <div className="space-y-3">
           <GroupTable title="按任务类型（30 天）" rows={summary30d?.by_task_type ?? []} />
-          <GroupTable title="按模型（30 天）" rows={summary30d?.by_model ?? []} />
+          <GroupTable title="按模型（30 天）" rows={summary30d?.by_model ?? []} onSelect={filterByModel} />
         </div>
       </section>
 
@@ -563,12 +583,21 @@ export default function Usage() {
       </section>
 
       {/* ———— 明细分页表 ———— */}
-      <section className="space-y-3">
+      <section id="usage-logs" className="space-y-3 scroll-mt-20">
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <h2 className="text-sm font-semibold text-slate-300">
-            调用流水明细（共 {logTotal} 条{filters.task_type || filters.status ? ' · 已过滤' : ''}）
+            调用流水明细（共 {logTotal} 条{filters.task_type || filters.status || filters.model ? ' · 已过滤' : ''}）
           </h2>
           <div className="flex items-center gap-2">
+            {filters.model && (
+              <button
+                onClick={() => changeFilter({ model: undefined })}
+                title="清除模型筛选"
+                className="chip bg-accent/10 border border-accent/40 text-accent max-w-[220px]"
+              >
+                模型：{filters.model} ✕
+              </button>
+            )}
             <select
               value={filters.task_type ?? ''}
               onChange={(e) => changeFilter({ task_type: e.target.value || undefined })}
@@ -687,7 +716,16 @@ export default function Usage() {
   );
 }
 
-function GroupTable({ title, rows }: { title: string; rows: UsageGroup[] }) {
+function GroupTable({
+  title,
+  rows,
+  onSelect,
+}: {
+  title: string;
+  rows: UsageGroup[];
+  /** 行点击（按模型表传入：点击模型名直接筛选明细流水） */
+  onSelect?: (key: string) => void;
+}) {
   return (
     <div className="card p-4">
       <h3 className="text-xs font-semibold text-slate-300 mb-2.5">{title}</h3>
@@ -705,7 +743,11 @@ function GroupTable({ title, rows }: { title: string; rows: UsageGroup[] }) {
           </thead>
           <tbody>
             {rows.map((g) => (
-              <tr key={g.key} className="border-b border-radar-border/40 last:border-0">
+              <tr
+                key={g.key}
+                className={`border-b border-radar-border/40 last:border-0 ${onSelect ? 'cursor-pointer hover:bg-radar-panel/60' : ''}`}
+                onClick={onSelect ? () => onSelect(g.key) : undefined}
+              >
                 <td className="py-1.5 text-slate-300 font-mono truncate max-w-[120px]" title={g.key}>{TASK_LABELS[g.key] ?? g.key}</td>
                 <td className="py-1.5 text-right text-slate-400 tabular-nums">{g.calls}</td>
                 <td className="py-1.5 text-right text-slate-400 tabular-nums">{fmtTokens(g.tokens)}</td>

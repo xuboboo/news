@@ -512,7 +512,13 @@ def usage_summary_api(
     db: Session = Depends(get_db),
 ):
     """AI 用量/成本汇总。today 按 UTC 0 点起算，与日报日期口径一致。"""
-    return usage_service.usage_summary(db, period, include_daily=daily, include_groups=groups)
+    payload = usage_service.usage_summary(db, period, include_daily=daily, include_groups=groups)
+    # 当日生效预算随汇总返回：前端今日成本卡直接展示预算用量（0 = 未启用）
+    try:
+        payload["daily_budget"] = float(config_service.get_effective(db, "ai_daily_cost_budget") or 0)
+    except Exception:
+        payload["daily_budget"] = 0.0
+    return payload
 
 
 @router.get("/usage/logs", dependencies=[Depends(require_admin)])
@@ -526,10 +532,11 @@ def usage_logs_api(
     status: str | None = Query(
         None, pattern="^(" + "|".join(usage_service.LOG_STATUSES) + ")$"
     ),
+    model: str | None = Query(None, max_length=64, description="按模型名精确过滤"),
     db: Session = Depends(get_db),
 ):
-    """AI 调用流水分页明细（联 article 取标题，error 截断为摘要；可按任务/状态过滤）。"""
-    return usage_service.usage_logs(db, page, page_size, task_type=task_type, status=status)
+    """AI 调用流水分页明细（联 article 取标题，error 截断为摘要；可按任务/状态/模型过滤）。"""
+    return usage_service.usage_logs(db, page, page_size, task_type=task_type, status=status, model=model)
 
 
 def _usage_csv_stream(

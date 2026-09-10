@@ -243,6 +243,8 @@ export interface UsageSummary {
   embedding_api_fail: number;
   event_summary_calls_24h: number;
   daily: UsageDaily[];
+  /** 当日生效预算（元，面板 ai_daily_cost_budget）；0 = 未启用预算告警 */
+  daily_budget?: number;
 }
 
 export interface UsageSummaryOpts {
@@ -262,6 +264,8 @@ export const getUsageSummary = (period: UsagePeriod, opts?: UsageSummaryOpts) =>
 export interface UsageLogFilters {
   task_type?: string;
   status?: string;
+  /** 模型名精确过滤（盲区告警/分组行点击联动） */
+  model?: string;
 }
 
 export interface UsageLogItem {
@@ -294,6 +298,7 @@ export const getUsageLogs = (page = 1, pageSize = 50, filters?: UsageLogFilters)
   const qs = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
   if (filters?.task_type) qs.set('task_type', filters.task_type);
   if (filters?.status) qs.set('status', filters.status);
+  if (filters?.model) qs.set('model', filters.model);
   return request<UsageLogsPage>(`/usage/logs?${qs.toString()}`);
 };
 
@@ -337,6 +342,7 @@ export async function exportUsageCsv(
   if (range?.end) qs.set('end', range.end);
   if (filters?.task_type) qs.set('task_type', filters.task_type);
   if (filters?.status) qs.set('status', filters.status);
+  if (filters?.model) qs.set('model', filters.model);
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   const resp = await fetch(`${API_BASE}/api/v2/admin/usage/export${suffix}`, {
     cache: 'no-store',

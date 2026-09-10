@@ -322,6 +322,18 @@ def test_usage_logs_filters_and_pagination(db):
     assert usage_logs(db, page=99)["items"] == []  # 越界页为空不炸
 
 
+def test_usage_logs_model_filter(db):
+    """模型名精确过滤（盲区告警/分组行点击联动的服务端支撑）。"""
+    _add_log(db, model="m-a")
+    _add_log(db, model="m-b")
+    only_a = usage_logs(db, model="m-a")
+    assert only_a["total"] == 1
+    assert only_a["items"][0]["model"] == "m-a"
+    assert usage_logs(db, model="m-nope")["total"] == 0
+    # 与任务/状态过滤可叠加
+    assert usage_logs(db, model="m-a", task_type="summary", status="success")["total"] == 1
+
+
 # ———————————————————— CSV 防注入 ————————————————————
 
 @pytest.mark.parametrize("raw,expected", [
