@@ -478,6 +478,28 @@ def test_report_daily_latest_skips_empty_placeholder(pg):
         db.close()
 
 
+# ———— /report/dates：占位空刊不进期号列表（2026-09-10 审计） ————
+
+def test_report_dates_hides_empty_placeholder(pg):
+    """前端默认选中期号列表首项：空刊在列 = 日报页默认展示空内容。
+    期号列表只收录有实质内容的期；次日定时任务覆盖空刊日期行后自然复现。"""
+    from app.api.v2.routes import report_dates
+
+    db = pg()
+    try:
+        good_day = (NOW - timedelta(days=1)).date()
+        empty_day = good_day + timedelta(days=1)
+        db.add(DailyReport(date=good_day, issue_no=1,
+                           content={"top_events": [{"id": 9}], "quick_news": [{"id": 3}]}))
+        db.add(DailyReport(date=empty_day, issue_no=2, content={"top_events": [], "quick_news": []}))
+        db.commit()
+
+        items = report_dates(limit=60, db=db)["items"]
+        assert [i["date"] for i in items] == [good_day.isoformat()]
+    finally:
+        db.close()
+
+
 # ———— /hot/board：窗口参数与稳定排序（审计 P1/P2） ————
 
 def test_hot_board_windows_and_stable_order(pg):

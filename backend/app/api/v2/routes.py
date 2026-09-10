@@ -358,6 +358,12 @@ def event_detail(event_id: int, db: Session = Depends(get_db)):
 
 # ———————————————————— 软件日报（PRD 12）————————————————————
 
+def _has_report_content(content) -> bool:
+    """有实质内容（非占位空刊）：与 latest 回退同一判定口径。"""
+    c = content or {}
+    return bool(c.get("top_events") or c.get("quick_news"))
+
+
 @router.get("/report/daily")
 def report_daily(date: str | None = None, db: Session = Depends(get_db)):
     if date:
@@ -376,11 +382,7 @@ def report_daily(date: str | None = None, db: Session = Depends(get_db)):
     if not rows:
         raise HTTPException(404, "no report yet")
     row = next(
-        (
-            r
-            for r in rows
-            if (r.content or {}).get("top_events") or (r.content or {}).get("quick_news")
-        ),
+        (r for r in rows if _has_report_content(r.content)),
         rows[0],  # 冷启动期连续全空时回退旧行为（返回最新一条）
     )
     return {**row.content, "date": row.date.isoformat(), "issue_no": row.issue_no}
@@ -388,9 +390,20 @@ def report_daily(date: str | None = None, db: Session = Depends(get_db)):
 
 @router.get("/report/dates")
 def report_dates(limit: int = Query(60, ge=1, le=366), db: Session = Depends(get_db)):
-    """日报期号列表（新→旧）。limit 控制拉取规模，默认最近 60 期。"""
+    """日报期号列表（新→旧）。limit 控制扫描规模，默认最近 60 行。
+
+    占位空刊（窗口未开启时误生成的 0 内容行）不出现在期号列表——前端默认选中
+    列表首项，把空刊列进来等于日报页默认展示一整天空内容；次日定时任务会用
+    完整数据覆盖该日期行，届时自然重新可见。
+    """
     rows = db.query(DailyReport).order_by(DailyReport.date.desc()).limit(limit).all()
-    return {"items": [{"date": r.date.isoformat(), "issue_no": r.issue_no} for r in rows]}
+    return {
+        "items": [
+            {"date": r.date.isoformat(), "issue_no": r.issue_no}
+            for r in rows
+            if _has_report_content(r.content)
+        ]
+    }
 
 
 # ———————————————————— 运维触发 ————————————————————

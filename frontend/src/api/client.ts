@@ -180,6 +180,8 @@ export type ReportEventView = EventWithScore & {
   reportArticles?: number;
   /** 日报窗口内交叉报道来源数 */
   reportSources?: number;
+  /** 全生命周期累计篇数（与窗口口径并列展示，避免与事件摘要里的"共 N 篇"打架） */
+  reportLifecycleArticles?: number;
 };
 
 export interface DailyReportView {
@@ -221,6 +223,8 @@ function mapApiReport(date: string, data: any, articleMap: Map<string, ArticleWi
       lastTime: new Date(),
       reportArticles: typeof e.articles_count === 'number' ? e.articles_count : undefined,
       reportSources: typeof e.sources_count === 'number' ? e.sources_count : undefined,
+      reportLifecycleArticles:
+        typeof e.lifecycle_articles_count === 'number' ? e.lifecycle_articles_count : undefined,
     })) as ReportEventView[],
     quickNews: (data.quick_news ?? [])
       .map((n: any) => articleMap.get(String(n.id)) ?? briefToArticle(n)) as ArticleWithScore[],

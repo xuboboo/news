@@ -410,7 +410,10 @@ export default function DailyReport() {
                       <p className="text-xs text-slate-400 leading-relaxed line-clamp-2">{e.summary}</p>
                       {(e.reportArticles != null || e.reportSources != null) && (
                         <div className="text-[10px] text-slate-500 mt-1">
-                          {e.reportArticles ?? 0} 篇报道
+                          当日 {e.reportArticles ?? 0} 篇
+                          {e.reportLifecycleArticles != null &&
+                            e.reportLifecycleArticles > (e.reportArticles ?? 0) &&
+                            ` · 累计 ${e.reportLifecycleArticles} 篇`}
                           {(e.reportSources ?? 0) > 1 && <> · {e.reportSources} 家来源交叉</>}
                         </div>
                       )}
