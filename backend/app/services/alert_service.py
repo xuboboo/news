@@ -180,6 +180,17 @@ def watch(db: Session) -> dict:
             logger.warning("告警未推送（alert_webhook_url 未配置）：%s", "；".join(problems))
         return {"problems": problems, "notified": False, "reason": "alert_webhook_url 未配置"}
 
+    # 发送前复核 SSRF（与 report_push 同口径）：面板写入时已校验，但 env 直配/
+    # 旁路写表的值不经校验——告警每 5 分钟向该地址 POST，放行内网地址等于开放信标通道；
+    # 全内网部署走 ALLOW_PRIVATE_AI_URLS 豁免（url_guard 内部处理）
+    try:
+        from app.utils.url_guard import UrlNotAllowed, assert_public_http_url
+
+        assert_public_http_url(url)
+    except UrlNotAllowed as exc:
+        logger.warning("告警未推送（webhook 地址未通过公网校验）：%s", exc)
+        return {"problems": problems, "notified": False, "reason": "alert_webhook_url 非公网地址"}
+
     if not redis_ping()[0]:
         # 状态机不可用（去重依赖 Redis）：此时多为 Redis 整体故障，强行推送会每轮重复轰炸——只记日志
         logger.warning("告警未推送（Redis 不可用，状态机停用）：%s", "；".join(problems))

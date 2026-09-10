@@ -38,6 +38,7 @@ const ACTION_STYLES: Record<string, { label: string; cls: string }> = {
   'admin.trigger_stats': { label: '手动互动轮询', cls: 'bg-sky-500/10 text-sky-300 border-sky-400/30' },
   'admin.trigger_events': { label: '手动聚合', cls: 'bg-sky-500/10 text-sky-300 border-sky-400/30' },
   'admin.trigger_report': { label: '手动日报', cls: 'bg-sky-500/10 text-sky-300 border-sky-400/30' },
+  'admin.test_report_push': { label: '日报测试推送', cls: 'bg-sky-500/10 text-sky-300 border-sky-400/30' },
 };
 
 function actionLabel(action: string): { label: string; cls: string } {

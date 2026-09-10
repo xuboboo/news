@@ -52,6 +52,7 @@ ACTIONS = {
     "admin.trigger_events",
     "admin.trigger_report",
     "admin.trigger_stats",
+    "admin.test_report_push",
 }
 
 # 哈希链写路径的 pg advisory lock 键（任意常量，仅要求全库唯一）
@@ -217,16 +218,23 @@ def record_access_denied(
     user = current_user_of(request)
     user_email = (getattr(user, "email", "") or "") if user is not None else ""
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=ACCESS_DENIED_DEDUP_SECONDS)
-    seen = (
-        db.query(AuditLog.id)
-        .filter(
-            AuditLog.action == "auth.access_denied",
-            AuditLog.user_email == user_email,
-            AuditLog.detail["path"].astext == path,
-            AuditLog.created_at >= cutoff,
+    seen = None
+    try:
+        seen = (
+            db.query(AuditLog.id)
+            .filter(
+                AuditLog.action == "auth.access_denied",
+                AuditLog.user_email == user_email,
+                AuditLog.detail["path"].astext == path,
+                AuditLog.created_at >= cutoff,
+            )
+            .first()
         )
-        .first()
-    )
+    except Exception:
+        # detail["path"].astext 是 PG 方言专有（SQLite 等测试方言不支持）。
+        # 去重只是防刷表的手段，查询失败降级为不去重照常记录——
+        # 审计埋点绝不能反把 401/403 响应变成 500（require_admin 调用点无兜底）
+        seen = None
     if seen is not None:
         return
     detail: dict = {"path": path, "method": method}

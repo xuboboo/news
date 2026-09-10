@@ -102,7 +102,7 @@ const NUMERIC_RULES: Record<string, { min: number; max: number }> = {
   login_ip_throttle_max: { min: 5, max: 10000 },
   login_ip_throttle_window_seconds: { min: 60, max: 86400 },
   audit_retention_days: { min: 30, max: 3650 },
-  stats_poll_batch: { min: 1, max: 100 },
+  stats_poll_batch: { min: 1, max: 50 },
   ai_daily_cost_budget: { min: 0, max: 100000 },
   ai_usage_retention_days: { min: 0, max: 3650 },
 };

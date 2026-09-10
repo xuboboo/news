@@ -8,11 +8,12 @@ admin 路由 CSRF 防线覆盖、任务节奏心跳判停、告警消息格式�
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import text
 
 from app.models.task_run import TaskRun
 from app.services import alert_service, infra_status
 
-from conftest import login
+from conftest import login, set_config
 
 # 与 test_users_auth 同款：变更请求必带的 CSRF 头
 H = {"X-Requested-With": "XMLHttpRequest"}
@@ -115,6 +116,46 @@ def test_admin_csrf_get_unaffected(super_client):
     assert super_client.get("/api/v2/admin/config").status_code == 200
 
 
+# ———————————————————— 无效 admin token 的 401 与审计留痕 ————————————————————
+
+def test_invalid_admin_token_401_and_audited(client, db):
+    """错误 token 试探应急通道必须 401 并留审计痕（去重防刷表）。
+
+    去重查询的 detail['path'].astext 是 PG 方言专有：加方言容错前，非 PG 方言
+    （测试用 SQLite）下该路径 AttributeError 会把 401 变 500，且此路径零测试覆盖。
+    """
+    set_config(db, "admin_token", "right-token")
+    r = client.get("/api/v2/admin/status", headers={"X-Admin-Token": "wrong-token"})
+    assert r.status_code == 401
+
+    s = db.factory()
+    try:
+        rows = s.execute(
+            text("SELECT detail FROM audit_log WHERE action = 'auth.access_denied'")
+        ).all()
+    finally:
+        s.close()
+    # SQLite 把 JSON 存成文本，逐行解析后核对 reason
+    import json as _json
+
+    assert any(
+        (_json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})).get("reason")
+        == "invalid_admin_token"
+        for row in rows
+    )
+
+
+def test_audit_actions_endpoint_matches_actions_set(super_client):
+    """/audit-actions 下拉来源必须与 ACTIONS 清单一致——routes.py 的
+    admin.test_report_push 埋点曾漏在清单外，UI 上筛不到该操作。"""
+    from app.services.audit_service import ACTIONS
+
+    r = super_client.get("/api/v2/admin/audit-actions")
+    assert r.status_code == 200
+    assert r.json()["items"] == sorted(ACTIONS)
+    assert "admin.test_report_push" in r.json()["items"]
+
+
 # ———————————————————— 任务节奏心跳 ————————————————————
 
 def test_cadence_stale_event_flagged(db):
@@ -202,6 +243,29 @@ def test_watch_redis_down_no_spam(db, monkeypatch):
     monkeypatch.setattr(alert_service, "_collect_problems", lambda s: ["Redis 无法连接"])
     r = alert_service.watch(db.factory())
     assert r["notified"] is False and pushed == []
+
+
+def test_watch_private_webhook_blocked(db, monkeypatch):
+    """发送前 SSRF 复核（与 report_push 同口径）：面板写入时已校验，但 env 直配/
+    旁路写表的私网地址不经校验——告警每 5 分钟向该地址 POST，必须拦截。"""
+    import types
+
+    from app.utils import url_guard
+    from conftest import set_config
+
+    # 测试宿主机 .env 可能开了 ALLOW_PRIVATE_AI_URLS（内网 embedding 部署），
+    # 复核须在「豁免关闭」的前提下验证拦截行为
+    monkeypatch.setattr(
+        url_guard, "get_settings", lambda: types.SimpleNamespace(allow_private_ai_urls=False)
+    )
+    set_config(db, "alert_webhook_url", "http://127.0.0.1:9999/hook")
+    pushed = []
+    monkeypatch.setattr(alert_service, "redis_ping", lambda timeout=2.0: (True, 1))
+    monkeypatch.setattr(alert_service, "_push", lambda url, style, text: pushed.append(text))
+    monkeypatch.setattr(alert_service, "_collect_problems", lambda s: ["Worker 全灭"])
+    r = alert_service.watch(db.factory())
+    assert r["notified"] is False and pushed == []
+    assert "非公网" in r["reason"]
 
 
 # ———————————————————— 深度健康探针 ————————————————————

@@ -38,6 +38,8 @@ export default function Events() {
   const inWindow = useMemo(() => {
     const win = WINDOWS.find((w) => w.key === windowKey) ?? WINDOWS[0];
     if (win.ms === 0) return EVENTS_WITH_SCORE;
+    // 刻意的不纯：时间窗按当前时刻计算，重渲染由 useTick/dataVer 驱动刷新
+    // eslint-disable-next-line react-hooks/purity -- 时间窗过滤依赖「现在」
     const since = Date.now() - win.ms;
     return EVENTS_WITH_SCORE.filter((e) => e.lastTime.getTime() >= since);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVer/windowKey 变化触发重算
