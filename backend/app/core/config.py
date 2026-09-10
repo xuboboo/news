@@ -61,7 +61,9 @@ class Settings(BaseSettings):
     embedding_strict: bool = True  # API 失败/维度不符时硬失败（false = 静默降级本地哈希，会污染聚类）
 
     # —— 热度算法：HotScore = Engagement × TimeDecay ——
-    decay_per_hour: float = 0.0075
+    # λ=0.02（半衰期 ≈34.7h，24h 衰减 38%）：贴合科技新闻 24-48h 生命周期。
+    # 旧值 0.0075 半衰期 92h，大事件霸榜首 3-4 天，榜单观感近乎冻结。
+    decay_per_hour: float = 0.02
     comment_weight: int = 4
     like_weight: int = 2
     share_weight: int = 6

@@ -43,7 +43,7 @@ def test_time_decay_monotonic_with_age():
     fresh = time_decay(NOW - timedelta(hours=1), now=NOW)
     old = time_decay(NOW - timedelta(hours=48), now=NOW)
     assert 0 < old < fresh < 1.0
-    # λ=0.0075：48 小时衰减 e^-0.36
+    # λ=decay_per_hour：48 小时衰减 e^(-48λ)（2026-09-10 起 λ=0.02，半衰期 ≈34.7h）
     assert math.isclose(old, math.exp(-S.decay_per_hour * 48), rel_tol=1e-9)
 
 

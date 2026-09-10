@@ -11,6 +11,7 @@ from app.ai.event_cluster import (
     ClusterItem,
     cluster_articles,
     effective_thresholds,
+    elect_title,
     event_title_for,
     events_mergeable,
     keyword_jaccard_of,
@@ -261,3 +262,39 @@ def test_events_mergeable_false_when_centroids_dissimilar():
         [1.0, 0.0], [0.0, 1.0], kw, kw, {"快科技"}, {"IT之家"}, fa, la, fb, lb,
         sim_threshold=0.85, keyword_threshold=0.15, window_hours=WIN,
     )
+
+
+# ———— best-fit 归属（2026-09-10 审计）与标题选举核心 ————
+
+def test_cluster_assignment_picks_best_fit_not_first_hit():
+    """best-fit 回归：文章同时过多个簇的门时，并入相似度最高者（与事件并入
+    「取最高者」同口径），而非旧实现首中即停吸给先建簇。
+
+    构造：同源双种子（IT之家，同源规则保证互不合并 → 必成两簇）先后建簇，
+    第三方来源文章与先建簇 0.87（模糊带）、与后建簇 ≈1.0（高位带）双过门，
+    必须归入后者。
+    """
+    a = _item(1, "豆包输入法Windows版正式上线", [1.0, 0.0], hours_ago=1, source="IT之家")
+    b = _item(2, "豆包输入法推出 Windows 版覆盖五大平台", [0.86, 0.51], hours_ago=2, source="IT之家")
+    x = _item(3, "豆包输入法推出Windows版覆盖全平台", [0.87, 0.49], hours_ago=3, source="快科技")
+    clusters = cluster_articles(
+        [a, b, x], sim_threshold=SIM, keyword_threshold=0.05, window_hours=WIN
+    )
+    assert len(clusters) == 2
+    by_seed_a = next(c for c in clusters if any(m.id == 1 for m in c.members))
+    by_seed_b = next(c for c in clusters if any(m.id == 2 for m in c.members))
+    assert {m.id for m in by_seed_a.members} == {1}
+    assert {m.id for m in by_seed_b.members} == {2, 3}
+
+
+def test_elect_title_matches_cluster_election_and_single_member():
+    """elect_title（事件成长重选举共用核心）与建簇选举口径一致；单成员取原标题。"""
+    members = [
+        _item(1, "苹果发布iPhone 17手机", [1.0, 0.0, 0.0]),
+        _item(2, "iPhone 17手机价格公布", [0.0, 1.0, 0.0]),
+        _item(3, "华为Mate 70手机开售", [0.0, 0.0, 1.0]),
+    ]
+    titles = [m.title for m in members]
+    kws = [m.kw_set for m in members]
+    assert elect_title(titles, kws) == event_title_for(members)
+    assert elect_title(["唯一标题"], [{"a"}]) == "唯一标题"

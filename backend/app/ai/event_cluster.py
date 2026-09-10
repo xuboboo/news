@@ -5,8 +5,9 @@
 2. 标题关键词 Jaccard 相似度 ≥ 阈值（关键词层面，管理面板可热调）
 3. 发布时间在聚类时间窗内（默认 48 小时，管理面板可热调）
 
-聚类采用贪心最近质心法：按时间倒序逐篇处理，命中已有事件则并入并更新质心，
-否则开新事件。事件级二阶段合并（events_mergeable）与建簇同门槛，用于修复
+聚类采用贪心质心法：按时间倒序逐篇处理，在全部门槛通过的簇中取相似度
+最高者并入（best-fit，平票取成员多者/先建簇）并更新质心，否则开新簇。
+事件级二阶段合并（events_mergeable）与建簇同门槛，用于修复
 "同一事件的文章跨轮次先后到达、各自成事件后不再合并"的拆分问题。
 
 性能：标题关键词集合在 ClusterItem 构造时一次性预计算（jieba 分词是全流程
@@ -125,6 +126,12 @@ def cluster_articles(
 ) -> List[Cluster]:
     """贪心聚类：时间倒序处理，满足三条件（相似度/关键词/时间窗）才并入。
 
+    归属为 best-fit：与全部过门簇中相似度最高者合并（与事件并入「取最高者」
+    同口径），平票取成员多者、再取先建簇（更新）。旧实现首中即停（first-fit），
+    文章可能被吸给成立更早/更晚但匹配略差的簇，与事件级口径分裂。
+    代价是过门簇全量比较余弦——时间窗与关键词两条廉价检查前置，只有双过的
+    簇才算余弦（两带关键词门槛的较小值以下必不过门，直接跳过最贵一步）。
+
     阈值未传时取 .env 静态配置；生产链路由 run_event_clustering 传入
     运行时生效值（DB 覆盖 .env，管理面板热调）。
 
@@ -133,54 +140,63 @@ def cluster_articles(
     """
     sim_th, kw_th, win_h = effective_thresholds(sim_threshold, keyword_threshold, window_hours)
     window = win_h * 3600
+    kw_floor = min(kw_th, high_band_kw_floor)  # 两带关键词门槛的较小值
     ordered = sorted(items, key=lambda m: _tz(m.publish_time), reverse=True)
 
     clusters: List[Cluster] = []
     for item in ordered:
-        placed = False
-        for c in clusters:
+        best_score: Optional[tuple[float, int, int]] = None
+        best_cluster: Optional[Cluster] = None
+        for idx, c in enumerate(clusters):
             rep = c.members[0]
-            # 条件 3：发布时间窗（对簇内最新成员）
+            # 条件 3：发布时间窗（对簇内最新成员）——最廉价的检查放最前
             if abs((_tz(item.publish_time) - _tz(rep.publish_time)).total_seconds()) > window:
                 continue
+            kw = keyword_jaccard_of(item.kw_set, rep.kw_set)
+            if kw < kw_floor:
+                continue
             # 条件 1+2：三段式语义门槛（相似度带级 + 关键词 + 来源交叉）
+            sim = cosine(item.embedding, c.centroid)
             if not similarity_gate_pass(
-                cosine(item.embedding, c.centroid),
-                keyword_jaccard_of(item.kw_set, rep.kw_set),
-                c.sources,
-                {item.source},
-                sim_th,
-                kw_th,
-                high_band_kw_floor,
+                sim, kw, c.sources, {item.source}, sim_th, kw_th, high_band_kw_floor
             ):
                 continue
-            c.members.append(item)
-            c.sources.add(item.source)
-            c.centroid = centroid([m.embedding for m in c.members])
-            placed = True
-            break
-        if not placed:
+            key = (sim, len(c.members), -idx)
+            if best_score is None or key > best_score:
+                best_score, best_cluster = key, c
+        if best_cluster is not None:
+            best_cluster.members.append(item)
+            best_cluster.sources.add(item.source)
+            best_cluster.centroid = centroid([m.embedding for m in best_cluster.members])
+        else:
             clusters.append(
                 Cluster(members=[item], centroid=list(item.embedding), sources={item.source})
             )
     return clusters
 
 
-def event_title_for(members: List[ClusterItem]) -> str:
-    """事件标题：选与其余成员关键词重合度总和最高（最核心）的成员标题，截短展示。
+def elect_title(titles: List[str], kw_sets: List[Set[str]]) -> str:
+    """标题选举核心：选与其余成员关键词重合度总和最高（最核心）的标题。
 
     平票时取更长标题（信息量更大）；单成员直接用原标题。
+    titles 与 kw_sets 按下标一一对应；建簇（ClusterItem）与事件成长
+    （Article 成员，event_service）共用同一口径。
     """
-    if len(members) == 1:
-        return members[0].title
+    if len(titles) == 1:
+        return titles[0]
     best = max(
-        range(len(members)),
+        range(len(titles)),
         key=lambda i: (
-            sum(keyword_jaccard_of(members[i].kw_set, other.kw_set) for j, other in enumerate(members) if j != i),
-            len(members[i].title),
+            sum(keyword_jaccard_of(kw_sets[i], kw) for j, kw in enumerate(kw_sets) if j != i),
+            len(titles[i]),
         ),
     )
-    return members[best].title.strip()[:120]
+    return titles[best].strip()[:120]
+
+
+def event_title_for(members: List[ClusterItem]) -> str:
+    """事件标题选举（建簇时）：elect_title 的 ClusterItem 入口。"""
+    return elect_title([m.title for m in members], [m.kw_set for m in members])
 
 
 def event_time_range(members: List[ClusterItem]):

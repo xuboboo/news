@@ -56,6 +56,10 @@ def _offset(a: list[float], perp: list[float], cos: float) -> list[float]:
     return [x / norm for x in v]
 
 
+def _tz(t: datetime) -> datetime:
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
 @pytest.fixture()
 def pg():
     """独立测试库会话工厂：每用例前清空相关表，结束再清一次。"""
@@ -196,6 +200,136 @@ def test_clustering_groups_cross_source_same_event(pg):
     finally:
         db.close()
 
+
+# ———— 标题重选举 / 事件合并 / 热度重算（2026-09-10 审计补齐）————
+
+def test_event_title_reelected_as_members_grow(pg):
+    """标题随成员成长重选举：旧实现只在创建时定标题，事件并入更核心表述的
+    新报道后仍顶着最初单篇的标题。
+
+    两成员选举的平票口径 = 取更长标题（Jaccard 对称），故断言确定：首建为
+    短标题 t1，并入更长的 t2 后事件标题必须翻转为 t2。"""
+    from app.ai.event_cluster import elect_title
+    from app.services.event_service import run_event_clustering
+    from app.utils.text import extract_keywords
+
+    db = pg()
+    try:
+        t1 = "豆包输入法海外版上架苹果应用商店"
+        t2 = "豆包输入法海外版正式登陆安卓苹果双应用商店"
+        v = _vec([1.0, 0.3])
+        _mk_article(db, title=t1, source="快科技", vec=v,
+                    published=NOW - timedelta(hours=5))
+        db.commit()
+        run_event_clustering(db)
+        ev = db.query(HotEvent).one()
+        assert ev.title == t1
+
+        _mk_article(db, title=t2, source="IT之家",
+                    vec=_offset(v, _vec([0.0, 0.0, 1.0, 0.2]), 0.95),
+                    published=NOW - timedelta(hours=3))
+        db.commit()
+        run_event_clustering(db)
+        assert ev.title == t2
+        # 与成员集上的独立重选举同口径（不只满足本例的平票特例）
+        member_titles = [
+            a.title
+            for a in db.query(Article).join(
+                EventArticle, EventArticle.article_id == Article.id
+            ).all()
+        ]
+        expected = elect_title(
+            member_titles, [set(extract_keywords(t, 10)) for t in member_titles]
+        )
+        assert ev.title == expected
+    finally:
+        db.close()
+
+
+def test_merge_recent_events_shared_member_absorbs(pg):
+    """共享成员去重（事件合并 ①，历史救援副作用的确定性修复路径）：
+    同一文章挂两个事件 → 成员多者吞并少者（平票取先建 id 小者），
+    非重叠成员迁移、质心按全量成员重算、时间跨度扩展、败者删除。"""
+    from app.ai.embedding import centroid
+    from app.services.event_service import _merge_recent_events
+
+    db = pg()
+    try:
+        v1, v2, v3 = _vec([1.0, 0.2]), _vec([0.9, 0.3]), _vec([0.8, 0.4])
+        m1 = _mk_article(db, title="共享成员文章甲", source="IT之家", vec=v1,
+                         published=NOW - timedelta(hours=5))
+        m2 = _mk_article(db, title="共享成员文章乙", source="快科技", vec=v2,
+                         published=NOW - timedelta(hours=4))
+        m3 = _mk_article(db, title="共享成员文章丙", source="IT之家", vec=v3,
+                         published=NOW - timedelta(hours=3))
+        e1 = HotEvent(title="事件甲", summary="", impacts=[], centroid=centroid([v1, v2]),
+                      first_time=m1.publish_time, last_time=m2.publish_time,
+                      status="发酵中", timeline=[])
+        e2 = HotEvent(title="事件乙", summary="", impacts=[], centroid=centroid([v2, v3]),
+                      first_time=m2.publish_time, last_time=m3.publish_time,
+                      status="发酵中", timeline=[])
+        db.add_all([e1, e2])
+        db.flush()
+        db.add_all([
+            EventArticle(event_id=e1.id, article_id=m1.id),
+            EventArticle(event_id=e1.id, article_id=m2.id),
+            EventArticle(event_id=e2.id, article_id=m2.id),
+            EventArticle(event_id=e2.id, article_id=m3.id),
+        ])
+        db.commit()
+
+        merged = _merge_recent_events(
+            db, since=NOW, sim_threshold=0.85, keyword_threshold=0.2, window_hours=48,
+        )
+        assert merged == 1
+        events = db.query(HotEvent).all()
+        assert len(events) == 1 and events[0].id == e1.id
+        links = db.query(EventArticle).filter_by(event_id=e1.id).all()
+        assert {lnk.article_id for lnk in links} == {m1.id, m2.id, m3.id}
+        assert events[0].centroid is not None
+        # pgvector 往返是 float32（≈7 位有效数字），1e-6 容差足够区分成员集合错误
+        for got, want in zip(list(events[0].centroid), centroid([v1, v2, v3])):
+            assert abs(float(got) - want) < 1e-6
+        assert _tz(events[0].first_time) == _tz(m1.publish_time)
+        assert _tz(events[0].last_time) == _tz(m3.publish_time)
+    finally:
+        db.close()
+
+
+def test_recompute_event_scores_sums_members_and_flips_status(pg):
+    """热度重算 = 成员文章 HotScore 之和（DB 内聚合，容许 python/DB 时钟微差）；
+    无成员事件归 0；长时间无新报道的事件状态随每轮重算翻牌（旧实现会永久
+    冻结在「发酵中」）。"""
+    import math
+
+    from app.algorithms.hot_score import hot_score
+    from app.services.event_service import recompute_event_scores
+
+    db = pg()
+    try:
+        v = _vec([1.0, 0.1])
+        m1 = _mk_article(db, title="有互动的热点文章", source="IT之家", vec=v,
+                         published=NOW - timedelta(hours=48), views=100)
+        e1 = HotEvent(title="热点事件", summary="", impacts=[], centroid=v,
+                      first_time=m1.publish_time, last_time=m1.publish_time,
+                      status="发酵中", hot_score=0.0, timeline=[])
+        e2 = HotEvent(title="无成员事件", summary="", impacts=[],
+                      first_time=NOW - timedelta(hours=48),
+                      last_time=NOW - timedelta(hours=48),
+                      status="发酵中", hot_score=999.0, timeline=[])
+        db.add_all([e1, e2])
+        db.flush()
+        db.add(EventArticle(event_id=e1.id, article_id=m1.id))
+        db.commit()
+
+        recompute_event_scores(db)
+        expected = hot_score(100, 0, 0, 0, m1.publish_time)
+        assert math.isclose(e1.hot_score, round(expected, 2), rel_tol=0.01)
+        assert e1.status == "已平息"  # 48h > 24h
+        assert e2.hot_score == 0.0
+        assert e2.status == "已平息"
+    finally:
+        db.close()
 
 # ———— build_report：日报窗口口径（审计 P1） ————
 

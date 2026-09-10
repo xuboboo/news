@@ -18,6 +18,7 @@ from app.ai.event_cluster import (
     ClusterItem,
     cluster_articles,
     effective_thresholds,
+    elect_title,
     event_time_range,
     event_title_for,
     events_mergeable,
@@ -186,7 +187,16 @@ def _event_members(db: Session, event_id: int) -> list[Article]:
 
 
 def _rebuild_event_content(db: Session, ev: HotEvent, members: list[Article]) -> None:
-    """重算事件总结 / 核心影响（LLM 优先，失败降级事实拼装）并重建时间线。"""
+    """重算事件标题 / 总结 / 核心影响（LLM 优先，失败降级事实拼装）并重建时间线。
+
+    标题随成员重选举（与建簇 event_title_for 同口径）：旧实现只在创建时定标题，
+    事件从单篇长成几十篇后仍顶着最初那篇的表述。选举先于 LLM 总结，总结拿到
+    最新标题上下文。
+    """
+    ev.title = elect_title(
+        [m.title for m in members],
+        [set(extract_keywords(m.title or "", 10)) for m in members],
+    )
     llm = _llm_event_summary(ev.title, members, event_id=ev.id)
     ev.summary = llm[0] if llm else _compose_summary(members)
     if llm:
@@ -212,6 +222,10 @@ def _absorb_event(db: Session, winner: HotEvent, loser: HotEvent) -> None:
             db.delete(lnk)
         else:
             lnk.event_id = winner.id
+    # autoflush=False：迁移后的成员关联必须先落库，下面的质心重算才能看到
+    # 全量成员——否则查询仍按旧关联算，质心漏掉迁移成员并写库，持续到下次
+    # 成员变动才被自愈（2026-09-10 集成测试实测捕获）
+    db.flush()
     if winner.first_time and loser.first_time:
         winner.first_time = min(winner.first_time, loser.first_time, key=_tz)
     if winner.last_time and loser.last_time:
@@ -398,7 +412,27 @@ def run_event_clustering(db: Session) -> dict:
     )
     article_map = {a.id: a for a in articles}
 
+    # 候选事件及其来源/关键词映射一轮构建一次（旧实现在簇循环内每簇重查重算：
+    # O(簇数) 次重复查询 + 每簇对全部候选事件重跑 jieba）。当轮新建/更新的事件
+    # 在下方原地维护这三个结构，保持与逐簇重查完全相同的可见性。
+    horizon = since - timedelta(hours=24)
+    candidate_events = db.query(HotEvent).filter(HotEvent.last_time >= horizon).all()
+    sources_by_ev: dict[int, set[str]] = {}
+    if candidate_events:
+        for eid, src in (
+            db.query(EventArticle.event_id, Article.source)
+            .join(Article, Article.id == EventArticle.article_id)
+            .filter(EventArticle.event_id.in_([e.id for e in candidate_events]))
+            .all()
+        ):
+            if src:
+                sources_by_ev.setdefault(eid, set()).add(src)
+    kw_by_ev = {
+        ev.id: set(extract_keywords(ev.title or "", 10)) for ev in candidate_events
+    }
+
     updated = created = 0
+    window = timedelta(hours=window_hours)
     for cluster in clusters:
         member_articles = [article_map[m.id] for m in cluster.members]
 
@@ -410,26 +444,6 @@ def run_event_clustering(db: Session) -> dict:
         rep = cluster.members[0]
         cluster_times = [_tz(m.publish_time) for m in cluster.members]
         c_first, c_last = min(cluster_times), max(cluster_times)
-        window = timedelta(hours=window_hours)
-        candidate_events = (
-            db.query(HotEvent)
-            .filter(HotEvent.last_time >= since - timedelta(hours=24))
-            .all()
-        )
-        ev_ids = [ev.id for ev in candidate_events]
-        sources_by_ev: dict[int, set[str]] = {}
-        if ev_ids:
-            for eid, src in (
-                db.query(EventArticle.event_id, Article.source)
-                .join(Article, Article.id == EventArticle.article_id)
-                .filter(EventArticle.event_id.in_(ev_ids))
-                .all()
-            ):
-                if src:
-                    sources_by_ev.setdefault(eid, set()).add(src)
-        kw_by_ev = {
-            ev.id: set(extract_keywords(ev.title or "", 10)) for ev in candidate_events
-        }
 
         target_event: HotEvent | None = None
         best_sim = 0.0
@@ -518,6 +532,10 @@ def run_event_clustering(db: Session) -> dict:
             )
             db.add(target_event)
             db.flush()
+            # 当轮后续簇立即可见（等价旧实现的逐簇重查）
+            candidate_events.append(target_event)
+            kw_by_ev[target_event.id] = set(extract_keywords(target_event.title or "", 10))
+            sources_by_ev[target_event.id] = set(cluster.sources)
             created += 1
         else:
             updated += 1
@@ -555,6 +573,10 @@ def run_event_clustering(db: Session) -> dict:
             new_centroid = _recompute_centroid(db, target_event.id)
             if new_centroid is not None:
                 target_event.centroid = new_centroid
+            # 新成员来源并入候选映射（等价旧实现重查 event_article；集合并集不重不漏）
+            sources_by_ev[target_event.id] = (
+                sources_by_ev.get(target_event.id, set()) | cluster.sources
+            )
 
         # 成员变化或存量摘要为套话（致谢行等）时，重算事件总结 / 核心影响 / 时间线，
         # 保证 summary 中的关联文章数始终与 event_article 实际成员数一致
@@ -591,6 +613,10 @@ def run_event_clustering(db: Session) -> dict:
                 all_members.sort(key=lambda x: x.publish_time)
                 _rebuild_event_content(db, target_event, all_members)
                 db.flush()
+                # 标题可能已随成员重选举：候选事件的关键词映射同步刷新
+                kw_by_ev[target_event.id] = set(
+                    extract_keywords(target_event.title or "", 10)
+                )
             # all_members 为空（成员全部失效）时仅清理死链并保留原摘要，不再重算
 
     # 5) 二阶段合并：事件间的同门槛两两归并，修复"同事件文章跨轮次先后到达、
