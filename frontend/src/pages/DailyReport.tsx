@@ -456,7 +456,10 @@ export default function DailyReport() {
               <span className="text-[11px] text-slate-500">点击查看 AI 摘要</span>
             </div>
             <div className="divide-y divide-radar-border">
-              {report.quickNews.map((a) => (
+              {report.quickNews.length === 0 ? (
+                <p className="text-xs text-slate-500 py-4">当日暂无速览条目。</p>
+              ) : (
+                report.quickNews.map((a) => (
                 <div
                   key={a.id}
                   role="button"
@@ -482,7 +485,8 @@ export default function DailyReport() {
                     )}
                   </div>
                 </div>
-              ))}
+              ))
+              )}
             </div>
           </section>
         </div>

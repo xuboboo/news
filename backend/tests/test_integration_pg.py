@@ -500,6 +500,55 @@ def test_report_dates_hides_empty_placeholder(pg):
         db.close()
 
 
+# ———— /admin/report/push-test：自检推送（2026-09-11 二轮审计） ————
+
+def test_report_push_test_endpoint(pg, monkeypatch):
+    """未启用 → 400；启用后推送最近一期有内容的快照（占位空刊不作样张），
+    通道状态串经返回值透出（面板「测试推送」按钮消费）。"""
+    from fastapi import HTTPException
+
+    from app.api.v2.routes import test_report_push
+    from app.services import config_service, report_push
+
+    db = pg()
+    try:
+        # 未启用：400 带配置指引
+        with pytest.raises(HTTPException) as ei:
+            test_report_push(request=None, db=db)
+        assert ei.value.status_code == 400
+        assert "总开关" in ei.value.detail
+
+        # 启用 + 打桩 push_report（不真发 HTTP）
+        config_service.set_overrides(db, {
+            "report_push_enabled": "true",
+            "report_push_wecom_webhook_url": "https://1.2.3.4/hook",
+        })
+        seen: dict = {}
+
+        def fake_push(d, content):
+            seen["date"] = content["date"]
+            return "wecom:ok"
+
+        monkeypatch.setattr(report_push, "push_report", fake_push)
+
+        # 最新一期是空占位 → 跳过，取有内容的上一期作样张
+        good_day = (NOW - timedelta(days=1)).date()
+        empty_day = good_day + timedelta(days=1)
+        db.add(DailyReport(date=good_day, issue_no=1,
+                           content={"date": good_day.isoformat(),
+                                    "top_events": [{"id": 1}], "quick_news": []}))
+        db.add(DailyReport(date=empty_day, issue_no=2,
+                           content={"date": empty_day.isoformat(),
+                                    "top_events": [], "quick_news": []}))
+        db.commit()
+
+        out = test_report_push(request=None, db=db)
+        assert out == {"results": "wecom:ok"}
+        assert seen["date"] == good_day.isoformat()
+    finally:
+        db.close()
+
+
 # ———— /hot/board：窗口参数与稳定排序（审计 P1/P2） ————
 
 def test_hot_board_windows_and_stable_order(pg):

@@ -98,7 +98,9 @@ def _compose_overview(
             lead += f"，{e1['sources_count']} 家来源交叉报道"
         parts.append(lead + "。")
         rest = [e for e in top_events[1:4]]
-        if rest:
+        if len(rest) == 1:
+            parts.append(f"此外，「{truncate_boundary(rest[0]['title'], 32)}」亦在持续发酵。")
+        elif rest:
             names = "、".join(f"「{truncate_boundary(e['title'], 32)}」" for e in rest)
             parts.append(f"此外，{names}等 {len(top_events) - 1} 个热点持续发酵。")
     if channel_stats:

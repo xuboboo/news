@@ -236,3 +236,44 @@ def test_trigger_report_rejects_future_date():
     with pytest.raises(HTTPException) as ei:
         trigger_report(date=future, request=None, db=None)
     assert ei.value.status_code == 400
+
+
+# ———— _provider_ok 机器人响应形状校验（2026-09-11 二轮审计） ————
+
+def _resp(payload):
+    import httpx
+
+    if payload is None:
+        return httpx.Response(200, text="not json")
+    return httpx.Response(200, json=payload)
+
+
+def test_provider_ok_wecom():
+    from app.services.report_push import _provider_ok
+
+    assert _provider_ok("wecom", _resp({"errcode": 0, "errmsg": "ok"}))
+    assert not _provider_ok("wecom", _resp({"errcode": 40008, "errmsg": "invalid media"}))
+    # 200 但没有业务码键 = URL 误填到其他恰好 200 的服务，须判失败而非 ok
+    assert not _provider_ok("wecom", _resp({"ok": True}))
+    assert not _provider_ok("wecom", _resp(None))
+    assert not _provider_ok("wecom", _resp(["list"]))
+
+
+def test_provider_ok_feishu():
+    from app.services.report_push import _provider_ok
+
+    assert _provider_ok("feishu", _resp({"code": 0}))
+    assert _provider_ok("feishu", _resp({"StatusCode": 0}))
+    assert not _provider_ok("feishu", _resp({"code": 19021, "msg": "sign match fail"}))
+    assert not _provider_ok("feishu", _resp({"hello": "world"}))
+
+
+def test_overview_single_rest_phrasing():
+    """仅剩 1 个后续热点时不再用「等 N 个」句式（等 1 个属语病）。"""
+    events = [
+        {"title": "A 事件标题", "articles_count": 1, "sources_count": 1},
+        {"title": "B 事件标题", "articles_count": 1, "sources_count": 1},
+    ]
+    text = _compose_overview(events, [], 3)
+    assert text.startswith("今日最热「A 事件标题」。")
+    assert "此外，「B 事件标题」亦在持续发酵。" in text

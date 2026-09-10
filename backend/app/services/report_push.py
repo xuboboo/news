@@ -178,19 +178,20 @@ def build_payload(provider: str, md: str, feishu_secret: str = "") -> dict:
 
 def _provider_ok(provider: str, resp: httpx.Response) -> bool:
     """HTTP 200 之外再校验机器人业务码：企微/飞书的签名错误、key 无效、内容超限、
-    限流等业务失败几乎都以 200 + 错误码 body 返回，只看状态码会把失败记成 ok。"""
+    限流等业务失败几乎都以 200 + 错误码 body 返回，只看状态码会把失败记成 ok。
+    另要求 body 呈机器人响应形状（有业务码键）——URL 误填到其他恰好返回 200 的
+    服务（自建网关/探活端点）时这里判失败，测试推送才能暴露配置错误。"""
     try:
         body = resp.json()
     except Exception:
         return False
-    if provider == "wecom":
-        code = body.get("errcode", 0)
-    else:  # feishu：新版 {"code":0}，旧版 {"StatusCode":0}
-        code = body.get("code", body.get("StatusCode", 0))
-    try:
-        return int(code or 0) == 0
-    except (TypeError, ValueError):
+    if not isinstance(body, dict):
         return False
+    if provider == "wecom":
+        # 企微机器人恒回 {"errcode": 0, "errmsg": "ok"}
+        return body.get("errcode") == 0
+    # 飞书：新版 {"code": 0}，旧版 {"StatusCode": 0}
+    return body.get("code") == 0 or body.get("StatusCode") == 0
 
 
 def push_report(db: Session | None, content: dict) -> str:

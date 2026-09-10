@@ -375,7 +375,7 @@ def report_daily(date: str | None = None, db: Session = Depends(get_db)):
         if not row:
             raise HTTPException(404, "report not generated for this date")
         # 快照在先、显式字段在后：date/issue_no 以行为准，不被历史快照里的旧值覆盖
-        return {**row.content, "date": row.date.isoformat(), "issue_no": row.issue_no}
+        return {**(row.content or {}), "date": row.date.isoformat(), "issue_no": row.issue_no}
     # latest 取最近一个有实质内容的报告：全空报告（如凌晨窗口刚开启时的误生成占位）
     # 不应顶掉前一日的有效报告——否则日报页白天展示一整天空内容
     rows = db.query(DailyReport).order_by(DailyReport.date.desc()).limit(7).all()
@@ -385,7 +385,7 @@ def report_daily(date: str | None = None, db: Session = Depends(get_db)):
         (r for r in rows if _has_report_content(r.content)),
         rows[0],  # 冷启动期连续全空时回退旧行为（返回最新一条）
     )
-    return {**row.content, "date": row.date.isoformat(), "issue_no": row.issue_no}
+    return {**(row.content or {}), "date": row.date.isoformat(), "issue_no": row.issue_no}
 
 
 @router.get("/report/dates")
@@ -470,8 +470,9 @@ def trigger_report(
 def test_report_push(request: Request, db: Session = Depends(get_db), _: None = Depends(require_admin)):
     """立即把最新一期日报推到已配置通道（webhook 配置自检，不必等次日 08:00）。
 
-    取最近落库的一期快照推送；库中尚无日报时现场构建昨日报告（不落库）。
-    同步调用（每通道超时 10s），返回各通道状态串，如 "wecom:ok；feishu:ok"。
+    取最近一期有实质内容的快照推送（占位空刊不作为样张）；库中尚无日报时现场
+    构建昨日报告（不落库）。同步调用（每通道超时 10s），返回各通道状态串，
+    如 "wecom:ok；feishu:ok"。
     """
     from app.auth.deps import current_user_of
     from app.services import audit_service
@@ -480,14 +481,16 @@ def test_report_push(request: Request, db: Session = Depends(get_db), _: None = 
 
     if not push_enabled(db):
         raise HTTPException(400, "日报推送未启用：请先打开总开关并填写至少一个通道 URL")
-    row = db.query(DailyReport).order_by(DailyReport.date.desc()).first()
-    if row and row.content:
-        content = dict(row.content)
+    rows = db.query(DailyReport).order_by(DailyReport.date.desc()).limit(7).all()
+    row = next((r for r in rows if _has_report_content(r.content)), None)
+    if row:
+        content = dict(row.content or {})
     else:
         content = build_report(db, datetime.now(timezone.utc).date() - timedelta(days=1))
     results = push_report(db, content)
     audit_service.record(
         db, "admin.test_report_push", request=request,
-        user=current_user_of(request), detail={"results": results},
+        user=current_user_of(request) if request is not None else None,
+        detail={"results": results},
     )
     return {"results": results}

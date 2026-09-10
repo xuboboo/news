@@ -25,6 +25,7 @@ import {
 import { PageHeader, StatCard } from '../components/common';
 import { loadReports } from '../api/client';
 import { usePageTitle } from '../utils/hooks';
+import { toDateKey } from '../utils/format';
 import { isSuperAdmin, setAnon, useAuth } from '../auth';
 import { logout as authLogout } from '../api/auth';
 import {
@@ -163,7 +164,7 @@ const GROUPS: { title: string; hint: string; keys: string[] }[] = [
   },
   {
     title: '日报推送（企业微信 / 飞书）',
-    hint: '每日 08:00 生成与手动重算后自动推送 markdown 日报；总开关打开 + 任一通道填 URL 即启用，双通道可并存',
+    hint: '每日 08:00 生成当期日报后自动推送（昨日手动重算同推；历史补算/空报告不推）；总开关打开 + 任一通道填 URL 即启用，双通道可并存',
     keys: [
       'report_push_enabled',
       'report_push_wecom_webhook_url',
@@ -793,7 +794,8 @@ export default function Admin() {
               type="date"
               value={reportDate}
               onChange={(e) => setReportDate(e.target.value)}
-              title="留空 = 生成昨日（UTC）日报；选择日期可补生成任意一天"
+              max={toDateKey(Date.now())}
+              title="留空 = 生成昨日（UTC）日报；选择日期可补生成任意一天（未来日期会被拒绝）"
               className="chip bg-radar-card border border-radar-border text-slate-400 [color-scheme:dark]"
             />
             <button onClick={() => trigger('crawl')} disabled={busy === 'trigger-crawl'} className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40">
