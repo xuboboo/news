@@ -26,11 +26,14 @@ feed cid=8 更新滞后（实测 27h+ 无新条目）且不含 Windows 文。栏
   同样在官网 ruanjian 栏目列表展示，不收则与官网软件栏目页内容对不上
 扩展栏目 = 在 CHANNEL_WHITELIST 加一行。
 
-热度口径（2026-09 决策）：本期不启用快科技阅读数。人气接口已验证可用
-（count.mydrivers.com/HitsUTF8.aspx?Tid=<news_id> 返回 `var hits =2473;`），
-但与 IT之家互动数据（评论/点赞）量纲差异大，直接混榜会系统性压制 IT之家文章；
-views 等互动字段入库一律写 0，热榜维持时间衰减，留待分来源归一化专项再启用。
-stats_next_poll_at 保持 None，互动轮询（crawler/stats.py）按 source 过滤不会误捞。
+热度口径（2026-09-10 启用评论/点赞）：快科技互动接口已实测可用——
+count.mydrivers.com/news/action.ashx?tid=<news_id> 返回 JSONP
+`news_info({"goodnums":15,"rcount":8,"rcanyu":100,"share":2})`，goodnums=点赞、
+rcount+rcanyu=站点展示评论数，由 crawler/stats.py 按分层节奏轮询回填（与 IT之家
+评论/点赞同库同列）。views/shares 维持 0 不启用：IT之家阅读数接口只写不读、
+分享无数据源，单边启用会让快科技在 Engagement（views + comments×4 + likes×2
++ shares×6）上获得系统性虚高，压制度量纲不对称的 IT之家，留分来源归一化专项。
+stats_next_poll_at 在入库时排期；存量文章由 stats.py「从未轮询」回填分支自动捞起。
 """
 import logging
 import re
@@ -45,6 +48,7 @@ from app.crawler.ithome import (
     _fetch,
     _insert_article,
 )
+from app.crawler.stats import next_poll_after
 from app.models.article import Article
 
 logger = logging.getLogger(__name__)
@@ -298,12 +302,12 @@ def _ingest_links(
             news_id=extract_news_id(link),
             content=content[:20000],
             publish_time=published,
+            # 评论/点赞由互动轮询（crawler/stats.py）回填；views/shares 恒 0（量纲不对称，见 docstring）
             views=0,
             comments=0,
             shares=0,
             likes=0,
-            # 热度口径（见模块 docstring）：本期不启用阅读数，互动轮询不排期
-            stats_next_poll_at=None,
+            stats_next_poll_at=next_poll_after(published, now),
             ai_status="pending",
         )
         before = len(new_ids)

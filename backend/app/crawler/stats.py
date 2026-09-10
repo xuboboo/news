@@ -1,18 +1,29 @@
-"""IT之家互动数据轮询：评论数 + 点赞数（热度算法的真实互动输入）。
+"""多来源互动数据轮询：评论数 + 点赞数（热度算法的真实互动输入）。
 
 数据源（2026-09 实测可用，均为站点页面自加载的接口，无需登录/签名）：
+
+IT之家：
 - 评论数：GET https://cmt.ithome.com/api/comment/count?newsid=<id>
   返回 JS 片段 `ccd.innerHTML = '226'`
 - 点赞（文章价值打分中的「有价值」数）：GET https://dyn.ithome.com/grade/<newsid>
   返回 JS 片段，含 价值分 / 打分人数 / 有价值 / 无价值
+- 阅读数接口（dyn.ithome.com/api/hitcount/<id>/pc）GET/POST 均返回 200 空 body
+  （只写计数器），无数据源，views 保持 0。
 
-阅读数接口（dyn.ithome.com/api/hitcount/<id>/pc）GET/POST 均返回 200 空 body
-（只写计数器），无数据源，views 保持 0。
+快科技：
+- 单接口 GET https://count.mydrivers.com/news/action.ashx?tid=<id>
+  返回 JSONP `news_info({"goodnums":15,"rcount":8,"rcanyu":100,"share":2})`：
+  goodnums=点赞（与 NewsVoteForJsonp.aspx 的 NewsSupport 同值），站点展示评论数
+  = rcount + rcanyu（文章页 initnews_info() 的展示口径），一次请求双指标齐。
+- 阅读/分享不启用（HitsUTF8.aspx 的 hits 与 share 字段）：IT之家两侧均无数据源，
+  单边启用会让快科技在 Engagement 上获得系统性虚高（量纲不对称），views/shares
+  维持 0，留分来源归一化专项。
 
 调度模型（分层衰减节奏）：文章越新采越勤、越旧越疏，超采集窗口停采。
 状态语义见 Article.stats_* 字段注释；失败绝不覆写已有数据（接口各自独立，
 哪个成功更新哪个，防止把真实互动数冲掉）。
 """
+import json
 import logging
 import re
 import time
@@ -31,11 +42,23 @@ _COUNT_URL = "https://cmt.ithome.com/api/comment/count?newsid={nid}"
 _GRADE_URL = "https://dyn.ithome.com/grade/{nid}"
 _STATS_HOSTS = ("cmt.ithome.com", "dyn.ithome.com")
 
+_KJ_ACTION_URL = "https://count.mydrivers.com/news/action.ashx?tid={nid}"
+_KJ_STATS_HOSTS = ("count.mydrivers.com",)
+
+# 来源 → 该来源互动接口的域名集（退避判断按来源分流，单源限流不饿死另一源）
+_SOURCE_STATS_HOSTS = {
+    "IT之家": _STATS_HOSTS,
+    "快科技": _KJ_STATS_HOSTS,
+}
+
 # 评论数 JS：专属正则优先，宽松回退兜底格式微调（回退锚定 ccd 所在行，防捕获页面无关数字）
 _COUNT_RE = re.compile(r"ccd\.innerHTML\s*=\s*'(\d+)'")
 _COUNT_RE_FALLBACK = re.compile(r"ccd[^\n]*innerHTML\s*=\s*'(\d+)'")
 # 点赞 JS：`<span class="s" id="sgrade2"><a>有价值</a><br><div>68</div></span>`
 _GRADE_LIKE_RE = re.compile(r'id="sgrade2">\s*<a>有价值</a>\s*<br>\s*<div>(\d+)</div>')
+
+# 快科技 action.ashx：JSONP 包裹的 JSON 对象（news_info({...})），取最内层花括号
+_KJ_ACTION_JSON_RE = re.compile(r"\{[^{}]*\}")
 
 # 分层采集节奏：(文章年龄上限小时, 采集间隔分钟)，取第一个命中的档
 _POLL_TIERS = [
@@ -59,13 +82,42 @@ def parse_comment_count(text: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def parse_kj_action_stats(text: str) -> tuple[int, int] | None:
+    """快科技 action.ashx 响应 → (评论数, 点赞数)；无 JSON 体/格式非法返回 None。
+
+    评论数 = rcount + rcanyu（站点文章页 initnews_info() 的展示口径，与用户所见一致）；
+    点赞 = goodnums。字段缺失按 0 计（站点 JS 同款语义），负值防御性截 0；
+    空 JSON `{}` 也算有效响应（该文确实零互动），不能当失败——否则零互动文章
+    会被失败退避反复重试直至放弃终态。
+    """
+    m = _KJ_ACTION_JSON_RE.search(text or "")
+    if m is None:
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    def _int(key: str) -> int:
+        try:
+            return max(0, int(data.get(key) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    comments = _int("rcount") + _int("rcanyu")
+    return comments, _int("goodnums")
+
+
 def stats_source_filter():
-    """互动轮询的范围条件：仅 IT之家文章（评论/点赞接口为 ithome 专属）。
+    """互动轮询的范围条件：评论/点赞接口已覆盖的全部来源（IT之家 + 快科技）。
 
     poll_due_articles 与 admin.py 的轮询水位统计共用此条件，防止两处口径漂移
-    （漏加会让不排期轮询的来源文章永久计入「待回填」）。
+    （漏加会让不排期轮询的来源文章永久计入「待回填」）。views/shares 不在
+    轮询范围（见模块 docstring 的量纲说明），但那两列本就不依赖轮询排期。
     """
-    return Article.source == "IT之家"
+    return Article.source.in_(tuple(_SOURCE_STATS_HOSTS))
 
 
 def parse_grade_likes(text: str) -> int | None:
@@ -92,13 +144,16 @@ def next_poll_after_failure(fail_count: int, now: datetime) -> datetime | None:
     return now + timedelta(minutes=minutes)
 
 
-def _stats_backoff_active() -> bool:
-    """评论/点赞两个目标域名是否处于限流退避期（复用 ithome 的进程内退避表）。"""
+def _stats_backoff_active(source: str) -> bool:
+    """该来源互动接口的目标域名是否处于限流退避期（复用 ithome 的进程内退避表）。"""
+    hosts = _SOURCE_STATS_HOSTS.get(source)
+    if not hosts:
+        return True
     now_ts = time.time()
-    return any(_FETCH_BACKOFF.get(h, 0) > now_ts for h in _STATS_HOSTS)
+    return any(_FETCH_BACKOFF.get(h, 0) > now_ts for h in hosts)
 
 
-def _get_parsed(url: str, parser) -> tuple[int | None, str]:
+def _get_parsed(url: str, parser) -> tuple[object | None, str]:
     """抓取并解析单个接口。返回 (数值|None, 失败时的响应片段)。
 
     互动端点是小响应，8s 超时足够；缩短它以压低最坏轮次时长（须 < 锁 TTL）。"""
@@ -112,6 +167,28 @@ def _get_parsed(url: str, parser) -> tuple[int | None, str]:
     if val is None:
         return None, text[:200]
     return val, ""
+
+
+def _poll_article(article: Article) -> tuple[int | None, int | None, str, str]:
+    """按来源轮询单篇互动数据 → (comments|None, likes|None, count_err, grade_err)。
+
+    快科技单接口双指标，count/grade 两个错误位填同一个错误（供失败日志共用格式）。
+    """
+    if article.source == "快科技":
+        stats, err = _get_parsed(_KJ_ACTION_URL.format(nid=article.news_id), parse_kj_action_stats)
+        time.sleep(_POLITENESS_SLEEP_SECONDS)
+        if stats is None:
+            return None, None, err, err
+        return stats[0], stats[1], "", ""
+
+    comments, count_err = _get_parsed(
+        _COUNT_URL.format(nid=article.news_id), parse_comment_count
+    )
+    # 每次请求之间都留间隔（含跨文章的 grade→下一次 count），持续限速防 403
+    time.sleep(_POLITENESS_SLEEP_SECONDS)
+    likes, grade_err = _get_parsed(_GRADE_URL.format(nid=article.news_id), parse_grade_likes)
+    time.sleep(_POLITENESS_SLEEP_SECONDS)
+    return comments, likes, count_err, grade_err
 
 
 def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
@@ -132,9 +209,9 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
     due = (
         db.query(Article)
         .filter(
-            # 互动接口为 IT之家专属：其他来源（如快科技）不排期轮询，
-            # 必须在此挡住，否则会被下方"从未轮询"回填分支捞走打 ithome 接口连败 6 次，
-            # 且挤占批次饿死 IT之家文章的轮询
+            # 范围 = stats_source_filter()（IT之家 + 快科技）；views/shares 不排期无妨，
+            # 那两列不依赖轮询。范围外的来源（未来新源）必须在此挡住，否则会被下方
+            # "从未轮询"回填分支捞走打错误接口连败 6 次，且挤占批次饿死已接入来源
             stats_source_filter(),
             or_(
                 and_(Article.stats_next_poll_at.isnot(None), Article.stats_next_poll_at <= now),
@@ -164,21 +241,17 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
             db.commit()
             logger.warning("stats skip no news_id: id=%s url=%s", article.id, article.url)
             continue
-        if _stats_backoff_active():
+        if _stats_backoff_active(article.source):
+            # 只跳过该来源（保持到期，下轮再试）：退避按来源域名分流，
+            # 单源限流不中断整轮、不饿死健康来源
             aborted_backoff = True
-            logger.warning("stats round aborted: target host in backoff（剩余文章保持到期待下轮）")
-            break
+            logger.info("stats skip in-backoff host: id=%s source=%s", article.id, article.source)
+            continue
 
-        comments_new, count_err = _get_parsed(
-            _COUNT_URL.format(nid=article.news_id), parse_comment_count
-        )
-        # 每次请求之间都留间隔（含跨文章的 grade→下一次 count），持续限速防 403
-        time.sleep(_POLITENESS_SLEEP_SECONDS)
-        likes_new, grade_err = _get_parsed(_GRADE_URL.format(nid=article.news_id), parse_grade_likes)
-        time.sleep(_POLITENESS_SLEEP_SECONDS)
+        comments_new, likes_new, count_err, grade_err = _poll_article(article)
 
         if comments_new is None and likes_new is None:
-            # 两个接口都失败：退避重试，已有数据一字不动
+            # 该篇全部接口失败：退避重试，已有数据一字不动
             article.stats_fail_count = (article.stats_fail_count or 0) + 1
             nxt = next_poll_after_failure(article.stats_fail_count, now)
             article.stats_next_poll_at = nxt

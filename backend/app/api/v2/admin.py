@@ -350,8 +350,8 @@ def _compute_status(db: Session) -> dict:
         )
 
     # 互动数据轮询水位（crawler/stats.py）：到期/待回填/已放弃/近24h成功轮询。
-    # 范围与 poll_due_articles 同口径（stats_source_filter）：仅 IT之家——
-    # 其他来源不排期轮询，漏加会让「待回填」永远清不掉
+    # 范围与 poll_due_articles 同口径（stats_source_filter）：IT之家 + 快科技——
+    # 范围外来源不排期轮询，漏加会让「待回填」永远清不掉
     from app.crawler.stats import GIVE_UP_FAILS, stats_source_filter
 
     now_utc = datetime.now(timezone.utc)

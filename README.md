@@ -121,7 +121,7 @@ docker compose up -d --build           # 一键上线全套 9 个服务（含 ov
 | `SIM_THRESHOLD` ★ / `KEYWORD_JACCARD_THRESHOLD` ★ / `HIGH_BAND_KW_FLOOR` ★ | 事件聚类基础相似度阈值（默认 0.85）/ 标题关键词重合门槛（模糊带，默认 0.2）/ 高位带最低关键词重合（默认 0.1，须跨来源） |
 | `CLUSTER_WINDOW_HOURS` / `CLUSTER_LOOKBACK_HOURS` ★ | 聚类时间窗（默认 48h，仅 .env）/ 每轮回看窗（默认 96h，可热调） |
 | `CRAWLER_INTERVAL_MINUTES` ★ / `CRAWL_LIMIT_PER_FEED` | 采集间隔（分钟，热调立即生效）/ 单源单轮抓取上限 |
-| `STATS_POLL_ENABLED` ★ / `STATS_POLL_BATCH` ★ | 互动数据轮询总开关 / 批次大小（IT之家评论数与点赞数，分层衰减节奏） |
+| `STATS_POLL_ENABLED` ★ / `STATS_POLL_BATCH` ★ | 互动数据轮询总开关 / 批次大小（IT之家 + 快科技的评论数与点赞数，分层衰减节奏） |
 
 **日报推送与告警（推荐直接在面板配置）**
 
@@ -257,7 +257,7 @@ AUDIT_EMAIL=... AUDIT_PASSWORD=... ADMIN_TOKEN=... python backend/scripts/audit_
 
 - 多来源扩展：极客公园、少数派、36氪、爱范儿、InfoQ
 - 周报与趋势分析
-- 阅读数/分享数数据源（IT之家 hitcount 为只写接口，暂无公开读取通道；快科技量纲不同本期未启用）
+- 阅读数/分享数数据源（IT之家 hitcount 为只写接口，暂无公开读取通道；快科技 hits/share 与 IT之家量纲不对称，单边启用会系统性虚高，评论/点赞已于 2026-09-10 接入）
 - 前端 E2E 测试（Playwright/Cypress，后端为最终权限边界）
 
 ---
