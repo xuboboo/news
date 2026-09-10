@@ -92,7 +92,7 @@ function BrandPanel() {
           先人一步。
         </h2>
         <p className="mt-5 max-w-md text-[13px] leading-6 text-[#94A3B8]">
-          多源科技资讯实时聚合，AI 智能摘要与热点事件聚类，每日 08:00 自动生成昨日科技日报。
+          多源科技资讯实时聚合，AI 智能摘要与热点事件聚类，每日 08:00 自动生成昨日软件日报。
         </p>
         <div className="mt-7 flex flex-wrap items-center gap-2">
           <span className="mr-1 text-[11px] text-[#64748B]">数据源</span>

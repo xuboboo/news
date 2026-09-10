@@ -35,7 +35,7 @@ export default function DailyReport() {
   const bootReady = useBootstrapReady();
   const dataVer = useDataVersion();
 
-  usePageTitle('科技日报');
+  usePageTitle('软件日报');
 
   // dataVer 变化（loadReports 完成 / 周期刷新）时重新读取可用日期
   // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVer 变化触发重算
@@ -157,7 +157,7 @@ export default function DailyReport() {
     return (
       <div>
         <PageHeader
-          title="科技日报"
+          title="软件日报"
           description="系统每日 08:00 自动生成 · TOP 热点 / 事件摘要 / 行业变化 / 重点来源"
         >
           {dateChips}
@@ -233,7 +233,7 @@ export default function DailyReport() {
   // 导出：客户端拼 Markdown（企业微信/语雀/邮件均友好），clipboard 不可用时 execCommand 兜底
   const reportToMarkdown = (r: DailyReportView): string => {
     const lines: string[] = [];
-    lines.push(`## 华军软件园 · 科技日报 ${r.date}（第 ${r.issueNo} 期）`, '');
+    lines.push(`## 华军软件园 · 软件日报 ${r.date}（第 ${r.issueNo} 期）`, '');
     if (r.overview) lines.push(r.overview, '');
     if (r.articlesTotal != null) lines.push(`> 共收录 **${r.articlesTotal}** 篇报道`, '');
     if (r.topEvents.length) {
@@ -296,7 +296,7 @@ export default function DailyReport() {
   return (
     <div>
       <PageHeader
-        title="科技日报"
+        title="软件日报"
         description="系统每日 08:00 自动生成 · TOP 热点 / 事件摘要 / 行业变化 / 重点来源"
       >
         {dateChips}
@@ -326,7 +326,7 @@ export default function DailyReport() {
               )}
             </div>
             <h2 className="text-2xl font-semibold text-slate-100">
-              华军软件园 · 科技日报 {report.date}
+              华军软件园 · 软件日报 {report.date}
             </h2>
             <p className="text-sm text-slate-300 mt-2 leading-relaxed max-w-3xl">
               {report.overview ??

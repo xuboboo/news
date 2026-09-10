@@ -21,7 +21,7 @@ npm start          # 上线（默认 http://localhost:8080）
 | 最新资讯 | `/#/latest` | 3.2 最新资讯，publish_time 倒序，标题/来源/时间/AI摘要/标签 |
 | 热点事件 | `/#/events` | 5/6 热点事件聚合（Embedding 相似度 > 0.85 + 标题关键词 + 实体 + 时间窗） |
 | 事件详情 | `/#/events/:id` | 6 热点事件页面：标题/热度/AI总结/核心影响/相关报道/时间线 |
-| 科技日报 | `/#/report` | 7 科技日报：TOP热点/事件摘要/行业变化/重点来源，支持多日期 |
+| 软件日报 | `/#/report` | 7 软件日报：TOP热点/事件摘要/行业变化/重点来源，支持多日期 |
 
 文章详情弹窗对应 PRD 第 4 节 AI 摘要输出：一句话摘要 + 核心信息（3-5条）+ 标签，并展示关联热点事件。
 
@@ -51,7 +51,7 @@ frontend/
 - `GET /api/v2/articles/latest`          → 最新资讯
 - `GET /api/v2/events` / `events/{id}`   → 热点事件
 - `GET /api/v2/article/{id}/summary`     → AI 摘要
-- `GET /api/v2/report/daily?date=`       → 科技日报
+- `GET /api/v2/report/daily?date=`       → 软件日报
 
 ## 说明
 

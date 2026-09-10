@@ -383,7 +383,7 @@ export default function Admin() {
           getTaskRuns(50)
             .then((r) => setRuns(r.items ?? []))
             .catch(() => {});
-          // 日报生成入队后同步强制刷新日报缓存（绕过 60s 节流），科技日报页即可见
+          // 日报生成入队后同步强制刷新日报缓存（绕过 60s 节流），软件日报页即可见
           if (name === 'report' && ms === 12000) void loadReports(true);
         }, ms)
       );

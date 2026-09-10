@@ -356,7 +356,7 @@ def event_detail(event_id: int, db: Session = Depends(get_db)):
     return _events_payload(db, [ev], _max_raw(db))[0]
 
 
-# ———————————————————— 科技日报（PRD 12）————————————————————
+# ———————————————————— 软件日报（PRD 12）————————————————————
 
 @router.get("/report/daily")
 def report_daily(date: str | None = None, db: Session = Depends(get_db)):

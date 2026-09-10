@@ -118,7 +118,7 @@ def test_render_markdown_sections():
         "generated_at": "2026-09-08T18:40:00+00:00",
     }
     md = render_report_markdown(content)
-    assert "## 华军软件园 · 科技日报 2026-09-08（第 147 期）" in md
+    assert "## 华军软件园 · 软件日报 2026-09-08（第 147 期）" in md
     assert "今日最热「A」。" in md
     assert "共收录 **42** 篇报道" in md
     assert "1. **A**（热度 100，3 篇/2 源）" in md
@@ -130,7 +130,7 @@ def test_render_markdown_sections():
 
 def test_render_markdown_minimal():
     md = render_report_markdown({"date": "2026-09-01", "issue_no": 1})
-    assert "科技日报 2026-09-01" in md
+    assert "软件日报 2026-09-01" in md
 
 
 def test_feishu_payload_card_with_sign():

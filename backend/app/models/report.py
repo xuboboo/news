@@ -1,4 +1,4 @@
-"""科技日报模型（PRD 第 7 节）。"""
+"""软件日报模型（PRD 第 7 节）。"""
 from datetime import datetime, timezone
 
 from sqlalchemy import Column, Date, DateTime, Integer, UniqueConstraint

@@ -109,7 +109,7 @@ flowchart LR
 - `HotScore = Engagement × TimeDecay`；`Engagement = views + comments×4 + likes×2 + shares×6`（权重可配）；`TimeDecay = e^(−0.0075×小时)`；Engagement=0 降级 `decay×100`
 - 同一公式提供 SQL 表达式 `hot_score_expr` 供 DB 内排序，`scripts/verify_hot_score.py` 对拍双实现数值一致性；榜单归一化以窗口内全频道最大分为基准（切频道分数稳定）
 
-### 5.5 科技日报（services/report_service.py / report_push.py）
+### 5.5 软件日报（services/report_service.py / report_push.py）
 
 - 口径：生成「昨日 UTC」= 北京时间 08:00–08:00 完整窗口；PG advisory lock 防同日并发
 - 期号幂等：`issue_no` 自 `REPORT_ISSUE_EPOCH=2026-04-15` 起算，同日重复生成同行同期号（集成测试覆盖跳日 +N）
@@ -190,7 +190,7 @@ flowchart LR
 ### V2.1（已交付，2026-09）
 
 - 快科技数据源、语义向量 + 三段式聚类门槛、事件级合并
-- 科技日报双通道推送、期号幂等
+- 软件日报双通道推送、期号幂等
 - 认证多租户 + 审计哈希链 + 生产 fail-fast
 - AI 成本看板、运维监控（心跳/告警/degraded/热配置）
 - 全面审计整改四轮（P0/P1 全清，见 docs/审计整改落实清单.md）

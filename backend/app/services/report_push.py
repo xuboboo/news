@@ -70,7 +70,7 @@ def render_report_markdown(content: dict) -> str:
     """日报快照 → markdown 消息体（企业微信直接渲染；飞书卡片 markdown 元素渲染）。"""
     date = content.get("date", "")
     lines: list[str] = [
-        f"## 华军软件园 · 科技日报 {date}（第 {content.get('issue_no', 1)} 期）",
+        f"## 华军软件园 · 软件日报 {date}（第 {content.get('issue_no', 1)} 期）",
         "",
     ]
     overview = str(content.get("overview") or "").strip()
@@ -130,7 +130,7 @@ def build_payload(provider: str, md: str, feishu_secret: str = "") -> dict:
             "msg_type": "interactive",
             "card": {
                 "header": {
-                    "title": {"tag": "plain_text", "content": "华军软件园 · 科技日报"},
+                    "title": {"tag": "plain_text", "content": "华军软件园 · 软件日报"},
                 },
                 "elements": [{"tag": "markdown", "content": md}],
             },

@@ -38,7 +38,7 @@ const NAV_ITEMS: { to: string; label: string; icon: typeof Activity; desc: strin
   { to: '/hot', label: '热榜中心', icon: Activity, desc: 'HotScore 实时榜单' },
   { to: '/latest', label: '最新资讯', icon: Clock3, desc: '发布时间倒序时间轴' },
   { to: '/events', label: '热点事件', icon: Radar, desc: '多来源事件聚合' },
-  { to: '/report', label: '科技日报', icon: FileText, desc: '每日自动生成' },
+  { to: '/report', label: '软件日报', icon: FileText, desc: '每日自动生成' },
   { to: '/users', label: '用户与租户', icon: UsersIcon, desc: '账号 · 组织管理', minRole: 'tenant_admin' },
   { to: '/audit', label: '审计日志', icon: ShieldCheck, desc: '操作留痕 · 可追溯', minRole: 'super_admin' },
   { to: '/usage', label: '成本看板', icon: Coins, desc: 'Token 用量 · 成本计费', minRole: 'super_admin' },

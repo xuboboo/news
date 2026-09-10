@@ -71,7 +71,7 @@ backend/app/
 | GET | /api/v2/article/{id}/summary | **AI 摘要**（PRD 12） |
 | GET | /api/v2/events | **热点事件**（PRD 12） |
 | GET | /api/v2/events/{id} | 事件详情（含时间线/相关报道） |
-| GET | /api/v2/report/daily?date= | **科技日报**（PRD 12） |
+| GET | /api/v2/report/daily?date= | **软件日报**（PRD 12） |
 | GET | /api/v2/report/dates | 可用日报日期 |
 | GET | /api/v2/stats / health | 系统统计 / 健康检查 |
 | POST | /api/v2/admin/crawl · /admin/events · /admin/report?date= | 手动触发任务（需 X-Admin-Token） |
