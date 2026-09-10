@@ -29,10 +29,11 @@ class Article(Base):
     comments = Column(BigInteger, default=0)
     shares = Column(BigInteger, default=0)
     likes = Column(BigInteger, nullable=False, server_default="0", default=0)                      # 「有价值」点赞数（IT之家文章价值打分）
-    # 互动数据轮询状态（crawler/stats.py）三态：
-    # 待采集/回填 = polled_at IS NULL 且 next_poll_at IS NULL 且 fail_count < 6（含存量回填）；
+    # 互动数据轮询状态（crawler/stats.py）四态：
+    # 已排期待采 = next_poll_at IS NOT NULL 且 > now（新文章入库排期的首采延迟即此态）；
     # 到期复采 = next_poll_at IS NOT NULL 且 <= now；
-    # 停采终态 = next_poll_at IS NULL 且上述否则件不满足——含超 14 天自然停采（polled_at 非空）
+    # 待采集/回填 = polled_at IS NULL 且 next_poll_at IS NULL 且 fail_count < 6（含存量回填）；
+    # 停采终态 = next_poll_at IS NULL 且回填条件不满足——含超 14 天自然停采（polled_at 非空）
     # 与连续失败放弃（fail_count >= 6，放弃时 next_poll_at 同样被置 NULL，仅靠 fail_count 区分）
     stats_polled_at = Column(DateTime(timezone=True))
     stats_next_poll_at = Column(DateTime(timezone=True), index=True)

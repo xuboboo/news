@@ -91,8 +91,8 @@ def stats_task(trigger: str = "auto"):
                 )
                 if r.get("skipped_backoff"):
                     run.detail += " ｜ 域名限流跳过 %d 篇（保持到期下轮再试）" % r["skipped_backoff"]
-                elif r["aborted_backoff"]:
-                    run.detail += " ｜ 目标域名限流提前收尾"
+                if r.get("deadline_hit"):
+                    run.detail += " ｜ 触达轮次时长截止，剩余文章下轮再试"
                 return r
             finally:
                 db.close()

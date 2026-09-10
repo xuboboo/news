@@ -30,6 +30,7 @@ POST /api/v2/admin/stats 或等 beat 15 分钟节奏。
 """
 import json
 import logging
+import math
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -112,13 +113,18 @@ def parse_kj_action_stats(text: str) -> tuple[int, int] | None:
         return None
     if data and not (_KJ_KNOWN_KEYS & data.keys()):
         return None
+    # 非有限浮点（1e999/Infinity 解析为 inf）：整包按毒响应拒收——若只把该字段归 0，
+    # 会以"成功"身份静默清掉真实互动，与钳制保留量级的语义相悖
+    for key in _KJ_KNOWN_KEYS:
+        val = data.get(key)
+        if isinstance(val, float) and not math.isfinite(val):
+            return None
 
     def _int(key: str) -> int:
         try:
             # 钳制上限防 >2^63 大整数在 PostgreSQL BigInteger 落库时炸整轮
             return max(0, min(int(data.get(key) or 0), 10**12))
-        except (TypeError, ValueError, OverflowError):
-            # OverflowError：JSON 的 1e999/Infinity 解析为 inf，int(inf) 抛它
+        except (TypeError, ValueError):
             return 0
 
     comments = _int("rcount") + _int("rcanyu")
@@ -262,6 +268,7 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
     polled = ok = failed = gave_up = no_nid = 0
     skipped_backoff = 0
     aborted_backoff = False
+    deadline_hit = False
     # 轮次硬截止（< 锁 TTL 30min）：重定向链/慢响应的最坏耗时无法精确估算，
     # 超时即收尾，剩余文章保持到期下轮再试——锁 TTL 从"估算约束"变"硬约束"
     deadline = time.monotonic() + _ROUND_DEADLINE_SECONDS
@@ -284,10 +291,11 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
             logger.info("stats skip in-backoff host: id=%s source=%s", article.id, article.source)
             continue
         if time.monotonic() > deadline:
-            skipped_by_deadline = len(due) - polled
+            deadline_hit = True
+            # polled 此刻已含本轮已处理数（ok+failed+no_nid 实时累计），剩余=总-已处理
             logger.warning(
                 "stats round deadline (%ds) hit, %s due articles left for next round",
-                _ROUND_DEADLINE_SECONDS, skipped_by_deadline,
+                _ROUND_DEADLINE_SECONDS, len(due) - (ok + failed + no_nid),
             )
             break
 
@@ -347,8 +355,7 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
     logger.info(
         "stats poll done: due=%s polled=%s ok=%s failed=%s gave_up=%s no_nid=%s "
         "skipped_backoff=%s deadline_hit=%s",
-        len(due), polled, ok, failed, gave_up, no_nid, skipped_backoff,
-        skipped_backoff == 0 and aborted_backoff,
+        len(due), polled, ok, failed, gave_up, no_nid, skipped_backoff, deadline_hit,
     )
     return {
         "due": len(due),
@@ -359,4 +366,5 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
         "no_nid": no_nid,
         "skipped_backoff": skipped_backoff,
         "aborted_backoff": aborted_backoff,
+        "deadline_hit": deadline_hit,
     }

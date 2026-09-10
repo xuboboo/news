@@ -71,8 +71,10 @@ def test_parse_kj_action_stats_error_object_rejected():
 
 
 def test_parse_kj_action_stats_infinity_and_huge_numbers():
-    # JSON 的 1e999/Infinity 解析为 inf，int(inf) 抛 OverflowError——必须兜住归 0
-    assert parse_kj_action_stats('news_info({"rcount":1e999,"goodnums":Infinity})') == (0, 0)
+    # JSON 的 1e999/Infinity 解析为 inf：整包按毒响应拒收（返回 None 走失败退避）——
+    # 若只把该字段归 0，会以"成功"身份静默清掉真实互动
+    assert parse_kj_action_stats('news_info({"rcount":1e999,"goodnums":Infinity})') is None
+    assert parse_kj_action_stats('news_info({"rcount":-Infinity,"goodnums":1})') is None
     # > 2^63 大整数钳制到 10^12，防 PostgreSQL BigInteger 落库炸整轮
     assert parse_kj_action_stats('news_info({"rcount":1,"rcanyu":0,"goodnums":99999999999999999})') == (1, 10**12)
 
@@ -212,7 +214,7 @@ def test_poll_dispatches_both_sources_in_one_round(db, monkeypatch):
 
 def test_poll_source_backoff_excluded_from_batch(db, monkeypatch):
     """退避来源在 SQL 侧整体排除：不占批次名额，健康来源不被批间饿死。"""
-    kj = _mk_article(db, "快科技", "2001", hours_old=0.5)  # 更新 → 原 order 下应排最前
+    kj = _mk_article(db, "快科技", "2001")  # 排期参数已不影响结果（整源不进 due）
     it = _mk_article(db, "IT之家", "2002", hours_old=2)
     stats_mod._FETCH_BACKOFF["count.mydrivers.com"] = datetime.now(timezone.utc).timestamp() + 600
 
@@ -321,6 +323,54 @@ def test_poll_no_nid_terminal_without_polluting_polled_stamp(db, monkeypatch):
     # 终态收敛：下一轮不再被回填分支捞起
     second = poll_due_articles(db)
     assert second["due"] == 0 and second["polled"] == 0
+
+
+def test_poll_round_deadline_breaks_and_keeps_articles_due(db, monkeypatch):
+    """25min 硬截止触发：立即收尾，未处理文章保持到期，deadline_hit 如实上报。"""
+    _mk_article(db, "快科技", "7001")
+    _mk_article(db, "快科技", "7002")
+
+    # 截止时刻调到过去（-1）：循环第一篇即触达（Windows monotonic 分辨率粗，0 可能相等）
+    monkeypatch.setattr(stats_mod, "_ROUND_DEADLINE_SECONDS", -1)
+
+    result = poll_due_articles(db)
+    assert result["due"] == 2
+    assert result["polled"] == 0 and result["ok"] == 0
+    assert result["deadline_hit"] is True
+
+    # 未处理文章状态一字未动：仍然到期，下轮再试
+    arts = db.query(Article).filter(Article.source == "快科技").all()
+    assert all(a.stats_polled_at is None for a in arts)
+    assert all(a.stats_next_poll_at is None for a in arts)  # 回填桶原样保留
+
+
+def test_poll_midround_backoff_skip_counts_and_keeps_due(db, monkeypatch):
+    """轮中新增退避的批内兜底：同源后续篇被跳过并计入 skipped_backoff，保持到期。"""
+    first = _mk_article(db, "快科技", "8001", hours_old=1)  # publish 较新 → 先被服务
+    second = _mk_article(db, "快科技", "8002", hours_old=2)
+
+    def respond(url):
+        if "action.ashx?tid=8001" in url:
+            # 首篇轮询途中快科技域名进入退避（模拟轮中新增）
+            stats_mod._FETCH_BACKOFF["count.mydrivers.com"] = (
+                datetime.now(timezone.utc).timestamp() + 600
+            )
+            return ((5, 5), "")
+        return ((6, 6), "")  # 兼作绊线：若 8002 被轮询则断言必失败
+
+    try:
+        _stub_no_network(monkeypatch, respond)
+        result = poll_due_articles(db)
+    finally:
+        stats_mod._FETCH_BACKOFF.pop("count.mydrivers.com", None)
+
+    assert result["ok"] == 1
+    assert result["skipped_backoff"] == 1 and result["aborted_backoff"] is True
+
+    db.refresh(first)
+    db.refresh(second)
+    assert (first.comments, first.likes) == (5, 5)
+    assert second.comments == 0 and second.stats_polled_at is None  # 跳过且保持到期
 
 
 def test_poll_ignores_sources_outside_scope(db, monkeypatch):
