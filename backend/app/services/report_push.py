@@ -80,8 +80,13 @@ def _fmt_score(v) -> str:
         return "0"
 
 
-def render_report_markdown(content: dict) -> str:
-    """日报快照 → markdown 消息体（企业微信直接渲染；飞书卡片 markdown 元素渲染）。"""
+def render_report_markdown(content: dict, provider: str = "wecom") -> str:
+    """日报快照 → markdown 消息体。
+
+    两通道 markdown 方言不同（官方文档核对 2026-09-11）：企微支持有限 HTML
+    （<font color="comment">）；飞书卡片 markdown 不支持 HTML 标签，按原文显示，
+    脚注须用纯文本。provider 决定脚注写法。
+    """
     date = content.get("date", "")
     lines: list[str] = [
         f"## 华军软件园 · 软件日报 {date}（第 {content.get('issue_no', 1)} 期）",
@@ -89,7 +94,9 @@ def render_report_markdown(content: dict) -> str:
     ]
     overview = str(content.get("overview") or "").strip()
     if overview:
-        lines += [overview, ""]
+        source = content.get("overview_source")
+        tag = "（AI 撰写）" if source == "llm" else ""
+        lines += [f"{overview}{tag}", ""]
     total = content.get("articles_total")
     if total is not None:
         lines += [f"> 共收录 **{total}** 篇报道", ""]
@@ -124,7 +131,11 @@ def render_report_markdown(content: dict) -> str:
     if gen:
         try:
             dt = datetime.fromisoformat(str(gen)).astimezone(timezone(timedelta(hours=8)))
-            lines.append(f"<font color=\"comment\">生成于 {dt.strftime('%Y-%m-%d %H:%M')} 北京时间</font>")
+            stamp = f"生成于 {dt.strftime('%Y-%m-%d %H:%M')} 北京时间"
+            if provider == "feishu":
+                lines += ["---", stamp]
+            else:
+                lines.append(f"<font color=\"comment\">{stamp}</font>")
         except ValueError:
             pass
     return "\n".join(lines)
@@ -199,9 +210,9 @@ def push_report(db: Session | None, content: dict) -> str:
     targets = push_targets(db)
     if not targets:
         return ""
-    md = render_report_markdown(content)
     results: list[str] = []
     for provider, url, secret in targets:
+        md = render_report_markdown(content, provider=provider)
         body_md = clip_markdown_bytes(md) if provider == "wecom" else md
         try:
             resp = httpx.post(url, json=build_payload(provider, body_md, secret), timeout=_PUSH_TIMEOUT)

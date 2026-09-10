@@ -202,6 +202,8 @@ export interface DailyReportView {
   generatedAt?: string;
   /** 今日综述（content.overview；历史快照缺省时页面回退模板句） */
   overview?: string;
+  /** 综述来源：llm = AI 撰写，template = 确定性模板（历史快照缺省） */
+  overviewSource?: 'llm' | 'template';
 }
 
 function mapApiReport(date: string, data: any, articleMap: Map<string, ArticleWithScore>): DailyReportView {
@@ -237,6 +239,7 @@ function mapApiReport(date: string, data: any, articleMap: Map<string, ArticleWi
     channelStats: Array.isArray(data.channel_stats) ? data.channel_stats : undefined,
     generatedAt: typeof data.generated_at === 'string' ? data.generated_at : undefined,
     overview: typeof data.overview === 'string' && data.overview ? data.overview : undefined,
+    overviewSource: data.overview_source === 'llm' ? 'llm' : data.overview_source === 'template' ? 'template' : undefined,
   };
 }
 

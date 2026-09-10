@@ -1,9 +1,12 @@
 """日报服务（PRD 第 7 节）：每日自动生成 / report_task 落库。"""
+import json
 import re
+import time
 from collections import defaultdict
 from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from sqlalchemy.orm import Session
 
 from app.algorithms.hot_score import hot_score
@@ -12,8 +15,11 @@ from app.models.article import Article
 from app.models.event import EventArticle, HotEvent
 from app.models.report import DailyReport
 from app.services import usage_service
+from app.services.config_service import effective_llm
 from app.services.report_push import push_enabled, push_report
-from app.utils.text import truncate_boundary
+from app.services.usage_service import extract_openai_usage, record_usage
+from app.utils.text import truncate, truncate_boundary
+from app.utils.url_guard import assert_public_http_url
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import selectinload
 
@@ -84,10 +90,10 @@ def _compose_overview(
 ) -> str:
     """今日综述（无 LLM 的确定性模板）：头条事件 + 其余热点 + 频道亮点。
 
-    接入 LLM 后可在 build_report 里用同签名替换为 AI 撰写并以本实现兜底。
+    生成链路先试 _llm_overview（配了 LLM 才调），任何失败回退本实现。
     """
     if articles_total <= 0:
-        return ''
+        return ""
     parts: list[str] = []
     if top_events:
         e1 = top_events[0]
@@ -110,6 +116,87 @@ def _compose_overview(
             tail += f"，{channel_stats[1]['channel']} {channel_stats[1]['count']} 篇次之"
         parts.append(tail + "。")
     return "".join(parts)
+
+
+def _llm_overview(llm: tuple[str, str, str], content: dict, trigger: str = "auto") -> str | None:
+    """LLM 撰写今日综述；未配置或任何失败返回 None（失败已落账），调用方回退模板。
+
+    用量记账（task_type=report，成本看板「日报」类型）：HTTP 200 但解析失败记
+    parse_fail（token 已花）；连接/非 200 记 api_fail；未配置 LLM 时不调用不落账。
+    与 event_service._llm_event_summary 同款「落账 + 降级」模式。
+    """
+    if not (llm and llm[0] and llm[1] and llm[2]):
+        return None
+    base_url, api_key, model = llm
+    start = time.monotonic()
+    http_ok = False  # 是否已收到 HTTP 200（区分 api_fail / parse_fail）
+    usage: dict = {}
+    try:
+        base_url = assert_public_http_url(base_url)
+        events = content.get("top_events") or []
+        quick = content.get("quick_news") or []
+        channels = content.get("channel_stats") or []
+        ev_lines = "\n".join(
+            f"- {e.get('title', '')}（{e.get('articles_count', 0)}篇/"
+            f"{e.get('sources_count', 0)}源，{e.get('status', '')}）\n"
+            f"  摘要：{truncate(str(e.get('summary') or ''), 80)}"
+            for e in events[:5]
+        )
+        quick_lines = "；".join(
+            f"{a.get('title', '')}（{a.get('source', '')}）" for a in quick[:8]
+        )
+        ch_lines = "、".join(f"{c.get('channel', '')} {c.get('count', 0)}篇" for c in channels[:4])
+        prompt = (
+            "以下是软件行业资讯日报的素材。请写一段80~140字的中文今日综述："
+            "概括当日最热事件及其交叉报道情况、其他值得注意的热点、收录量与频道分布。"
+            "要求：客观陈述事实、不加观点、不使用任何 markdown 标记、不要称呼与客套。\n"
+            '输出严格 JSON：{"overview":"综述文本"}\n\n'
+            f"共收录 {content.get('articles_total', 0)} 篇报道。\n"
+            f"热点事件：\n{ev_lines or '（无聚合事件）'}\n"
+            f"其他热点：{quick_lines or '（无）'}\n"
+            f"频道分布：{ch_lines or '（无）'}"
+        )
+        resp = httpx.post(
+            f"{base_url.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "response_format": {"type": "json_object"},
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        http_ok = True
+        body = resp.json()
+        # 第一件事提取 usage：即使后续解析失败，token 也已消耗
+        usage = extract_openai_usage(body)
+        raw = body["choices"][0]["message"]["content"]
+        data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
+        overview = re.sub(r"\s+", " ", str(data.get("overview", ""))).strip()
+        if not overview:
+            raise ValueError("empty overview")
+        record_usage(
+            task_type="report",
+            model=model,
+            status="success",
+            latency_ms=int((time.monotonic() - start) * 1000),
+            trigger=trigger,
+            **usage,
+        )
+        return truncate(overview, 300)
+    except Exception as exc:
+        record_usage(
+            task_type="report",
+            model=model,
+            status="parse_fail" if http_ok else "api_fail",
+            error=str(exc),
+            latency_ms=int((time.monotonic() - start) * 1000),
+            trigger=trigger,
+            **usage,
+        )
+        return None
 
 
 def build_report(db: Session, day: date_type) -> dict:
@@ -264,11 +351,16 @@ def build_report(db: Session, day: date_type) -> dict:
     }
 
 
-def generate_daily_report(db: Session, day: date_type | None = None) -> tuple[DailyReport, str]:
+def generate_daily_report(
+    db: Session, day: date_type | None = None, trigger: str = "auto"
+) -> tuple[DailyReport, str]:
     """生成某日日报并落库，返回 (日报行, 推送状态串)。
 
     day 缺省取「昨日（UTC）」——最近一个已结束的自然日，保证窗口内有完整数据；
     当天数据须等次日生成或显式传 day 补算。
+
+    综述两级实现（与全站「LLM + 兜底」同款）：配置了 LLM 先试 AI 撰写
+    （overview_source=llm），未配置或失败回退确定性模板（overview_source=template）。
 
     推送策略（2026-09-10 审计收紧）：仅当生成日恰为昨日（每日 08:00 自动口径的
     当期新刊，手动不传日期重算同属此列）且内容非空时才自动推送——补算历史日期
@@ -280,6 +372,14 @@ def generate_daily_report(db: Session, day: date_type | None = None) -> tuple[Da
     # 后到者等待前者提交后走更新分支，双成功单行
     db.execute(sql_text("SELECT pg_advisory_xact_lock(hashtext('daily_report:' || :d))"), {"d": day.isoformat()})
     content = build_report(db, day)
+    if content["articles_total"] > 0:
+        llm = effective_llm(db)
+        llm_text = _llm_overview(llm, content, trigger=trigger)
+        if llm_text:
+            content["overview"] = llm_text
+            content["overview_source"] = "llm"
+        else:
+            content["overview_source"] = "template"
     row = db.query(DailyReport).filter_by(date=day).first()
     if row:
         row.content = content

@@ -315,6 +315,11 @@ export default function DailyReport() {
               <span className="chip bg-accent/10 text-accent border border-accent/30">
                 <Bot className="h-3 w-3" /> 自动生成
               </span>
+              {report.overviewSource === 'llm' && (
+                <span className="chip bg-emerald-500/10 text-emerald-300 border border-emerald-400/20">
+                  <Bot className="h-3 w-3" /> AI 撰写综述
+                </span>
+              )}
               <span className="chip bg-radar-panel text-slate-400 border border-radar-border">
                 第 {report.issueNo} 期
               </span>
@@ -595,6 +600,10 @@ export default function DailyReport() {
             </div>
             <ul className="space-y-2 text-xs text-slate-500 leading-relaxed">
               <li>· 本报告由系统于每日 08:00 自动生成</li>
+              <li>
+                · 今日综述：
+                {report.overviewSource === 'llm' ? 'AI 撰写（失败时自动回退模板）' : '确定性模板生成（配置 LLM 后自动升级）'}
+              </li>
               <li>· 事件摘要基于 event 聚合结果与 AI 总结交叉生成</li>
               <li>· 热度算法：HotScore = Engagement × TimeDecay，页面内为当日归一化相对值（满分 100）</li>
               {originStats.length > 0 && (

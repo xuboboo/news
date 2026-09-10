@@ -423,14 +423,15 @@ def test_generate_daily_report_push_policy(pg, monkeypatch):
         assert status == "内容为空，未推送"
         assert pushed == []
 
-        # 当期新刊（昨日）且有内容：推送并透出状态
+        # 当期新刊（昨日）且有内容：推送并透出状态；综述走模板兜底（测试环境无 LLM）
         v = _vec([1.0, 0.0])
         day_start = datetime(yesterday.year, yesterday.month, yesterday.day, tzinfo=timezone.utc)
         _mk_article(db, title="昨日有内容的报道", source="IT之家", vec=v,
                     published=day_start + timedelta(hours=9))
         db.commit()
-        _, status = report_service.generate_daily_report(db, yesterday)
+        row_today, status = report_service.generate_daily_report(db, yesterday)
         assert status == "wecom:ok"
+        assert row_today.content["overview_source"] == "template"
         assert pushed == [yesterday.isoformat()]
 
         # 历史日期补算：即使有内容也不推（不再向群通道灌旧闻）

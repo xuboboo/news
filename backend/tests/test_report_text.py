@@ -277,3 +277,92 @@ def test_overview_single_rest_phrasing():
     text = _compose_overview(events, [], 3)
     assert text.startswith("今日最热「A 事件标题」。")
     assert "此外，「B 事件标题」亦在持续发酵。" in text
+
+
+# ———— 分通道渲染与 LLM 综述（2026-09-11 三轮：官方文档核对） ————
+
+def _render_content():
+    return {
+        "date": "2026-09-10",
+        "issue_no": 149,
+        "overview": "今日综述内容。",
+        "overview_source": "llm",
+        "generated_at": "2026-09-10T00:30:00+00:00",
+    }
+
+
+def test_render_wecom_footer_keeps_font_tag():
+    """企微 markdown 支持有限 HTML（font color=comment），保留。"""
+    md = render_report_markdown(_render_content(), provider="wecom")
+    assert '<font color="comment">生成于' in md
+    assert "（AI 撰写）" in md  # 综述来源随推送透出
+
+
+def test_render_feishu_footer_plain_text():
+    """飞书卡片 markdown 不支持 HTML 标签（官方文档核对），<font> 会按原文显示，
+    脚注须用纯文本 + 分割线。"""
+    md = render_report_markdown(_render_content(), provider="feishu")
+    assert "<font" not in md
+    assert "---" in md
+    assert "生成于" in md and "北京时间" in md
+
+
+def _llm_overview(**kwargs):
+    from app.services.report_service import _llm_overview
+
+    return _llm_overview(("https://api.example.test/v1", "sk-x", "m1"), _render_content(), **kwargs)
+
+
+def test_llm_overview_success(monkeypatch):
+    from app.services import report_service
+
+    captured = {}
+
+    def fake_post(url, **kw):
+        captured["url"] = url
+        captured["payload"] = kw["json"]
+        return type("R", (), {
+            "raise_for_status": lambda self: None,
+            "json": lambda self: {
+                "choices": [{"message": {"content": '{"overview":"  今日综述：热点持续发酵。\\n数据齐全。"}'}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        })()
+
+    monkeypatch.setattr(report_service.httpx, "post", fake_post)
+    monkeypatch.setattr(report_service, "record_usage", lambda **kw: captured.setdefault("usage", kw))
+    out = _llm_overview(trigger="auto")
+    assert out == "今日综述：热点持续发酵。 数据齐全。"  # 空白归一
+    assert captured["url"].endswith("/chat/completions")
+    assert captured["payload"]["model"] == "m1"
+    # 成功落账 task_type=report
+    assert captured["usage"]["task_type"] == "report"
+    assert captured["usage"]["status"] == "success"
+
+
+def test_llm_overview_api_fail_returns_none(monkeypatch):
+    """连接失败 → api_fail 落账 → 返回 None（调用方回退模板）。"""
+    from app.services import report_service
+
+    def boom(*a, **k):
+        raise RuntimeError("connect timeout")
+
+    monkeypatch.setattr(report_service.httpx, "post", boom)
+    captured = {}
+    monkeypatch.setattr(report_service, "record_usage", lambda **kw: captured.setdefault("s", kw))
+    assert _llm_overview() is None
+    assert captured["s"]["status"] == "api_fail"
+    assert captured["s"]["task_type"] == "report"
+
+
+def test_llm_overview_unconfigured_returns_none(monkeypatch):
+    """未配置 LLM：不调用、不落账，直接 None。"""
+    from app.services import report_service
+
+    monkeypatch.setattr(report_service.httpx, "post", lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应发请求")))
+    called = {}
+    monkeypatch.setattr(report_service, "record_usage", lambda **kw: called.setdefault("s", kw))
+    from app.services.report_service import _llm_overview
+
+    assert _llm_overview(("", "", ""), _render_content()) is None
+    assert not called
