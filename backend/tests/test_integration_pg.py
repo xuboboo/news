@@ -26,6 +26,7 @@ from app.models.setting import SystemSetting  # noqa: F401
 from app.models.summary import ArticleSummary  # noqa: F401
 from app.models.task_run import TaskRun  # noqa: F401
 from app.models.usage import AiUsageLog, ModelPrice  # noqa: F401
+from app.utils.tz import TZ_BJ
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("TEST_DATABASE_URL"),
@@ -335,34 +336,37 @@ def test_recompute_event_scores_sums_members_and_flips_status(pg):
 # ———— build_report：日报窗口口径（审计 P1） ————
 
 def test_build_report_event_stats_window_scoped(pg):
-    """日报事件统计限定窗口内：跨日事件的 articles_count 只数当天成员，
-    全生命周期数字放 lifecycle_* 字段。"""
+    """日报事件统计限定窗口内：跨日事件的 articles_count 只数窗口内成员，
+    全生命周期数字放 lifecycle_* 字段。
+
+    窗口口径（2026-09-11 改版）：build_report(db, day) 的 day 为发布日，
+    窗口 = 北京时间 day-1 00:00 → day 00:00。"""
     from app.services.report_service import build_report
 
     db = pg()
     try:
-        day = (NOW - timedelta(days=1)).date()  # UTC 日界（与后端口径一致）
-        day_start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+        day = (NOW - timedelta(days=1)).date()  # 发布日
+        win_start = datetime(day.year, day.month, day.day, tzinfo=TZ_BJ) - timedelta(days=1)
         v = _vec([1.0, 0.1])
-        today_a = _mk_article(db, title="某事件当天报道A", source="IT之家", vec=v,
-                              published=day_start + timedelta(hours=10))
-        yesterday_a = _mk_article(db, title="某事件前一日报道B", source="快科技", vec=v,
-                                  published=day_start - timedelta(hours=14))
+        in_win_a = _mk_article(db, title="某事件窗口内报道A", source="IT之家", vec=v,
+                               published=win_start + timedelta(hours=10))
+        out_win_a = _mk_article(db, title="某事件窗口外报道B", source="快科技", vec=v,
+                                published=win_start - timedelta(hours=14))
         db.add(HotEvent(title="跨日事件标题", summary="事件总结", impacts=[],
-                        first_time=yesterday_a.publish_time, last_time=today_a.publish_time,
+                        first_time=out_win_a.publish_time, last_time=in_win_a.publish_time,
                         status="发酵中", centroid=v, timeline=[]))
         db.flush()
         ev = db.query(HotEvent).one()
         db.add_all([
-            EventArticle(event_id=ev.id, article_id=today_a.id),
-            EventArticle(event_id=ev.id, article_id=yesterday_a.id),
+            EventArticle(event_id=ev.id, article_id=in_win_a.id),
+            EventArticle(event_id=ev.id, article_id=out_win_a.id),
         ])
         db.commit()
 
         report = build_report(db, day)
         top = {e["id"]: e for e in report["top_events"]}
-        assert top[ev.id]["articles_count"] == 1  # 仅当天 1 篇
-        assert top[ev.id]["sources_count"] == 1  # 当天仅 IT之家
+        assert top[ev.id]["articles_count"] == 1  # 仅窗口内 1 篇
+        assert top[ev.id]["sources_count"] == 1  # 窗口内仅 IT之家
         assert top[ev.id]["lifecycle_articles_count"] == 2  # 全周期 2 篇
         assert top[ev.id]["lifecycle_sources_count"] == 2
     finally:
@@ -403,7 +407,7 @@ def test_generate_daily_report_issue_no_and_idempotency(pg):
 # ———— generate_daily_report：推送策略（2026-09-10 审计收紧） ————
 
 def test_generate_daily_report_push_policy(pg, monkeypatch):
-    """自动推送仅限「昨日（当期新刊）」且内容非空：空报告不推、历史补算不推；
+    """自动推送仅限「发布日=今天（当期新刊）」且内容非空：空报告不推、历史补算不推；
     推送状态经返回值透出（task_run.detail 由此写入，面板可见）。"""
     from app.services import report_service
 
@@ -416,33 +420,34 @@ def test_generate_daily_report_push_policy(pg, monkeypatch):
 
     db = pg()
     try:
-        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+        today = (NOW + timedelta(hours=8)).date()  # 北京时间今天（发布日口径）
 
         # 空报告：不推送（采集停摆时不向群里灌空刊，任务停摆另有告警通道）
-        _, status = report_service.generate_daily_report(db, yesterday)
+        _, status = report_service.generate_daily_report(db, today)
         assert status == "内容为空，未推送"
         assert pushed == []
 
-        # 当期新刊（昨日）且有内容：推送并透出状态；综述走模板兜底（测试环境无 LLM）
+        # 当期新刊（发布日=今天，窗口=北京昨日）且有内容：推送并透出状态；
+        # 综述走模板兜底（测试环境无 LLM）
         v = _vec([1.0, 0.0])
-        day_start = datetime(yesterday.year, yesterday.month, yesterday.day, tzinfo=timezone.utc)
+        win_start = datetime(today.year, today.month, today.day, tzinfo=TZ_BJ) - timedelta(days=1)
         _mk_article(db, title="昨日有内容的报道", source="IT之家", vec=v,
-                    published=day_start + timedelta(hours=9))
+                    published=win_start + timedelta(hours=9))
         db.commit()
-        row_today, status = report_service.generate_daily_report(db, yesterday)
+        row_today, status = report_service.generate_daily_report(db, today)
         assert status == "wecom:ok"
         assert row_today.content["overview_source"] == "template"
-        assert pushed == [yesterday.isoformat()]
+        assert pushed == [today.isoformat()]
 
         # 历史日期补算：即使有内容也不推（不再向群通道灌旧闻）
-        old_day = yesterday - timedelta(days=5)
-        old_start = datetime(old_day.year, old_day.month, old_day.day, tzinfo=timezone.utc)
+        old_day = today - timedelta(days=5)
+        old_start = datetime(old_day.year, old_day.month, old_day.day, tzinfo=TZ_BJ) - timedelta(days=1)
         _mk_article(db, title="五天前的旧闻", source="快科技", vec=v,
                     published=old_start + timedelta(hours=9))
         db.commit()
         _, status = report_service.generate_daily_report(db, old_day)
         assert status == "历史日期补算，未推送"
-        assert pushed == [yesterday.isoformat()]
+        assert pushed == [today.isoformat()]
     finally:
         db.close()
 

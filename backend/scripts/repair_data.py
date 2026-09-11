@@ -8,7 +8,6 @@
 用法（容器内）：python scripts/repair_data.py
 """
 import sys
-from datetime import date as date_type
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -74,8 +73,8 @@ def main() -> None:
         recompute_event_scores(db)
         print(f"[4/5] 聚类完成：{stats}，事件热度已重算")
 
-        # 5) 重建当日日报（历史/当日补算口径：不触发群推送）
-        row, _ = generate_daily_report(db, date_type.today())
+        # 5) 重建当日日报（补算重建口径：allow_push=False，不向群通道重复推送）
+        row, _ = generate_daily_report(db, allow_push=False)
         print(f"[5/5] 日报重建完成：{row.date.isoformat()} 第 {row.issue_no} 期")
     finally:
         db.close()

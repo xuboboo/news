@@ -19,6 +19,7 @@ from app.services.config_service import effective_llm
 from app.services.report_push import push_enabled, push_report
 from app.services.usage_service import extract_openai_usage, record_usage
 from app.utils.text import truncate, truncate_boundary
+from app.utils.tz import bj_day_start, bj_now
 from app.utils.url_guard import assert_public_http_url
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import selectinload
@@ -200,14 +201,19 @@ def _llm_overview(llm: tuple[str, str, str], content: dict, trigger: str = "auto
 
 
 def build_report(db: Session, day: date_type) -> dict:
-    """构建日报内容（前端可直接渲染的结构）。"""
-    day_start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
-    day_end = day_start + timedelta(days=1)
+    """构建日报内容（前端可直接渲染的结构）。
+
+    day 为发布日（北京时间口径）：统计窗口取前一个北京时间自然日全天
+    （day-1 00:00 → day 00:00 北京时间）。每日 08:00（北京时间）自动生成
+    当日发布期刊时，窗口已于 8 小时前完整闭合。
+    """
+    win_start = bj_day_start(day - timedelta(days=1))
+    win_end = bj_day_start(day)
 
     day_articles = (
         db.query(Article)
         .options(selectinload(Article.summary))
-        .filter(Article.publish_time >= day_start, Article.publish_time < day_end)
+        .filter(Article.publish_time >= win_start, Article.publish_time < win_end)
         .all()
     )
 
@@ -329,7 +335,7 @@ def build_report(db: Session, day: date_type) -> dict:
         key=lambda x: x["count"], reverse=True,
     )
 
-    # —— 今日 AI 成本（ai_usage_log 聚合，当日 0-24 点 UTC，无数据为 0）——
+    # —— 今日 AI 成本（ai_usage_log 聚合，发布日 0-24 点 UTC，无数据为 0；与成本看板同口径）——
     ai_cost = usage_service.usage_day_summary(db, day)
 
     return {
@@ -352,22 +358,23 @@ def build_report(db: Session, day: date_type) -> dict:
 
 
 def generate_daily_report(
-    db: Session, day: date_type | None = None, trigger: str = "auto"
+    db: Session, day: date_type | None = None, trigger: str = "auto", allow_push: bool = True
 ) -> tuple[DailyReport, str]:
     """生成某日日报并落库，返回 (日报行, 推送状态串)。
 
-    day 缺省取「昨日（UTC）」——最近一个已结束的自然日，保证窗口内有完整数据；
-    当天数据须等次日生成或显式传 day 补算。
+    day 为发布日（北京时间口径），缺省取「今天」——每日 08:00（北京时间）
+    自动生成当日发布期刊，统计窗口为前一个北京时间自然日全天（build_report
+    内换算），08:00 触发时窗口已闭合 8 小时，数据完整。
 
     综述两级实现（与全站「LLM + 兜底」同款）：配置了 LLM 先试 AI 撰写
     （overview_source=llm），未配置或失败回退确定性模板（overview_source=template）。
 
-    推送策略（2026-09-10 审计收紧）：仅当生成日恰为昨日（每日 08:00 自动口径的
+    推送策略（2026-09-10 审计收紧）：仅当发布日为「今天」（每日 08:00 自动口径的
     当期新刊，手动不传日期重算同属此列）且内容非空时才自动推送——补算历史日期
-    或修复脚本重算当天不再向群通道灌旧闻/空报告；推送状态随返回值写入
-    task_run.detail，面板可见，不再静默丢弃。
+    不再向群通道灌旧闻/空报告；allow_push=False 供修复脚本重建当期刊时显式关闭
+    推送；推送状态随返回值写入 task_run.detail，面板可见，不再静默丢弃。
     """
-    day = day or (datetime.now(timezone.utc) - timedelta(days=1)).date()
+    day = day or bj_now().date()
     # 同日并发生成（定时 + 手动触发）会撞 uq_report_date：会话级 advisory lock 串行化，
     # 后到者等待前者提交后走更新分支，双成功单行
     db.execute(sql_text("SELECT pg_advisory_xact_lock(hashtext('daily_report:' || :d))"), {"d": day.isoformat()})
@@ -393,7 +400,9 @@ def generate_daily_report(
     if push_enabled(db):
         if content["articles_total"] <= 0:
             push_status = "内容为空，未推送"
-        elif day == (datetime.now(timezone.utc) - timedelta(days=1)).date():
+        elif not allow_push:
+            push_status = "补算重建，未推送"
+        elif day == bj_now().date():
             push_status = push_report(db, content)
         else:
             push_status = "历史日期补算，未推送"

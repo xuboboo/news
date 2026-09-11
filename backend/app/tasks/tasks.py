@@ -14,6 +14,7 @@ from app.services.report_service import generate_daily_report
 from app.services.summary_service import generate_summary
 from app.services.taskrun_service import record_task_run
 from app.tasks.celery_app import celery_app
+from app.utils.tz import bj_now
 
 logger = logging.getLogger(__name__)
 
@@ -171,10 +172,11 @@ def event_task(trigger: str = "auto"):
 
 @celery_app.task(name="report_task")
 def report_task(date_str: str | None = None, trigger: str = "auto"):
-    """日报任务：每日 08:00（北京时间）自动生成「昨日（UTC）」报告。
+    """日报任务：每日 08:00（北京时间）自动生成「发布日」期刊。
 
-    触发时刻为 UTC 00:00，若取"当天"则统计窗口刚开启、内容必然为空，
-    因此自动口径固定为前一个 UTC 自然日；指定 date_str 可补生成任意一天。
+    期刊标注生成当天（北京时间），统计窗口为前一个北京时间自然日全天
+    （build_report 内换算），08:00 触发时窗口已闭合 8 小时，数据完整；
+    指定 date_str 可补生成任意一天（date 亦为发布日，窗口取其前一天）。
     """
     with record_task_run("report", trigger=trigger) as run:
         db = new_session()
@@ -182,7 +184,7 @@ def report_task(date_str: str | None = None, trigger: str = "auto"):
             if date_str:
                 day = datetime.fromisoformat(date_str).date()
             else:
-                day = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+                day = bj_now().date()
             row, push_status = generate_daily_report(db, day, trigger=trigger)
             run.detail = "第 %d 期（%s）" % (row.issue_no, row.date.isoformat())
             if push_status:

@@ -18,6 +18,7 @@ from app.algorithms.hot_score import hot_score, hot_score_expr
 from app.api.v2.admin import require_admin
 from app.auth.deps import require_json_mutation
 from app.core.db import get_db
+from app.utils.tz import bj_now
 from app.models.article import Article
 from app.models.event import EventArticle, HotEvent
 from app.models.report import DailyReport
@@ -451,13 +452,13 @@ def trigger_report(
     _: None = Depends(require_admin),
 ):
     # 入队前先校验：坏格式/未来日期直接 400，不把失败拖到 worker 里变成一条
-    # 失败 task_run；未来日期会造出占位空刊污染期号列表
+    # 失败 task_run；未来日期会造出占位空刊污染期号列表（发布日按北京时间口径）
     if date:
         try:
             day = date_type.fromisoformat(date)
         except ValueError:
             raise HTTPException(400, "date format must be YYYY-MM-DD")
-        if day > datetime.now(timezone.utc).date():
+        if day > bj_now().date():
             raise HTTPException(400, "date cannot be in the future")
     from app.tasks.tasks import report_task
 
@@ -471,7 +472,7 @@ def test_report_push(request: Request, db: Session = Depends(get_db), _: None = 
     """立即把最新一期日报推到已配置通道（webhook 配置自检，不必等次日 08:00）。
 
     取最近一期有实质内容的快照推送（占位空刊不作为样张）；库中尚无日报时现场
-    构建昨日报告（不落库）。同步调用（每通道超时 10s），返回各通道状态串，
+    按当期口径构建报告（不落库）。同步调用（每通道超时 10s），返回各通道状态串，
     如 "wecom:ok；feishu:ok"。
     """
     from app.auth.deps import current_user_of
@@ -486,7 +487,7 @@ def test_report_push(request: Request, db: Session = Depends(get_db), _: None = 
     if row:
         content = dict(row.content or {})
     else:
-        content = build_report(db, datetime.now(timezone.utc).date() - timedelta(days=1))
+        content = build_report(db, bj_now().date())
     results = push_report(db, content)
     audit_service.record(
         db, "admin.test_report_push", request=request,

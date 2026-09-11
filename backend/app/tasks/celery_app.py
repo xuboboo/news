@@ -48,7 +48,8 @@ celery_app.conf.update(
                 "task": "event_task",
                 "schedule": crontab(minute="*/10"),
             },
-            # 北京时间 08:00 = UTC 00:00，生成「昨日（UTC）」报告，避免当日窗口刚开启取到空数据
+            # 北京时间 08:00：生成「发布日」期刊——统计窗口为前一个北京时间自然日
+            # 全天，08:00 时已闭合 8 小时，数据完整；期刊日期与用户直觉一致
             "daily-report-0800": {
                 "task": "report_task",
                 "schedule": crontab(hour=8, minute=0),
