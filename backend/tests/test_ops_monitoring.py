@@ -12,6 +12,7 @@ from sqlalchemy import text
 
 from app.models.task_run import TaskRun
 from app.services import alert_service, infra_status
+from app.utils.tz import bj_now
 
 from conftest import login, set_config
 
@@ -305,7 +306,7 @@ def test_budget_alert_triggers_and_clears(db, monkeypatch):
     s = db.factory()
     s.add(AiUsageLog(task_type="summary", trigger="auto", model="llm-a",
                      status="success", cost=5.0,
-                     created_at=datetime.now(timezone.utc)))
+                     created_at=bj_now()))
     s.commit()
     s.close()
 

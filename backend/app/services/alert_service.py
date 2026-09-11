@@ -4,7 +4,7 @@
 - Redis 连通、Celery worker 存活；
 - 任务节奏心跳（event/crawler/stats/report 停摆；stats 被面板热停时豁免）；
 - 最近失败任务未恢复；
-- AI 日成本超预算（ai_daily_cost_budget > 0 时启用；UTC 日界，跨日成本归零即"恢复"）。
+- AI 日成本超预算（ai_daily_cost_budget > 0 时启用；北京时间日界，跨日成本归零即"恢复"）。
 
 推送策略（状态存 Redis key alert:watch）：
 - ok → bad：立即推送；bad 持续期间每 30 分钟重复提醒一次；
@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.services import config_service
 from app.services.infra_status import cadence_warnings, celery_workers_ping, redis_client, redis_ping
+from app.utils.tz import TZ_BJ, bj_now
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,13 @@ _RENOTIFY_AFTER_SECONDS = 30 * 60
 def _fmt_dt(iso: str | None) -> str:
     if not iso:
         return "无记录"
-    return iso[:19].replace("T", " ") + " UTC"
+    try:
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(TZ_BJ).strftime("%Y-%m-%d %H:%M:%S") + " 北京时间"
+    except ValueError:
+        return iso[:19].replace("T", " ") + " 北京时间"
 
 
 def build_payload(style: str, text: str) -> dict:
@@ -123,12 +130,12 @@ def _collect_problems(db: Session) -> list[str]:
     if budget > 0:
         from app.services.usage_service import usage_day_summary
 
-        today = datetime.now(timezone.utc).date()
+        today = bj_now().date()
         spent = usage_day_summary(db, today)["cost"]
         if spent > budget:
             problems.append(
                 f"AI 日成本超预算：今日已计 ¥{spent:.2f}，超过预算 ¥{budget:.2f}"
-                f"（{spent / budget * 100:.0f}%，UTC 日界，跨日自动解除）"
+                f"（{spent / budget * 100:.0f}%，北京时间日界，跨日自动解除）"
             )
 
     return problems
@@ -216,7 +223,7 @@ def watch(db: Session) -> dict:
         app = settings.app_name
         text = (
             f"【{kind}】{app}\n"
-            f"时间：{datetime.now(timezone.utc).isoformat(timespec='seconds')}\n"
+            f"时间：{bj_now().isoformat(timespec='seconds')}\n"
             + (
                 "\n".join(f"· {p}" for p in problems)
                 if problems

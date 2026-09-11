@@ -335,8 +335,8 @@ def build_report(db: Session, day: date_type) -> dict:
         key=lambda x: x["count"], reverse=True,
     )
 
-    # —— 今日 AI 成本（ai_usage_log 聚合，发布日 0-24 点 UTC，无数据为 0；与成本看板同口径）——
-    ai_cost = usage_service.usage_day_summary(db, day)
+    # —— 日报窗口 AI 成本（与文章统计同一北京时间自然日窗口，无数据为 0）——
+    ai_cost = usage_service.usage_window_summary(db, win_start, win_end)
 
     return {
         "date": day.isoformat(),

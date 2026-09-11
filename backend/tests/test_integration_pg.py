@@ -360,6 +360,18 @@ def test_build_report_event_stats_window_scoped(pg):
         db.add_all([
             EventArticle(event_id=ev.id, article_id=in_win_a.id),
             EventArticle(event_id=ev.id, article_id=out_win_a.id),
+            AiUsageLog(
+                created_at=win_start + timedelta(hours=1),
+                task_type="summary", model="test-model", total_tokens=100, cost=0.25,
+            ),
+            AiUsageLog(
+                created_at=win_start - timedelta(seconds=1),
+                task_type="summary", model="test-model", total_tokens=200, cost=1.00,
+            ),
+            AiUsageLog(
+                created_at=datetime(day.year, day.month, day.day, tzinfo=TZ_BJ),
+                task_type="summary", model="test-model", total_tokens=300, cost=2.00,
+            ),
         ])
         db.commit()
 
@@ -369,6 +381,7 @@ def test_build_report_event_stats_window_scoped(pg):
         assert top[ev.id]["sources_count"] == 1  # 窗口内仅 IT之家
         assert top[ev.id]["lifecycle_articles_count"] == 2  # 全周期 2 篇
         assert top[ev.id]["lifecycle_sources_count"] == 2
+        assert report["ai_cost"] == {"calls": 1, "tokens": 100, "cost": 0.25}
     finally:
         db.close()
 

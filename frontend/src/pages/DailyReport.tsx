@@ -189,14 +189,14 @@ export default function DailyReport() {
   // 收录总数：优先用快照里的当日窗口文章总数（历史快照缺省时回退收录条数）
   const collectedTotal = report.articlesTotal ?? report.quickNews.length;
 
-  // 统计窗口口径：日报日期为 UTC 自然日，对应北京时间当日 08:00 → 次日 08:00
+  // 统计窗口口径：日报日期为发布日，统计前一个北京时间自然日全天
   const winLabel = (() => {
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(report.date);
     if (!m) return null;
-    const end = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) + 86400000);
-    const mm = String(end.getUTCMonth() + 1).padStart(2, '0');
-    const dd = String(end.getUTCDate()).padStart(2, '0');
-    return `统计窗口（北京时间）${report.date.slice(5).replace('-', '/')} 08:00 – ${mm}/${dd} 08:00`;
+    const start = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) - 1));
+    const mm = String(start.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(start.getUTCDate()).padStart(2, '0');
+    return `统计窗口（北京时间）${mm}/${dd} 00:00 – ${report.date.slice(5).replace('-', '/')} 00:00`;
   })();
 
   // 环比：与上一期对比（新进热点 / 收录篇数变化）；上一期已由上方补拉逻辑保证可用
@@ -227,7 +227,7 @@ export default function DailyReport() {
     report.aiCost.calls > 0;
 
   const generatedAtLabel = report.generatedAt
-    ? new Date(report.generatedAt).toLocaleString('zh-CN', { hour12: false })
+    ? new Date(report.generatedAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
     : null;
 
   // 导出：客户端拼 Markdown（企业微信/语雀/邮件均友好），clipboard 不可用时 execCommand 兜底
@@ -563,12 +563,12 @@ export default function DailyReport() {
             </section>
           )}
 
-          {/* 当日 AI 成本（日报 content.ai_cost，有则显示；历史日报无此字段自动隐藏） */}
+          {/* 日报窗口 AI 成本（日报 content.ai_cost，有则显示；历史日报无此字段自动隐藏） */}
           {report.aiCost && (
             <section className="card p-5">
               <div className="flex items-center gap-2 mb-3">
                 <Coins className="h-4 w-4 text-amber-400" />
-                <h2 className="text-sm font-semibold text-slate-200">当日 AI 成本</h2>
+                <h2 className="text-sm font-semibold text-slate-200">日报窗口 AI 成本</h2>
               </div>
               <div className="grid grid-cols-3 gap-2 text-center">
                 <div>

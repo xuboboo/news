@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     report_push_feishu_secret: str = ""  # 飞书机器人开启「签名校验」时必填，未开启留空
 
     # —— AI 成本治理（面板可热调） ——
-    ai_daily_cost_budget: float = 0.0    # 单日（UTC 日界）AI 成本预算（元）；0 = 不告警
+    ai_daily_cost_budget: float = 0.0    # 单日（北京时间日界）AI 成本预算（元）；0 = 不告警
     ai_usage_retention_days: int = 365   # ai_usage_log 流水保留天数；0 = 永久保留
 
     # —— 安全 ——

@@ -332,7 +332,7 @@ export const deleteUsagePrice = (model: string) =>
   });
 
 /** 导出流水 CSV：会话 Cookie 同源自动携带，fetch + blob 触发浏览器下载。
- * range 可选（含端点、UTC 日界）；filters 可选（与明细页过滤同白名单），不传 = 全量导出。 */
+ * range 可选（含端点、北京时间日界）；filters 可选（与明细页过滤同白名单），不传 = 全量导出。 */
 export async function exportUsageCsv(
   range?: { start?: string; end?: string },
   filters?: UsageLogFilters,

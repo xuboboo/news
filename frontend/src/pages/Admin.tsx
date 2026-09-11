@@ -164,7 +164,7 @@ const GROUPS: { title: string; hint: string; keys: string[] }[] = [
   },
   {
     title: '日报推送（企业微信 / 飞书）',
-    hint: '每日 08:00 生成当期日报后自动推送（昨日手动重算同推；历史补算/空报告不推）；总开关打开 + 任一通道填 URL 即启用，双通道可并存',
+    hint: '每日 08:00 生成当期日报后自动推送（不传日期的手动触发同样推送；历史补算/空报告不推）；总开关打开 + 任一通道填 URL 即启用，双通道可并存',
     keys: [
       'report_push_enabled',
       'report_push_wecom_webhook_url',
@@ -174,7 +174,7 @@ const GROUPS: { title: string; hint: string; keys: string[] }[] = [
   },
   {
     title: 'AI 成本治理',
-    hint: '日预算超限经告警 webhook 推送（0 = 关闭，UTC 日界）；成本看板流水保留天数超期由周清理删除（0 = 永久保留，归档请先用看板导出 CSV）',
+    hint: '日预算超限经告警 webhook 推送（0 = 关闭，北京时间日界）；成本看板流水保留天数超期由周清理删除（0 = 永久保留，归档请先用看板导出 CSV）',
     keys: ['ai_daily_cost_budget', 'ai_usage_retention_days'],
   },
 ];
@@ -795,7 +795,7 @@ export default function Admin() {
               value={reportDate}
               onChange={(e) => setReportDate(e.target.value)}
               max={toDateKey(Date.now())}
-              title="留空 = 生成昨日（UTC）日报；选择日期可补生成任意一天（未来日期会被拒绝）"
+              title="留空 = 生成今天的发布期刊（统计北京时间昨日全天）；选择日期可补生成任意一天（未来日期会被拒绝）"
               className="chip bg-radar-card border border-radar-border text-slate-400 [color-scheme:dark]"
             />
             <button onClick={() => trigger('crawl')} disabled={busy === 'trigger-crawl'} className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40">

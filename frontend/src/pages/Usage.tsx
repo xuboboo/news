@@ -66,7 +66,7 @@ function fmtTokens(n: number | undefined): string {
 
 function fmtTime(iso: string | null): string {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString('zh-CN', { hour12: false });
+  return new Date(iso).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' });
 }
 
 function fmtDuration(ms: number | null): string {
@@ -74,13 +74,24 @@ function fmtDuration(ms: number | null): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
 }
 
-/** UTC 日期串（趋势分桶按 UTC 日界，与后端口径一致） */
-function utcToday(): string {
-  return new Date().toISOString().slice(0, 10);
+/** 北京时间日期串（趋势分桶按北京时间日界，与后端口径一致）。 */
+function bjDateKey(date: Date): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function bjToday(): string {
+  return bjDateKey(new Date());
 }
 
 function isoDaysAgo(days: number): string {
-  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  return bjDateKey(new Date(Date.now() - days * 86_400_000));
 }
 
 function StatusChip({ status }: { status: string }) {
@@ -221,7 +232,7 @@ export default function Usage() {
       const range =
         exportRange === 'all'
           ? undefined
-          : { start: isoDaysAgo(exportRange === '7d' ? 6 : 29), end: utcToday() };
+          : { start: isoDaysAgo(exportRange === '7d' ? 6 : 29), end: bjToday() };
       // 明细区的任务/状态筛选一并透传给导出（按钮就放在筛选器旁边，行为要与所见一致）
       const hasFilters = Boolean(filtersRef.current.task_type || filtersRef.current.status);
       await exportUsageCsv(range, filtersRef.current);
@@ -320,16 +331,16 @@ export default function Usage() {
   }
 
   const totalPages = Math.max(1, Math.ceil(logTotal / PAGE_SIZE));
-  const todayStr = utcToday();
-  // 后端恒返回 30 个整 UTC 日桶（缺数据日补零）；倒序展示让最新数据首屏可见，今天高亮
+  const todayStr = bjToday();
+  // 后端恒返回 30 个整北京时间日桶（缺数据日补零）；倒序展示让最新数据首屏可见，今天高亮
   const daily = [...(summary30d?.daily ?? [])].reverse();
   const dailyMax = Math.max(1, ...daily.map((d) => d.tokens));
   // 近 7 天日均成本：尾部 7 个整日桶即最近 7 天（含今天）
   const avg7Cost = daily.length > 0 ? daily.slice(-7).reduce((s, d) => s + d.cost, 0) / 7 : 0;
-  // 月末预估：月累计 / 已过 UTC 天数 × 当月天数（月初首日 elapsed=1 起即可折算）
-  const nowUtc = new Date();
-  const elapsedDays = nowUtc.getUTCDate();
-  const daysInMonth = new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth() + 1, 0)).getUTCDate();
+  // 月末预估：月累计 / 已过北京时间天数 × 当月天数（月初首日 elapsed=1 起即可折算）
+  const [bjYear, bjMonth, bjDay] = todayStr.split('-').map(Number);
+  const elapsedDays = bjDay;
+  const daysInMonth = new Date(Date.UTC(bjYear, bjMonth, 0)).getUTCDate();
   const monthProjection = elapsedDays > 0 ? ((summaryMonth?.total_cost ?? 0) / elapsedDays) * daysInMonth : 0;
   // 缓存命中率 = 缓存命中 token / 输入 token（未配缓存价时也可见节省空间）
   const cacheRate =
@@ -347,7 +358,7 @@ export default function Usage() {
     <div className="space-y-6">
       <PageHeader
         title="成本看板"
-        description="AI 调用计量：Token 用量与成本（入库时按当时价目锁定）· 今日按 UTC 0 点起算，与日报口径一致"
+        description="AI 调用计量：Token 用量与成本（入库时按当时价目锁定）· 今日按北京时间 0 点起算"
       >
         <button
           onClick={() => void refresh()}
@@ -439,7 +450,7 @@ export default function Usage() {
             <div className="text-[11px] text-slate-400 mb-2.5 flex flex-wrap gap-x-4 gap-y-0.5">
               <span>近 7 天日均成本 <span className="text-amber-300/90 tabular-nums">{fmtMoney(avg7Cost)}</span></span>
               <span>本月预估 <span className="text-amber-300/90 tabular-nums">{fmtMoney(monthProjection)}</span>
-                <span className="text-slate-500">（月累计 ÷ 已过 {elapsedDays} 天 × 当月 {daysInMonth} 天，UTC）</span></span>
+                <span className="text-slate-500">（月累计 ÷ 已过 {elapsedDays} 天 × 当月 {daysInMonth} 天，北京时间）</span></span>
             </div>
           )}
           {!daily.some((d) => d.calls > 0) ? (

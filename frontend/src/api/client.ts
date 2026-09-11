@@ -192,7 +192,7 @@ export interface DailyReportView {
   industryChanges: string[];
   sourceStats: { source: string; count: number }[];
   topArticles: ArticleWithScore[];
-  /** 今日 AI 成本（后端日报 content.ai_cost；本地兜底模式无此字段） */
+  /** 日报窗口 AI 成本（后端日报 content.ai_cost；本地兜底模式无此字段） */
   aiCost?: { calls: number; tokens: number; cost: number };
   /** 当日窗口文章总数（content.articles_total；历史快照缺省时回退收录条数） */
   articlesTotal?: number;

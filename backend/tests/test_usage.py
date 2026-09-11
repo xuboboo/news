@@ -5,8 +5,8 @@ P0 回归教训：extract_openai_usage 曾返回 total_tokens 而 record_usage �
 test_record_usage_accepts_extracted_usage 即该缺陷的永久哨兵。
 
 DB 相关测试用 SQLite 内存库，仅建 AiUsageLog/ModelPrice 两张表
-（article 含 pgvector Vector 列，SQLite 建不了）；日趋势的 UTC 日桶表达式已做
-方言自适应（PG=timezone('UTC', ts)，SQLite=date()），include_daily=True 可直接测
+（article 含 pgvector Vector 列，SQLite 建不了）；日趋势的北京时间日桶表达式已做
+方言自适应（PG=timezone('Asia/Shanghai', ts)，SQLite=date(ts, '+8 hours')），include_daily=True 可直接测
 零填充整日桶（见 test_usage_daily_zero_fill）。
 """
 import inspect
@@ -29,9 +29,11 @@ from app.services.usage_service import (
     price_dict,
     upsert_price,
     usage_day_summary,
+    usage_window_summary,
     usage_logs,
     usage_summary,
 )
+from app.utils.tz import TZ_BJ, bj_now
 
 
 # ———————————————————— P0 回归哨兵 ————————————————————
@@ -197,7 +199,7 @@ def test_upsert_price_sanitizes_bad_values(db):
 def _add_log(db, **kw):
     defaults = dict(
         task_type="summary", trigger="auto", model="glm-4-flash",
-        created_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        created_at=datetime.now(timezone.utc),
         prompt_tokens=100, completion_tokens=50, cached_tokens=0, total_tokens=150,
         latency_ms=800, status="success", cost=0.001,
     )
@@ -233,9 +235,10 @@ def test_usage_summary_totals_coverage_groups(db):
 
 
 def test_usage_period_boundaries(db):
-    """today 只含 UTC 0 点后；month 从 1 号起算。"""
-    now = datetime.now(timezone.utc)
-    _add_log(db, created_at=now - timedelta(hours=1))                       # 今天
+    """today 只含北京时间 0 点后；month 从北京时间 1 号起算。"""
+    now_bj = bj_now().replace(hour=12, minute=0, second=0, microsecond=0)
+    now = now_bj.astimezone(timezone.utc)
+    _add_log(db, created_at=now)                                             # 今天
     _add_log(db, created_at=now - timedelta(days=2), cost=0.5)              # 前天
     assert usage_summary(db, "today", include_daily=False)["total_calls"] == 1
     assert usage_summary(db, "30d", include_daily=False)["total_calls"] == 2
@@ -259,9 +262,10 @@ def test_usage_summary_unpriced_models(db):
 
 
 def test_usage_daily_zero_fill(db):
-    """日趋势恒为 30 个整 UTC 日桶：缺失日补零、有数日聚合、末桶=今天。"""
-    # 锚定 UTC 正午：now-1h/2h 恒落在今天，避免 UTC 0-1 点跑测跨日
-    now = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+    """日趋势恒为 30 个整北京时间日桶：缺失日补零、有数日聚合、末桶=今天。"""
+    # 锚定北京时间正午，再转 UTC 写入，避免 SQLite naive 时间丢失时区信息。
+    now_bj = bj_now().replace(hour=12, minute=0, second=0, microsecond=0)
+    now = now_bj.astimezone(timezone.utc)
     _add_log(db, total_tokens=150, cost=0.1, created_at=now - timedelta(hours=1))
     _add_log(db, total_tokens=150, cost=0.1, created_at=now - timedelta(hours=2))
     _add_log(db, total_tokens=90, cost=0.3, created_at=now - timedelta(days=3, hours=1))
@@ -269,7 +273,7 @@ def test_usage_daily_zero_fill(db):
     s = usage_summary(db, "30d", include_daily=True, include_groups=False)
     days = s["daily"]
     assert len(days) == 30
-    # 日期连续且最后一桶是今天（UTC）
+    # 日期连续且最后一桶是今天（北京时间）
     assert days[-1]["date"] == now.date().isoformat()
     expected_dates = {
         (now - timedelta(days=i)).date().isoformat() for i in range(30)
@@ -286,15 +290,32 @@ def test_usage_daily_zero_fill(db):
 
 
 def test_usage_day_summary(db):
-    # 锚定当日 UTC 正午造数：now - 5h 会在 UTC 05 点前跑测时跨到昨天（按自然日切分）
+    # UTC 前一日 16:00 已属于北京时间当天，验证日汇总按北京时间切分
     noon = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
-    day = noon.date()
+    day = noon.astimezone(TZ_BJ).date()
     _add_log(db, cost=0.25, created_at=noon)
-    _add_log(db, cost=0.25, created_at=noon - timedelta(hours=5))
+    _add_log(db, cost=0.25, created_at=noon - timedelta(hours=20))
     r = usage_day_summary(db, day)
     assert r["calls"] == 2
     assert r["tokens"] == 300
     assert r["cost"] == pytest.approx(0.5, abs=1e-9)
+
+
+def test_usage_window_summary_is_left_closed_right_open(db):
+    """日报窗口必须包含起点、不包含终点，且支持北京时间边界。"""
+    bj = timezone(timedelta(hours=8))
+    start = datetime(2026, 9, 10, tzinfo=bj)
+    end = start + timedelta(days=1)
+    _add_log(db, cost=0.25, total_tokens=100, created_at=start.astimezone(timezone.utc))
+    _add_log(db, cost=0.50, total_tokens=100,
+             created_at=(end - timedelta(seconds=1)).astimezone(timezone.utc))
+    _add_log(db, cost=1.00, total_tokens=100, created_at=end.astimezone(timezone.utc))
+
+    r = usage_window_summary(db, start, end)
+
+    assert r["calls"] == 2
+    assert r["tokens"] == 200
+    assert r["cost"] == pytest.approx(0.75, abs=1e-9)
 
 
 def test_usage_logs_filters_and_pagination(db):

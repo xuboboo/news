@@ -214,7 +214,7 @@ def test_usage_summary_api_shape(super_client):
     assert "unpriced_models" in body
     assert "total_prompt" in body
     assert "daily_budget" in body  # 面板预算随汇总返回（0 = 未启用）
-    assert len(body["daily"]) == 30  # 恒 30 个整 UTC 日桶
+    assert len(body["daily"]) == 30  # 恒 30 个整北京时间日桶
     assert usage_service.LOG_TASK_TYPES == (
         "summary", "event_summary", "embedding", "report", "conn_test",
     )

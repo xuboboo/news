@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.db import new_session
 from app.models.article import Article
 from app.models.usage import AiUsageLog, ModelPrice
+from app.utils.tz import TZ_BJ, bj_now
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +268,7 @@ def csv_safe_cell(value) -> str:
 # ———————————————————— 聚合查询（供 API / 日报） ————————————————————
 
 def _period_start(period: str, now: datetime) -> tuple[datetime, str]:
-    """period → 起始时间（today 按 UTC 0 点起算，与日报日期口径一致）。"""
+    """period → 起始时间（today/month 按北京时间自然日切分）。"""
     if period == "7d":
         return now - timedelta(days=7), "7d"
     if period == "30d":
@@ -295,15 +296,22 @@ def _group_stats(q, col) -> list[dict]:
     ]
 
 
-def _utc_day_expr(db: Session):
-    """按 UTC 日界取日的可移植表达式。
+def _bj_day_expr(db: Session):
+    """按北京时间日界取日的可移植表达式。
 
-    PG 必须用 timezone('UTC', timestamptz) 钉死 UTC（否则随会话时区漂移）；
-    SQLite（测试库）无 timezone 函数，退回 date()（SQLite 无时区概念，天然 UTC）。
+    PG 显式转换到 Asia/Shanghai，避免随会话时区漂移；SQLite 测试库把
+    DateTime 按 UTC naive 保存，因此先加 8 小时再取日期。
     """
     if db.get_bind().dialect.name == "postgresql":
-        return func.date(func.timezone("UTC", AiUsageLog.created_at))
-    return func.date(AiUsageLog.created_at)
+        return func.date(func.timezone("Asia/Shanghai", AiUsageLog.created_at))
+    return func.date(AiUsageLog.created_at, "+8 hours")
+
+
+def _db_time(db: Session, value: datetime) -> datetime:
+    """将带时区边界转换为 SQLite 测试库使用的 UTC naive 时间。"""
+    if db.get_bind().dialect.name == "sqlite" and value.tzinfo:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
 
 
 def usage_summary(
@@ -316,16 +324,17 @@ def usage_summary(
 
     include_groups：短周期请求可关掉分组统计（前端仅 30d 视图消费）；
     关闭时 by_task_type/by_model 返回空列表（响应形状不变）。
-    include_daily：关掉 30 天日趋势。日趋势恒为 30 个整 UTC 日桶（缺数据日补零），
+    include_daily：关掉 30 天日趋势。日趋势恒为 30 个整北京时间日桶（缺数据日补零），
     与窗口起点取整到日界，图形不再把无调用日误读成缺数据。
 
     unpriced_models 与分组无关、恒返回：近窗口有调用但价目表没配单价、且非
     本地降级模型的模型（本地模型 cost=0 是设计使然）——账面成本被低估的盲区告警。
     """
-    now = datetime.now(timezone.utc)
+    now = bj_now()
     start, period = _period_start(period, now)
+    query_start = _db_time(db, start)
 
-    q = db.query(AiUsageLog).filter(AiUsageLog.created_at >= start)
+    q = db.query(AiUsageLog).filter(AiUsageLog.created_at >= query_start)
 
     # 单次条件聚合算完总量与全部健康指标（此前是 6 次独立窗口扫描；看板每次刷新
     # 调 today/month/30d 三次本接口，扫描次数直接 ×3）。响应语义与拆分版完全一致。
@@ -365,27 +374,27 @@ def usage_summary(
         db.query(func.count(AiUsageLog.id))
         .filter(
             AiUsageLog.task_type == "event_summary",
-            AiUsageLog.created_at >= now - timedelta(hours=24),
+            AiUsageLog.created_at >= _db_time(db, now - timedelta(hours=24)),
         )
         .scalar() or 0
     )
 
     daily: list[dict] = []
     if include_daily:
-        # 近 30 个整 UTC 日（含今天）：起点取整到日界，缺失日补零
+        # 近 30 个整北京时间日（含今天）：起点取整到日界，缺失日补零
         day_start = (now - timedelta(days=29)).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        utc_day = _utc_day_expr(db)
+        bj_day = _bj_day_expr(db)
         daily_rows = (
             db.query(
-                utc_day,
+                bj_day,
                 func.count(),
                 func.coalesce(func.sum(AiUsageLog.total_tokens), 0),
                 func.coalesce(func.sum(AiUsageLog.cost), 0),
             )
-            .filter(AiUsageLog.created_at >= day_start)
-            .group_by(utc_day)
+            .filter(AiUsageLog.created_at >= _db_time(db, day_start))
+            .group_by(bj_day)
             .all()
         )
         by_date = {str(r[0]): r for r in daily_rows}
@@ -418,17 +427,22 @@ def usage_summary(
     }
 
 
-def usage_day_summary(db: Session, day: date_type) -> dict:
-    """某自然日（UTC 0-24 点，与日报日期口径一致）的调用 / token / 成本汇总。"""
-    start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
-    end = start + timedelta(days=1)
+def usage_window_summary(db: Session, start: datetime, end: datetime) -> dict:
+    """按左闭右开时间窗口汇总调用 / token / 成本。
+
+    调用方负责决定时间窗口的业务时区；日报使用北京时间自然日窗口，
+    成本看板和预算告警使用北京时间日界；数据库仍按 UTC 时刻保存。
+    """
     row = (
         db.query(
             func.count(),
             func.coalesce(func.sum(AiUsageLog.total_tokens), 0),
             func.coalesce(func.sum(AiUsageLog.cost), 0),
         )
-        .filter(AiUsageLog.created_at >= start, AiUsageLog.created_at < end)
+        .filter(
+            AiUsageLog.created_at >= _db_time(db, start),
+            AiUsageLog.created_at < _db_time(db, end),
+        )
         .one()
     )
     return {
@@ -436,6 +450,13 @@ def usage_day_summary(db: Session, day: date_type) -> dict:
         "tokens": int(row[1] or 0),
         "cost": round(float(row[2] or 0), 6),
     }
+
+
+def usage_day_summary(db: Session, day: date_type) -> dict:
+    """某北京时间自然日（00:00-24:00）的调用 / token / 成本汇总。"""
+    start = datetime(day.year, day.month, day.day, tzinfo=TZ_BJ)
+    end = start + timedelta(days=1)
+    return usage_window_summary(db, start, end)
 
 
 def usage_logs(

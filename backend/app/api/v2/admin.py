@@ -30,6 +30,7 @@ from app.models.user import ROLE_SUPER_ADMIN
 from app.services import audit_service, config_service, usage_service
 from app.services.embedding_service import get_embedding_fingerprint
 from app.services.infra_status import cadence_warnings, celery_workers_ping, redis_ping
+from app.utils.tz import TZ_BJ
 from app.utils.url_guard import UrlNotAllowed, assert_public_http_url
 
 # 变更类接口统一过 CSRF 防线（X-Requested-With + JSON body）：
@@ -511,7 +512,7 @@ def usage_summary_api(
     groups: bool = Query(True, description="是否计算按任务/模型分组（仅 30d 视图需要）"),
     db: Session = Depends(get_db),
 ):
-    """AI 用量/成本汇总。today 按 UTC 0 点起算，与日报日期口径一致。"""
+    """AI 用量/成本汇总。today/month/日趋势均按北京时间自然日切分。"""
     payload = usage_service.usage_summary(db, period, include_daily=daily, include_groups=groups)
     # 当日生效预算随汇总返回：前端今日成本卡直接展示预算用量（0 = 未启用）
     try:
@@ -548,7 +549,7 @@ def _usage_csv_stream(
 ):
     """分批产出 CSV 行（UTF-8 BOM 由首段携带；首行为对账口径注释）。
 
-    start/end：可选 UTC 时间范围（左闭右开）；task_type/status：可选流水过滤
+    start/end：可选北京时间自然日范围（左闭右开）；task_type/status：可选流水过滤
     （与 /usage/logs 同一白名单）。外部文本字段过 csv_safe_cell 防公式注入；
     cost 固定 6 位小数，避免极小值变科学计数法。
     """
@@ -622,12 +623,12 @@ def usage_export(
 ):
     """流水导出 CSV（UTF-8 BOM；首行注释说明本地计费与供应商账单的口径差异）。
 
-    start/end 可选（含端点、按 UTC 日界），task_type/status 可选（与明细页过滤
+    start/end 可选（含端点、按北京时间日界），task_type/status 可选（与明细页过滤
     同白名单，前端把当前筛选一并透传），不传 = 全量导出。
     """
-    start_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc) if start else None
+    start_dt = datetime.fromisoformat(start).replace(tzinfo=TZ_BJ) if start else None
     end_dt = (
-        datetime.fromisoformat(end).replace(tzinfo=timezone.utc) + timedelta(days=1) if end else None
+        datetime.fromisoformat(end).replace(tzinfo=TZ_BJ) + timedelta(days=1) if end else None
     )
     filename = "ai-usage"
     scope = []
