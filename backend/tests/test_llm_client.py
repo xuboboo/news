@@ -186,6 +186,104 @@ def test_chat_anthropic_end_to_end(monkeypatch):
     assert usage["prompt_tokens"] == 5 and usage["completion_tokens"] == 2
 
 
+# ———————— 事件 LLM 总结接线（2026-09-12） ————————
+
+def _member(title: str, source: str = "IT之家"):
+    """瞬态 Article：_rebuild_event_content 只读 title/source/publish_time/summary。"""
+    from datetime import datetime, timezone
+
+    from app.models.article import Article
+
+    return Article(title=title, source=source, publish_time=datetime(2026, 9, 12, tzinfo=timezone.utc))
+
+
+def test_rebuild_event_content_passes_effective_llm(db, monkeypatch):
+    """接线回归：重算必须把生效 LLM 配置（含协议）传给 _llm_event_summary——
+    此前漏传该参数，事件 LLM 总结自创建起从未生效（死代码）。"""
+    from app.models.event import HotEvent
+    from app.services import event_service
+
+    s = db.factory()
+    for k, v in (("llm_base_url", "https://x.test/anthropic"), ("llm_api_key", "k"),
+                 ("llm_model", "m"), ("llm_protocol", "anthropic")):
+        s.add(config_service.SystemSetting(key=k, value=v))
+    s.commit()
+
+    captured = {}
+
+    def fake_summary(title, members, llm=None, event_id=None):
+        captured["llm"] = llm
+        return ("LLM 事件总结。", [])  # impacts 缺失 → 应回落事实拼装
+
+    monkeypatch.setattr(event_service, "_llm_event_summary", fake_summary)
+    ev = HotEvent(title="旧标题")
+    members = [_member("报道A"), _member("报道B", "快科技")]
+    event_service._rebuild_event_content(s, ev, members)
+
+    assert captured["llm"] == ("https://x.test/anthropic", "k", "m", "anthropic")
+    assert ev.summary == "LLM 事件总结。"
+    assert ev.impacts and ev.impacts == event_service._compose_impacts(members)
+    assert ev.timeline
+
+
+def test_rebuild_event_content_falls_back_when_unconfigured(db, monkeypatch):
+    from app.core.config import get_settings
+    from app.models.event import HotEvent
+    from app.services import event_service
+
+    # 隔离 .env：未配置 = 空四元组（防宿主机 .env 漂移导致断言不稳）
+    for k in ("llm_base_url", "llm_api_key", "llm_model"):
+        monkeypatch.setattr(get_settings(), k, "")
+    monkeypatch.setattr(get_settings(), "llm_protocol", "openai")
+
+    captured = {}
+
+    def fake_summary(title, members, llm=None, event_id=None):
+        captured["llm"] = llm
+        return None  # 未配置/失败 → 降级事实拼装
+
+    monkeypatch.setattr(event_service, "_llm_event_summary", fake_summary)
+    ev = HotEvent(title="t")
+    members = [_member("报道A"), _member("报道B", "快科技")]
+    event_service._rebuild_event_content(db.factory(), ev, members)
+
+    assert captured["llm"] == ("", "", "", "openai")
+    assert ev.summary == event_service._compose_summary(members)
+
+
+def test_llm_event_summary_empty_summary_recorded_parse_fail(monkeypatch):
+    """LLM 返回空 summary：不落 success（token 已花按 parse_fail 入账），
+    返回 None 让调用方降级事实拼装——防线在 success 落账之前。"""
+    import types
+
+    from app.services import event_service
+
+    # URL 守卫私网豁免（同 conftest 的 open_url_guard 语义）：离线 DNS 不可控，
+    # 豁免后守卫只做格式校验，端点确定走到 httpx 桩
+    monkeypatch.setattr(
+        "app.utils.url_guard.get_settings",
+        lambda: types.SimpleNamespace(allow_private_ai_urls=True),
+    )
+
+    class _R:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"summary":"   ","impacts":["x"]}'}}],
+                    "usage": {"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13}}
+
+    monkeypatch.setattr(event_service.llm_client.httpx, "post", lambda *a, **k: _R())
+    captured = {}
+    monkeypatch.setattr(event_service, "record_usage", lambda **kw: captured.setdefault("s", kw))
+    out = event_service._llm_event_summary(
+        "标题", [_member("A")], llm=("https://llm.example.test", "k", "m", "openai"), event_id=7,
+    )
+    assert out is None
+    assert captured["s"]["status"] == "parse_fail"
+    assert "empty summary" in (captured["s"]["error"] or "")
+    assert captured["s"]["total_tokens"] == 13  # 花掉的 token 不丢账
+
+
 # ———————————————————— 配置层：llm_protocol ————————————————————
 
 def test_effective_llm_returns_protocol_and_sanitizes_dirty(db, monkeypatch):

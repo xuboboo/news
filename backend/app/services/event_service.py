@@ -121,6 +121,11 @@ def _llm_event_summary(
         )
         data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
         raw_impacts = data.get("impacts")
+        summary = re.sub(r"\s+", " ", str(data.get("summary", ""))).strip()
+        if not summary:
+            # 空总结不落 success（同 _llm_overview 的 empty overview 口径）：
+            # token 已花按 parse_fail 入账，调用方降级事实拼装
+            raise ValueError("empty summary")
         record_usage(
             task_type="event_summary",
             model=model,
@@ -130,7 +135,7 @@ def _llm_event_summary(
             **usage,
         )
         return (
-            truncate(str(data.get("summary", "")), 300),
+            truncate(summary, 300),
             # 容器类型守卫：impacts 非 list（字符串/dict）时按缺失处理，
             # 降级事实拼装（同 summary.key_points 的防线）
             [str(i) for i in raw_impacts][:4] if isinstance(raw_impacts, list) else [],
@@ -198,10 +203,16 @@ def _rebuild_event_content(db: Session, ev: HotEvent, members: list[Article]) ->
         [m.title for m in members],
         [set(extract_keywords(m.title or "", 10)) for m in members],
     )
-    llm = _llm_event_summary(ev.title, members, event_id=ev.id)
+    # LLM 配置运行时可改（管理面板），每次重算读取生效值；未配置/失败在
+    # _llm_event_summary 内落账并返回 None，降级事实拼装（业务零感知）。
+    # 此处曾是漏传 llm 的死代码——设计上的唯一事件 LLM 调用点自创建起从未生效。
+    llm = _llm_event_summary(
+        ev.title, members, llm=config_service.effective_llm(db), event_id=ev.id,
+    )
     ev.summary = llm[0] if llm else _compose_summary(members)
     if llm:
-        ev.impacts = llm[1]
+        # LLM 只给了总结没给 impacts 时，核心影响回落事实拼装，不空着
+        ev.impacts = llm[1] or _compose_impacts(members)
     ev.timeline = [
         {
             "time": _tz(a.publish_time).isoformat(),
