@@ -120,23 +120,38 @@ def extract_anthropic_usage(body: dict) -> dict:
 
 
 def parse_response(protocol: str, resp) -> Tuple[str, dict]:
-    """从 HTTP 200 响应提取 (文本, 归一化 usage)；结构不符抛 LLMFormatError（带已提取 usage）。"""
+    """从 HTTP 200 响应提取 (文本, 归一化 usage)；结构不符抛 LLMFormatError（带已提取 usage）。
+
+    防线：第三方网关的变形响应（usage 脏值 / content 为纯字符串）一律收敛为
+    LLMFormatError，不得抛 ValueError/AttributeError 之类裸异常——管理端测试
+    连通只接 LLMFormatError，裸异常会变 500。
+    """
     try:
         data = resp.json()
     except Exception as exc:
         raise LLMFormatError(f"响应非 JSON：{exc}") from exc
     if normalize_protocol(protocol) == "anthropic":
-        usage = extract_anthropic_usage(data)
+        try:
+            usage = extract_anthropic_usage(data)
+        except Exception as exc:
+            raise LLMFormatError(f"usage 字段异常：{exc}") from exc
         blocks = data.get("content") if isinstance(data, dict) else None
-        texts = [
-            b.get("text", "")
-            for b in (blocks or [])
-            if isinstance(b, dict) and b.get("type") == "text"
-        ]
+        if isinstance(blocks, str):
+            return blocks, usage  # 简陋网关直接回字符串形式
+        # 规范 block 列表（type=text）与裸字符串项统一按序收集，取首个 text
+        texts: list[str] = []
+        for b in blocks or []:
+            if isinstance(b, dict) and b.get("type") == "text":
+                texts.append(str(b.get("text") or ""))
+            elif isinstance(b, str):
+                texts.append(b)
         if not texts:
             raise LLMFormatError("响应无 text 内容块", usage)
-        return str(texts[0] or ""), usage
-    usage = extract_openai_usage(data)
+        return texts[0], usage
+    try:
+        usage = extract_openai_usage(data)
+    except Exception as exc:
+        raise LLMFormatError(f"usage 字段异常：{exc}") from exc
     try:
         text = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
@@ -164,7 +179,9 @@ def chat(
     )
     try:
         resp = httpx.post(url, headers=headers, json=body, timeout=timeout)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
+        # InvalidURL 不是 HTTPError 子类（如端口写错 'notaport'），漏接会击穿
+        # 异常分型：业务侧误记 parse_fail、管理端测试连通 500 而非 502
         raise LLMAPIError(str(exc)) from exc
     if resp.status_code != 200:
         raise LLMAPIError(f"HTTP {resp.status_code}：{resp.text[:200]}")

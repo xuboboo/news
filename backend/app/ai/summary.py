@@ -142,18 +142,6 @@ def _summarize_by_llm(
             tags=[str(t) for t in data.get("tags")][:5] if isinstance(data.get("tags"), list) else [],
             model=model,
         )
-    except llm_client.LLMAPIError as exc:
-        record_usage(
-            task_type="summary",
-            model=model,
-            status="api_fail",
-            error=str(exc),
-            latency_ms=_elapsed_ms(start),
-            article_id=article_id,
-            trigger=trigger,
-            **usage,
-        )
-        return None
     except (llm_client.LLMAPIError, UrlNotAllowed) as exc:
         # 连接失败 / 非 200 / URL 守卫拦截（未发出请求）→ api_fail
         record_usage(

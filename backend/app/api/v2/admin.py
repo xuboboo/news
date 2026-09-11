@@ -188,7 +188,8 @@ def test_llm(payload: dict | None = None, request: Request = None, db: Session =
     start = time.monotonic()
     try:
         resp = httpx.post(url, json=body, headers=headers, timeout=25)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
+        # InvalidURL 不是 HTTPError 子类，漏接会把坏 base_url 变 502 之外的结构性 500
         _log_conn_usage(model, "api_fail", int((time.monotonic() - start) * 1000), error=str(exc))
         audit_service.record(db, "admin.test_llm", request=request, user=actor,
                              detail={"ok": False, "model": model, "error": str(exc)[:200]})

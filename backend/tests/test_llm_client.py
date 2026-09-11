@@ -113,6 +113,47 @@ def test_parse_response_non_json():
     assert ei.value.usage == {}  # 整体非 JSON → 记 0（无从得知消耗）
 
 
+# ———————— 网关变形响应与脏值（2026-09-12 审计修复回归） ————————
+
+def test_parse_response_anthropic_content_plain_string():
+    """简陋网关把 content 回成纯字符串：应成功解析而非误判 parse_fail（token 已花）。"""
+    text, usage = llm_client.parse_response("anthropic", _resp({
+        "content": "hello world",
+        "usage": {"input_tokens": 5, "output_tokens": 1},
+    }))
+    assert text == "hello world"
+    assert usage["prompt_tokens"] == 5
+
+
+def test_parse_response_anthropic_content_mixed_blocks_order():
+    """裸字符串项与规范 text block 混合：按原顺序取首个。"""
+    text, _ = llm_client.parse_response("anthropic", _resp({
+        "content": ["raw text", {"type": "text", "text": "block text"}],
+    }))
+    assert text == "raw text"
+
+
+def test_parse_response_garbage_usage_raises_format_error_not_bare():
+    """usage 脏值（字符串值/列表）必须收敛为 LLMFormatError——管理端只接该类型，
+    裸 ValueError/AttributeError 逃逸会变 500。"""
+    dirty = [
+        ("anthropic", {"content": [{"type": "text", "text": "x"}], "usage": {"input_tokens": "many"}}),
+        ("anthropic", {"content": [{"type": "text", "text": "x"}], "usage": "oops"}),
+        ("openai", {"choices": [{"message": {"content": "x"}}], "usage": [1, 2]}),
+        ("openai", {"choices": [{"message": {"content": "x"}}], "usage": "oops"}),
+    ]
+    for proto, body in dirty:
+        with pytest.raises(llm_client.LLMFormatError) as ei:
+            llm_client.parse_response(proto, _resp(body))
+        assert ei.value.usage == {}
+
+
+def test_chat_invalid_url_raises_api_error():
+    """非法端口/URL 抛 InvalidURL（非 HTTPError 子类），chat 必须归类为 LLMAPIError。"""
+    with pytest.raises(llm_client.LLMAPIError):
+        llm_client.chat("https://host:notaport/", "k", "m", "openai", "hi", timeout=3)
+
+
 # ———————————————————— chat：异常分型 ————————————————————
 
 def test_chat_non_200_raises_api_error(monkeypatch):

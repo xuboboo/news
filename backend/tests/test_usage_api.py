@@ -193,6 +193,25 @@ def test_llm_conn_rejects_unknown_protocol(super_client, monkeypatch, usage_in_t
     assert _logs(db) == []
 
 
+def test_llm_conn_invalid_base_url_returns_502(super_client, monkeypatch, usage_in_testdb, open_url_guard, db):
+    """坏 base_url（非法端口）→ InvalidURL 非 HTTPError 子类，漏接会变结构性 500；
+    必须归 api_fail 并以 502 透出（2026-09-12 审计修复回归）。"""
+    import httpx as httpx_mod
+
+    def _boom(url, *a, **kw):
+        raise httpx_mod.InvalidURL("Invalid port: 'notaport'")
+
+    monkeypatch.setattr("app.api.v2.admin.httpx.post", _boom)
+    payload = {**LLM_PAYLOAD, "base_url": "https://host:notaport/"}
+    r = super_client.post("/api/v2/admin/test/llm", json=payload, headers=H)
+    assert r.status_code == 502
+
+    rows = _logs(db)
+    assert len(rows) == 1
+    assert rows[0].status == "api_fail"
+    assert "Invalid port" in (rows[0].error or "")
+
+
 # ———————————————————— /test/embedding 落账 ————————————————————
 
 def test_embedding_conn_success_records_usage(super_client, monkeypatch, usage_in_testdb, open_url_guard, db):

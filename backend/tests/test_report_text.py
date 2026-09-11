@@ -392,6 +392,24 @@ def test_llm_overview_api_fail_returns_none(monkeypatch):
     assert captured["s"]["task_type"] == "report"
 
 
+def test_llm_overview_invalid_url_classified_api_fail(monkeypatch):
+    """InvalidURL 非 HTTPError 子类：漏接会被误记 parse_fail（token 未花却入「已花」账），
+    必须归 api_fail（2026-09-12 审计修复回归）。"""
+    import httpx as httpx_mod
+
+    from app.services import report_service
+
+    def boom(*a, **k):
+        raise httpx_mod.InvalidURL("Invalid port: 'notaport'")
+
+    monkeypatch.setattr(report_service.llm_client.httpx, "post", boom)
+    captured = {}
+    monkeypatch.setattr(report_service, "record_usage", lambda **kw: captured.setdefault("s", kw))
+    assert _llm_overview() is None
+    assert captured["s"]["status"] == "api_fail"
+    assert captured["s"].get("total_tokens", 0) == 0  # api_fail 分支不带 token 键（=0）
+
+
 def test_llm_overview_parse_fail_keeps_tokens(monkeypatch):
     """HTTP 200 但无 choices（结构异常）→ parse_fail 落账，已提取 usage 不丢。"""
     from app.services import report_service
