@@ -15,6 +15,9 @@ BASE = "http://127.0.0.1:18000/api/v2"
 AUDIT_EMAIL = os.environ.get("AUDIT_EMAIL", "")
 AUDIT_PASSWORD = os.environ.get("AUDIT_PASSWORD", "")
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
+# 全内网部署（ALLOW_PRIVATE_AI_URLS=true）守卫放行私网地址，SSRF 用例预期随之变化：
+# 豁免模式下请求会真实外连，无监听端口时以 502（连接失败）呈现而非 400（守卫拦截）
+ALLOW_PRIVATE_AI_URLS = os.environ.get("ALLOW_PRIVATE_AI_URLS", "").strip().lower() in ("1", "true", "yes", "on")
 results = []
 
 # 会话画像：CookieJar 自动管理 hjradar_session
@@ -73,7 +76,7 @@ if LOGGED_IN:
     d = call("系统统计", "/stats")
     check("stats 字段齐全", d and all(k in d for k in
           ["articles_total", "articles_summarized", "events_total", "ai_coverage", "last_crawl"]))
-    check("AI 覆盖率=100%", d and d["ai_coverage"] == 100.0, str(d and d["ai_coverage"]))
+    check("AI 覆盖率=100%", d is not None and d.get("ai_coverage") == 100.0, str(d and d.get("ai_coverage")))
 
     # 热榜
     d = call("热榜(全部)", "/hot/board")
@@ -212,14 +215,17 @@ if ADMIN_TOKEN:
     except Exception as exc:
         check("config 覆盖写入/清除用例", False, str(exc))
 
-    # 5) SSRF 拦截：私网地址必须 400
+    # 5) SSRF 拦截：公网部署私网地址必须 400；内网豁免部署真实外连失败 → 502
     s, body, _ = call_with_headers(
         "test/llm 私网地址", "/admin/test/llm",
         headers={"X-Admin-Token": ADMIN_TOKEN, "Content-Type": "application/json",
                  "X-Requested-With": "XMLHttpRequest"},
         method="POST", body=json.dumps({"base_url": "http://127.0.0.1:9999/v1", "api_key": "x", "model": "m"}),
     )
-    check("test/llm 私网地址 → 400", s == 400, f"status={s} body={body[:120]}")
+    if ALLOW_PRIVATE_AI_URLS:
+        check("test/llm 私网地址（豁免模式）→ 502", s == 502, f"status={s} body={body[:120]}")
+    else:
+        check("test/llm 私网地址 → 400", s == 400, f"status={s} body={body[:120]}")
 else:
     check("ADMIN_TOKEN 未设置，跳过带 token 用例", True, "设 ADMIN_TOKEN 环境变量后重跑")
 
