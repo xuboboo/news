@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
+from app.ai import llm_client
 from app.auth.deps import attach_token_principal, authenticate_session, current_user_of, require_json_mutation
 from app.core.config import get_settings
 from app.core.db import get_db
@@ -138,27 +139,38 @@ def _safe_json(resp) -> dict:
 
 
 def _log_conn_usage(model: str, status: str, latency_ms: int,
-                    error: str | None = None, body: dict | None = None) -> None:
+                    error: str | None = None, body: dict | None = None,
+                    usage: dict | None = None) -> None:
     """「测试连接」的用量落账：真实供应商调用烧 token，必须与业务调用同一本账，
-    否则看板成本低估（ai_usage_log 完整性）。失败早于 usage 提取时 body 缺省=全 0。"""
+    否则看板成本低估（ai_usage_log 完整性）。失败早于 usage 提取时 body 缺省=全 0；
+    双协议归一化用量可经 usage 直传（anthropic 响应体 extract_openai_usage 读不出）。"""
     usage_service.record_usage(
         task_type="conn_test", trigger="manual", model=model, status=status,
         latency_ms=latency_ms, error=error,
-        **usage_service.extract_openai_usage(body),
+        **(usage if usage is not None else usage_service.extract_openai_usage(body)),
     )
 
 
 @router.post("/test/llm", dependencies=[Depends(require_admin)])
 def test_llm(payload: dict | None = None, request: Request = None, db: Session = Depends(get_db)):
-    """用一条最小请求验证 LLM 连通性；可传入未保存的 base_url/api_key/model 先测后存。"""
+    """用一条最小请求验证 LLM 连通性；可传入未保存的 base_url/api_key/model/protocol 先测后存。
+
+    protocol 省略时取生效配置；双协议请求构造与响应解析复用 llm_client，
+    anthropic 走 /v1/messages + x-api-key（usage 由适配层归一化后再落账）。
+    """
     p = payload or {}
     actor = current_user_of(request)
     try:
         base_url = str(p.get("base_url") or config_service.get_effective(db, "llm_base_url"))
         api_key = str(p.get("api_key") or config_service.get_effective(db, "llm_api_key"))
         model = str(p.get("model") or config_service.get_effective(db, "llm_model"))
+        protocol = str(p.get("protocol") or config_service.get_effective(db, "llm_protocol") or "openai")
     except KeyError as exc:
         raise HTTPException(400, f"unknown config key: {exc}")
+    try:
+        protocol = llm_client.normalize_protocol(protocol)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
     if not (base_url and api_key and model):
         raise HTTPException(400, "请先填写 LLM base_url / api_key / model 三项")
@@ -170,19 +182,12 @@ def test_llm(payload: dict | None = None, request: Request = None, db: Session =
                              detail={"ok": False, "model": model, "error": str(exc)[:200]})
         raise HTTPException(400, str(exc))
 
-    body = {
-        "model": model,
-        "messages": [{"role": "user", "content": "只回复两个字母：OK"}],
-        "max_tokens": 8,
-        "stream": False,
-    }
-    headers = {"Authorization": f"Bearer {api_key}"}
+    url, headers, body = llm_client.build_request(
+        base_url, api_key, model, protocol, "只回复两个字母：OK", max_tokens=8,
+    )
     start = time.monotonic()
     try:
-        resp = httpx.post(
-            f"{_normalize_base(base_url)}/chat/completions",
-            json=body, headers=headers, timeout=25,
-        )
+        resp = httpx.post(url, json=body, headers=headers, timeout=25)
     except httpx.HTTPError as exc:
         _log_conn_usage(model, "api_fail", int((time.monotonic() - start) * 1000), error=str(exc))
         audit_service.record(db, "admin.test_llm", request=request, user=actor,
@@ -196,15 +201,15 @@ def test_llm(payload: dict | None = None, request: Request = None, db: Session =
                              detail={"ok": False, "model": model, "http_status": resp.status_code})
         raise HTTPException(502, f"HTTP {resp.status_code}：{resp.text[:300]}")
     try:
-        content = resp.json()["choices"][0]["message"]["content"]
-    except Exception:
-        _log_conn_usage(model, "parse_fail", latency, error="响应格式异常", body=_safe_json(resp))
+        content, usage_map = llm_client.parse_response(protocol, resp)
+    except llm_client.LLMFormatError as exc:
+        _log_conn_usage(model, "parse_fail", latency, error="响应格式异常", usage=exc.usage)
         audit_service.record(db, "admin.test_llm", request=request, user=actor,
                              detail={"ok": False, "model": model, "error": "响应格式异常"})
         raise HTTPException(502, f"响应格式异常：{resp.text[:300]}")
-    _log_conn_usage(model, "success", latency, body=_safe_json(resp))
+    _log_conn_usage(model, "success", latency, usage=usage_map)
     audit_service.record(db, "admin.test_llm", request=request, user=actor,
-                         detail={"ok": True, "model": model, "latency_ms": latency})
+                         detail={"ok": True, "model": model, "protocol": protocol, "latency_ms": latency})
     return {"ok": True, "latency_ms": latency, "model": model, "reply": (content or "").strip()[:80]}
 
 

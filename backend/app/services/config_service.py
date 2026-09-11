@@ -19,6 +19,7 @@ ALLOWED_KEYS: dict[str, type] = {
     "llm_base_url": str,
     "llm_api_key": str,
     "llm_model": str,
+    "llm_protocol": str,
     "embedding_base_url": str,
     "embedding_api_key": str,
     "embedding_model": str,
@@ -93,6 +94,9 @@ _FALSE_SPELLINGS = {"0", "false", "no", "off"}
 
 _WEBHOOK_STYLES = {"wecom", "dingtalk", "feishu", "raw"}
 
+# LLM 协议取值（与 llm_client.PROTOCOLS 同口径；此处独立定义避免循环导入）
+LLM_PROTOCOLS = {"openai", "anthropic"}
+
 
 def _coerce(key: str, value: str):
     t = ALLOWED_KEYS[key]
@@ -121,6 +125,8 @@ def _coerce(key: str, value: str):
 
 def _validate_str(key: str, value: str) -> None:
     """字符串键的额外约束（类型转换之外）。"""
+    if key == "llm_protocol" and value not in LLM_PROTOCOLS:
+        raise ValueError(f"llm_protocol 仅支持 {'/'.join(LLM_PROTOCOLS)}")
     if key == "alert_webhook_style" and value not in _WEBHOOK_STYLES:
         raise ValueError(f"alert_webhook_style 仅支持 {'/'.join(sorted(_WEBHOOK_STYLES))}")
     if key == "alert_webhook_url" and not value.lower().startswith(("http://", "https://")):
@@ -167,12 +173,20 @@ def get_effective(db: Session, key: str):
     return raw
 
 
-def effective_llm(db: Session) -> tuple[str, str, str]:
-    """LLM (base_url, api_key, model) 生效配置；未配置返回空串三元组。"""
+def effective_llm(db: Session) -> tuple[str, str, str, str]:
+    """LLM (base_url, api_key, model, protocol) 生效配置；未配置返回空串四元组。
+
+    protocol 脏值（手改 DB / 旧 .env）回落 openai 而非抛错——摘要链路不能因
+    单个配置项失效整体降级。
+    """
+    protocol = str(get_effective(db, "llm_protocol") or "").strip().lower()
+    if protocol not in LLM_PROTOCOLS:
+        protocol = "openai"
     return (
         get_effective(db, "llm_base_url"),
         get_effective(db, "llm_api_key"),
         get_effective(db, "llm_model"),
+        protocol,
     )
 
 

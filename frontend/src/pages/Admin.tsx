@@ -49,6 +49,7 @@ const FIELD_LABELS: Record<string, string> = {
   llm_base_url: 'LLM Base URL',
   llm_api_key: 'LLM API Key',
   llm_model: 'LLM 模型',
+  llm_protocol: 'LLM 协议',
   embedding_base_url: 'Embedding Base URL',
   embedding_api_key: 'Embedding API Key',
   embedding_model: 'Embedding 模型',
@@ -114,11 +115,17 @@ const WEBHOOK_STYLES: { value: string; label: string }[] = [
   { value: 'raw', label: '通用 JSON（text 字段）' },
 ];
 
+// LLM 双协议：anthropic = 原生 /v1/messages（DeepSeek /anthropic、中转网关等）
+const LLM_PROTOCOLS: { value: string; label: string }[] = [
+  { value: 'openai', label: 'OpenAI 兼容（/chat/completions）' },
+  { value: 'anthropic', label: 'Anthropic 原生（/v1/messages）' },
+];
+
 const GROUPS: { title: string; hint: string; keys: string[] }[] = [
   {
     title: 'LLM 服务（AI 摘要）',
-    hint: 'OpenAI 兼容协议；留空时系统自动使用内置抽取式摘要',
-    keys: ['llm_base_url', 'llm_api_key', 'llm_model'],
+    hint: '支持 OpenAI 兼容 / Anthropic 原生双协议；留空时系统自动使用内置抽取式摘要',
+    keys: ['llm_base_url', 'llm_api_key', 'llm_model', 'llm_protocol'],
   },
   {
     title: 'Embedding 服务（事件聚合）',
@@ -356,6 +363,8 @@ export default function Admin() {
         const v = edits[`${baseKey}_${suffix}`];
         if (v !== undefined && v !== '') payload[suffix] = v;
       });
+      // 协议下拉有未保存修改时随测试请求带上（与 base_url 等的「先测后存」同语义）
+      if (which === 'llm' && edits.llm_protocol) payload.protocol = edits.llm_protocol;
       const text =
         which === 'llm'
           ? await (async () => {
@@ -625,7 +634,13 @@ export default function Admin() {
                   if (!item) return null;
                   const isSensitive = SENSITIVE.has(key);
                   const isBool = item.type === 'bool';
-                  const isStyle = key === 'alert_webhook_style';
+                  // 下拉键 → 选项集（告警格式 / LLM 协议）；新增下拉配置在此挂选项
+                  const selectOptions =
+                    key === 'alert_webhook_style'
+                      ? WEBHOOK_STYLES
+                      : key === 'llm_protocol'
+                        ? LLM_PROTOCOLS
+                        : null;
                   const editing = edits[key];
                   // 敏感键不回填明文：只要输入框有内容即视为修改；非敏感键与 raw 对比
                   const changed = editing !== undefined && (isSensitive ? editing !== '' : editing !== item.raw);
@@ -680,13 +695,13 @@ export default function Admin() {
                             }`}
                           />
                         </button>
-                      ) : isStyle ? (
+                      ) : selectOptions ? (
                         <select
-                          value={current || 'wecom'}
+                          value={current || selectOptions[0].value}
                           onChange={(e) => setEdits((m) => ({ ...m, [key]: e.target.value }))}
                           className="w-full px-2.5 py-1.5 rounded-lg bg-radar-panel border border-radar-border text-xs text-slate-200 outline-none focus:border-accent cursor-pointer"
                         >
-                          {WEBHOOK_STYLES.map((s) => (
+                          {selectOptions.map((s) => (
                             <option key={s.value} value={s.value}>
                               {s.label}
                             </option>

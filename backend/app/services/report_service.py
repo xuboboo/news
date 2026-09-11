@@ -6,9 +6,9 @@ from collections import defaultdict
 from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 
-import httpx
 from sqlalchemy.orm import Session
 
+from app.ai import llm_client
 from app.algorithms.hot_score import hot_score
 from app.core.config import get_settings
 from app.models.article import Article
@@ -17,10 +17,10 @@ from app.models.report import DailyReport
 from app.services import usage_service
 from app.services.config_service import effective_llm
 from app.services.report_push import push_enabled, push_report
-from app.services.usage_service import extract_openai_usage, record_usage
+from app.services.usage_service import record_usage
 from app.utils.text import truncate, truncate_boundary
 from app.utils.tz import bj_day_start, bj_now
-from app.utils.url_guard import assert_public_http_url
+from app.utils.url_guard import UrlNotAllowed, assert_public_http_url
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import selectinload
 
@@ -119,18 +119,17 @@ def _compose_overview(
     return "".join(parts)
 
 
-def _llm_overview(llm: tuple[str, str, str], content: dict, trigger: str = "auto") -> str | None:
+def _llm_overview(llm: tuple[str, str, str, str], content: dict, trigger: str = "auto") -> str | None:
     """LLM 撰写今日综述；未配置或任何失败返回 None（失败已落账），调用方回退模板。
 
     用量记账（task_type=report，成本看板「日报」类型）：HTTP 200 但解析失败记
-    parse_fail（token 已花）；连接/非 200 记 api_fail；未配置 LLM 时不调用不落账。
-    与 event_service._llm_event_summary 同款「落账 + 降级」模式。
+    parse_fail（token 已花）；连接/非 200/URL 守卫拦截记 api_fail；未配置 LLM 时
+    不调用不落账。与 event_service._llm_event_summary 同款「落账 + 降级」模式。
     """
     if not (llm and llm[0] and llm[1] and llm[2]):
         return None
-    base_url, api_key, model = llm
+    base_url, api_key, model, protocol = llm
     start = time.monotonic()
-    http_ok = False  # 是否已收到 HTTP 200（区分 api_fail / parse_fail）
     usage: dict = {}
     try:
         base_url = assert_public_http_url(base_url)
@@ -157,23 +156,10 @@ def _llm_overview(llm: tuple[str, str, str], content: dict, trigger: str = "auto
             f"其他热点：{quick_lines or '（无）'}\n"
             f"频道分布：{ch_lines or '（无）'}"
         )
-        resp = httpx.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=60,
+        raw, usage = llm_client.chat(
+            base_url, api_key, model, protocol, prompt,
+            temperature=0.3, json_mode=True,
         )
-        resp.raise_for_status()
-        http_ok = True
-        body = resp.json()
-        # 第一件事提取 usage：即使后续解析失败，token 也已消耗
-        usage = extract_openai_usage(body)
-        raw = body["choices"][0]["message"]["content"]
         data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
         overview = re.sub(r"\s+", " ", str(data.get("overview", ""))).strip()
         if not overview:
@@ -187,11 +173,26 @@ def _llm_overview(llm: tuple[str, str, str], content: dict, trigger: str = "auto
             **usage,
         )
         return truncate(overview, 300)
-    except Exception as exc:
+    except (llm_client.LLMAPIError, UrlNotAllowed) as exc:
+        # 连接失败 / 非 200 / URL 守卫拦截（未发出请求）→ api_fail
         record_usage(
             task_type="report",
             model=model,
-            status="parse_fail" if http_ok else "api_fail",
+            status="api_fail",
+            error=str(exc),
+            latency_ms=int((time.monotonic() - start) * 1000),
+            trigger=trigger,
+            **usage,
+        )
+        return None
+    except Exception as exc:
+        # HTTP 200 之后的 JSON 提取 / 字段异常 → parse_fail（token 已花，必须入账；
+        # LLMFormatError.usage 带回 content 解析失败前已提取到的用量）
+        usage = getattr(exc, "usage", None) or usage
+        record_usage(
+            task_type="report",
+            model=model,
+            status="parse_fail",
             error=str(exc),
             latency_ms=int((time.monotonic() - start) * 1000),
             trigger=trigger,

@@ -1,7 +1,8 @@
 """AI 摘要服务（PRD 第 5/7 节）
 
 两级实现：
-1. LLM 模式：配置 llm_base_url / llm_api_key / llm_model 后走 OpenAI 兼容接口，
+1. LLM 模式：配置 llm_base_url / llm_api_key / llm_model / llm_protocol 后经
+   llm_client 调用（OpenAI 兼容 / Anthropic 原生双协议），
    Prompt 按 PRD 要求输出 {"summary","points","tags"}，客观、不增加观点、保留事实。
 2. 抽取式兜底（extractive-textrank-v2）：真 TextRank——句子相似图（Mihalcea-Tarau
    重叠度）上跑 PageRank，混合标题相关覆盖率与导语位置权重，MMR 去冗余选 5 句，
@@ -14,12 +15,11 @@ import time
 from dataclasses import dataclass, field
 from typing import List
 
-import httpx
-
+from app.ai import llm_client
 from app.core.config import get_settings
-from app.services.usage_service import extract_openai_usage, record_usage
+from app.services.usage_service import record_usage
 from app.utils.text import extract_keywords, is_boilerplate, split_sentences, truncate
-from app.utils.url_guard import assert_public_http_url
+from app.utils.url_guard import UrlNotAllowed, assert_public_http_url
 
 PROMPT_TEMPLATE = """你是科技资讯摘要助手。请阅读以下文章，输出严格的 JSON（不要输出任何其他文字）：
 {{"summary":"一句话摘要(50字内)","points":["核心信息",...],"tags":["标签",...]}}
@@ -47,10 +47,14 @@ class SummaryResult:
 _DIRTY_SUMMARY = re.compile(r"线索投递|^(感谢|题图|配图|图片来源)")
 
 
-def _llm_available(llm: tuple[str, str, str] | None = None) -> bool:
+def _llm_available(llm: tuple[str, str, str, str] | None = None) -> bool:
     if llm is None:
         s = get_settings()
-        llm = (s.llm_base_url, s.llm_api_key, s.llm_model)
+        # .env 协议脏值回落 openai（与 effective_llm 同口径），不让配置手滑降级摘要链路
+        protocol = (s.llm_protocol or "").strip().lower()
+        if protocol not in llm_client.PROTOCOLS:
+            protocol = "openai"
+        llm = (s.llm_base_url, s.llm_api_key, s.llm_model, protocol)
     return bool(llm[0] and llm[1] and llm[2])
 
 
@@ -61,14 +65,14 @@ def _elapsed_ms(start: float) -> int:
 def summarize(
     title: str,
     content: str,
-    llm: tuple[str, str, str] | None = None,
+    llm: tuple[str, str, str, str] | None = None,
     article_id: int | None = None,
     trigger: str = "auto",
 ) -> SummaryResult:
     """生成摘要：优先 LLM，失败或未配置时走抽取式算法；统一做兜底校验。
 
-    llm: 运行时生效配置 (base_url, api_key, model)，由调用方从配置服务读取，
-    未传时回退 .env 静态配置。
+    llm: 运行时生效配置 (base_url, api_key, model, protocol)，由调用方从配置
+    服务读取，未传时回退 .env 静态配置。
     article_id / trigger: 透传给用量记账（ai_usage_log），便于按文章/来源追溯。
     """
     if _llm_available(llm):
@@ -98,7 +102,7 @@ def summarize(
 def _summarize_by_llm(
     title: str,
     content: str,
-    llm: tuple[str, str, str],
+    llm: tuple[str, str, str, str],
     article_id: int | None = None,
     trigger: str = "auto",
 ) -> SummaryResult | None:
@@ -106,33 +110,19 @@ def _summarize_by_llm(
 
     - HTTP 200 且解析成功 → status=success（token 照记）；
     - HTTP 200 但响应解析 / JSON 提取失败 → status=parse_fail（token 已花，必须入账）；
-    - 连接异常 / 非 200 → status=api_fail。
+    - 连接异常 / 非 200 / URL 守卫拦截 → status=api_fail。
     返回 None 表示调用失败，由调用方降级抽取式（业务零感知）。
     """
-    base_url, api_key, model = llm
+    base_url, api_key, model, protocol = llm
     prompt = PROMPT_TEMPLATE.format(title=title, content=(content or title)[:4000])
     start = time.monotonic()
-    http_ok = False  # 是否已收到 HTTP 200（区分 api_fail / parse_fail）
-    usage = {}
+    usage: dict = {}
     try:
         base_url = assert_public_http_url(base_url)  # 违规 → api_fail 落账后降级抽取式
-        resp = httpx.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=60,
+        raw, usage = llm_client.chat(
+            base_url, api_key, model, protocol, prompt,
+            temperature=0.2, json_mode=True,
         )
-        resp.raise_for_status()
-        http_ok = True
-        body = resp.json()
-        # 第一件事提取 usage：即使后续解析失败，token 也已消耗
-        usage = extract_openai_usage(body)
-        raw = body["choices"][0]["message"]["content"]
         data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
         record_usage(
             task_type="summary",
@@ -152,11 +142,39 @@ def _summarize_by_llm(
             tags=[str(t) for t in data.get("tags")][:5] if isinstance(data.get("tags"), list) else [],
             model=model,
         )
-    except Exception as exc:
+    except llm_client.LLMAPIError as exc:
         record_usage(
             task_type="summary",
             model=model,
-            status="parse_fail" if http_ok else "api_fail",
+            status="api_fail",
+            error=str(exc),
+            latency_ms=_elapsed_ms(start),
+            article_id=article_id,
+            trigger=trigger,
+            **usage,
+        )
+        return None
+    except (llm_client.LLMAPIError, UrlNotAllowed) as exc:
+        # 连接失败 / 非 200 / URL 守卫拦截（未发出请求）→ api_fail
+        record_usage(
+            task_type="summary",
+            model=model,
+            status="api_fail",
+            error=str(exc),
+            latency_ms=_elapsed_ms(start),
+            article_id=article_id,
+            trigger=trigger,
+            **usage,
+        )
+        return None
+    except Exception as exc:
+        # HTTP 200 之后的 JSON 提取 / 字段异常 → parse_fail（token 已花，必须入账；
+        # LLMFormatError.usage 带回 content 解析失败前已提取到的用量）
+        usage = getattr(exc, "usage", None) or usage
+        record_usage(
+            task_type="summary",
+            model=model,
+            status="parse_fail",
             error=str(exc),
             latency_ms=_elapsed_ms(start),
             article_id=article_id,

@@ -162,7 +162,12 @@ export const putConfig = (data: Record<string, string>) =>
     body: JSON.stringify(data),
   });
 
-export const testLlm = (payload: { base_url?: string; api_key?: string; model?: string }) =>
+export const testLlm = (payload: {
+  base_url?: string;
+  api_key?: string;
+  model?: string;
+  protocol?: string;
+}) =>
   request<{ ok: true; latency_ms: number; model: string; reply: string }>('/test/llm', {
     method: 'POST',
     body: JSON.stringify(payload),

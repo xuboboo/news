@@ -310,7 +310,7 @@ def test_render_feishu_footer_plain_text():
 def _llm_overview(**kwargs):
     from app.services.report_service import _llm_overview
 
-    return _llm_overview(("https://api.example.test/v1", "sk-x", "m1"), _render_content(), **kwargs)
+    return _llm_overview(("https://api.example.test/v1", "sk-x", "m1", "openai"), _render_content(), **kwargs)
 
 
 def test_llm_overview_success(monkeypatch):
@@ -322,6 +322,7 @@ def test_llm_overview_success(monkeypatch):
         captured["url"] = url
         captured["payload"] = kw["json"]
         return type("R", (), {
+            "status_code": 200,
             "raise_for_status": lambda self: None,
             "json": lambda self: {
                 "choices": [{"message": {"content": '{"overview":"  今日综述：热点持续发酵。\\n数据齐全。"}'}}],
@@ -329,7 +330,7 @@ def test_llm_overview_success(monkeypatch):
             },
         })()
 
-    monkeypatch.setattr(report_service.httpx, "post", fake_post)
+    monkeypatch.setattr(report_service.llm_client.httpx, "post", fake_post)
     monkeypatch.setattr(report_service, "record_usage", lambda **kw: captured.setdefault("usage", kw))
     out = _llm_overview(trigger="auto")
     assert out == "今日综述：热点持续发酵。 数据齐全。"  # 空白归一
@@ -340,14 +341,50 @@ def test_llm_overview_success(monkeypatch):
     assert captured["usage"]["status"] == "success"
 
 
+def test_llm_overview_anthropic_protocol(monkeypatch):
+    """llm_protocol=anthropic：请求走 /v1/messages + x-api-key，usage 按 input/output 映射落账。"""
+    from app.services import report_service
+
+    captured = {}
+
+    def fake_post(url, **kw):
+        captured["url"] = url
+        captured["headers"] = kw["headers"]
+        captured["payload"] = kw["json"]
+        return type("R", (), {
+            "status_code": 200,
+            "raise_for_status": lambda self: None,
+            "json": lambda self: {
+                "content": [{"type": "text", "text": '{"overview":"Anthropic 协议综述。"}'}],
+                "usage": {"input_tokens": 30, "output_tokens": 6},
+            },
+        })()
+
+    monkeypatch.setattr(report_service.llm_client.httpx, "post", fake_post)
+    monkeypatch.setattr(report_service, "record_usage", lambda **kw: captured.setdefault("usage", kw))
+    from app.services.report_service import _llm_overview as _overview
+
+    out = _overview(("https://api.example.test/anthropic", "sk-x", "m1", "anthropic"), _render_content())
+    assert out == "Anthropic 协议综述。"
+    assert captured["url"].endswith("/v1/messages")
+    assert captured["headers"]["x-api-key"] == "sk-x"
+    assert captured["headers"]["anthropic-version"]
+    assert captured["payload"]["max_tokens"]  # anthropic 必填，适配层补齐
+    assert captured["usage"]["status"] == "success"
+    assert captured["usage"]["prompt_tokens"] == 30
+    assert captured["usage"]["completion_tokens"] == 6
+
+
 def test_llm_overview_api_fail_returns_none(monkeypatch):
     """连接失败 → api_fail 落账 → 返回 None（调用方回退模板）。"""
+    import httpx as httpx_mod
+
     from app.services import report_service
 
     def boom(*a, **k):
-        raise RuntimeError("connect timeout")
+        raise httpx_mod.ConnectError("connect timeout")
 
-    monkeypatch.setattr(report_service.httpx, "post", boom)
+    monkeypatch.setattr(report_service.llm_client.httpx, "post", boom)
     captured = {}
     monkeypatch.setattr(report_service, "record_usage", lambda **kw: captured.setdefault("s", kw))
     assert _llm_overview() is None
@@ -355,14 +392,33 @@ def test_llm_overview_api_fail_returns_none(monkeypatch):
     assert captured["s"]["task_type"] == "report"
 
 
+def test_llm_overview_parse_fail_keeps_tokens(monkeypatch):
+    """HTTP 200 但无 choices（结构异常）→ parse_fail 落账，已提取 usage 不丢。"""
+    from app.services import report_service
+
+    def fake_post(url, **kw):
+        return type("R", (), {
+            "status_code": 200,
+            "raise_for_status": lambda self: None,
+            "json": lambda self: {"usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}},
+        })()
+
+    monkeypatch.setattr(report_service.llm_client.httpx, "post", fake_post)
+    captured = {}
+    monkeypatch.setattr(report_service, "record_usage", lambda **kw: captured.setdefault("s", kw))
+    assert _llm_overview() is None
+    assert captured["s"]["status"] == "parse_fail"
+    assert captured["s"]["total_tokens"] == 10
+
+
 def test_llm_overview_unconfigured_returns_none(monkeypatch):
     """未配置 LLM：不调用、不落账，直接 None。"""
     from app.services import report_service
 
-    monkeypatch.setattr(report_service.httpx, "post", lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应发请求")))
+    monkeypatch.setattr(report_service.llm_client.httpx, "post", lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应发请求")))
     called = {}
     monkeypatch.setattr(report_service, "record_usage", lambda **kw: called.setdefault("s", kw))
     from app.services.report_service import _llm_overview
 
-    assert _llm_overview(("", "", ""), _render_content()) is None
+    assert _llm_overview(("", "", "", "openai"), _render_content()) is None
     assert not called

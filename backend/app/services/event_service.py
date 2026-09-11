@@ -8,10 +8,10 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 
-import httpx
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.ai import llm_client
 from app.ai.embedding import centroid, cosine
 from app.ai.event_cluster import (
     HIGH_BAND_KW_FLOOR,
@@ -28,9 +28,9 @@ from app.ai.event_cluster import (
 from app.models.article import Article
 from app.models.event import EventArticle, HotEvent
 from app.services import config_service
-from app.services.usage_service import extract_openai_usage, record_usage
+from app.services.usage_service import record_usage
 from app.utils.text import extract_keywords, truncate, truncate_boundary
-from app.utils.url_guard import assert_public_http_url
+from app.utils.url_guard import UrlNotAllowed, assert_public_http_url
 
 
 def _tz(t: datetime) -> datetime:
@@ -89,7 +89,7 @@ def _compose_impacts(members: list[Article]) -> list[str]:
 def _llm_event_summary(
     title: str,
     members: list[Article],
-    llm: tuple[str, str, str] | None = None,
+    llm: tuple[str, str, str, str] | None = None,
     event_id: int | None = None,
 ) -> tuple[str, list[str]] | None:
     """LLM 生成事件总结 + 核心影响；未配置或失败返回 None（失败已落账）。
@@ -101,10 +101,9 @@ def _llm_event_summary(
     """
     if not llm or not (llm[0] and llm[1] and llm[2]):
         return None
-    base_url, api_key, model = llm
+    base_url, api_key, model, protocol = llm
     start = time.monotonic()
-    http_ok = False  # 是否已收到 HTTP 200（区分 api_fail / parse_fail）
-    usage = {}
+    usage: dict = {}
     try:
         base_url = assert_public_http_url(base_url)  # 违规 → api_fail 落账后降级事实拼装
         material = "\n".join(
@@ -116,23 +115,10 @@ def _llm_event_summary(
             '{"summary":"事件总结(150字内,客观,只保留事实)","impacts":["核心影响1","核心影响2","核心影响3"]}\n\n'
             f"事件标题：{title}\n报道：\n{material}"
         )
-        resp = httpx.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=60,
+        raw, usage = llm_client.chat(
+            base_url, api_key, model, protocol, prompt,
+            temperature=0.2, json_mode=True,
         )
-        resp.raise_for_status()
-        http_ok = True
-        body = resp.json()
-        # 第一件事提取 usage：即使后续解析失败，token 也已消耗
-        usage = extract_openai_usage(body)
-        raw = body["choices"][0]["message"]["content"]
         data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
         raw_impacts = data.get("impacts")
         record_usage(
@@ -149,11 +135,26 @@ def _llm_event_summary(
             # 降级事实拼装（同 summary.key_points 的防线）
             [str(i) for i in raw_impacts][:4] if isinstance(raw_impacts, list) else [],
         )
-    except Exception as exc:
+    except (llm_client.LLMAPIError, UrlNotAllowed) as exc:
+        # 连接失败 / 非 200 / URL 守卫拦截（未发出请求）→ api_fail
         record_usage(
             task_type="event_summary",
             model=model,
-            status="parse_fail" if http_ok else "api_fail",
+            status="api_fail",
+            error=str(exc),
+            latency_ms=int((time.monotonic() - start) * 1000),
+            event_id=event_id,
+            **usage,
+        )
+        return None
+    except Exception as exc:
+        # HTTP 200 之后的 JSON 提取 / 字段异常 → parse_fail（token 已花，必须入账；
+        # LLMFormatError.usage 带回 content 解析失败前已提取到的用量）
+        usage = getattr(exc, "usage", None) or usage
+        record_usage(
+            task_type="event_summary",
+            model=model,
+            status="parse_fail",
             error=str(exc),
             latency_ms=int((time.monotonic() - start) * 1000),
             event_id=event_id,

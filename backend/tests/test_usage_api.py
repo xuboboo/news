@@ -146,6 +146,53 @@ def test_llm_conn_unreachable_records_usage(super_client, monkeypatch, usage_in_
     assert "refused" in (rows[0].error or "")
 
 
+# ———————————————————— /test/llm anthropic 原生协议 ————————————————————
+
+ANTHROPIC_BODY = {
+    "content": [{"type": "text", "text": "OK"}],
+    "usage": {"input_tokens": 12, "cache_read_input_tokens": 3, "output_tokens": 2},
+}
+
+
+def test_llm_conn_anthropic_protocol_success(super_client, monkeypatch, usage_in_testdb, open_url_guard, db):
+    """protocol=anthropic：请求打 /v1/messages + x-api-key，usage 归一化后落同一本账。"""
+    captured = {}
+
+    def fake_post(url, *a, **kw):
+        captured["url"] = url
+        captured["headers"] = kw.get("headers") or {}
+        return StubResp(body=ANTHROPIC_BODY)
+
+    monkeypatch.setattr("app.api.v2.admin.httpx.post", fake_post)
+    payload = {**LLM_PAYLOAD, "base_url": "https://relay.example.test/anthropic", "protocol": "anthropic"}
+    r = super_client.post("/api/v2/admin/test/llm", json=payload, headers=H)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["reply"] == "OK"
+
+    assert captured["url"].endswith("/v1/messages")
+    assert captured["headers"].get("x-api-key") == "k"
+    assert "Authorization" not in captured["headers"]
+
+    rows = _logs(db)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.status == "success"
+    # input 12 + cache_read 3 = prompt 15；cached 3；total 17
+    assert (row.prompt_tokens, row.completion_tokens, row.cached_tokens, row.total_tokens) == (15, 2, 3, 17)
+
+
+def test_llm_conn_rejects_unknown_protocol(super_client, monkeypatch, usage_in_testdb, open_url_guard, db):
+    monkeypatch.setattr(
+        "app.api.v2.admin.httpx.post",
+        lambda *a, **kw: pytest.fail("未知协议不应发出请求"),
+    )
+    payload = {**LLM_PAYLOAD, "protocol": "gemini"}
+    r = super_client.post("/api/v2/admin/test/llm", json=payload, headers=H)
+    assert r.status_code == 400
+    assert _logs(db) == []
+
+
 # ———————————————————— /test/embedding 落账 ————————————————————
 
 def test_embedding_conn_success_records_usage(super_client, monkeypatch, usage_in_testdb, open_url_guard, db):

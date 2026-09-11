@@ -17,10 +17,11 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://hjradar:hjradar@postgres:5432/hjradar"
     redis_url: str = "redis://redis:6379/0"
 
-    # —— LLM 服务（OpenAI 兼容协议，可选）——
+    # —— LLM 服务（OpenAI 兼容 / Anthropic 原生双协议，可选）——
     llm_base_url: str = ""      # 例：https://open.bigmodel.cn/api/paas/v4
     llm_api_key: str = ""
     llm_model: str = ""         # 例：glm-4-flash
+    llm_protocol: str = "openai"  # openai=兼容协议；anthropic=原生 /v1/messages（DeepSeek /anthropic 等网关）
 
     # —— Embedding 服务（OpenAI 兼容协议，可选）——
     embedding_base_url: str = ""

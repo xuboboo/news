@@ -209,6 +209,9 @@ def _add_log(db, **kw):
 
 
 def test_usage_summary_totals_coverage_groups(db):
+    # 北京今日窗口起点 +1h：任意墙钟时刻运行都确定落在「today」窗口内
+    # （曾用 now-2h，北京时间 0~2 点运行会落到昨日 → total_calls 4≠5 的定时炸弹）
+    in_today = bj_now().replace(hour=1, minute=0, second=0, microsecond=0)
     _add_log(db, task_type="summary", model="glm-4-flash", total_tokens=150, cost=0.1,
              cached_tokens=50, status="success")
     _add_log(db, task_type="summary", model="extractive-textrank-v2", total_tokens=0, cost=0,
@@ -216,7 +219,7 @@ def test_usage_summary_totals_coverage_groups(db):
     _add_log(db, task_type="summary", status="parse_fail", total_tokens=120, cost=0.05)
     _add_log(db, task_type="embedding", model="local-hash-256-v2", total_tokens=0, cost=0)
     _add_log(db, task_type="embedding", status="api_fail", total_tokens=200, cost=0.02,
-             created_at=datetime.now(timezone.utc) - timedelta(hours=2))
+             created_at=in_today)
 
     s = usage_summary(db, "today", include_daily=False)
     assert s["total_calls"] == 5
