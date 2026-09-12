@@ -78,6 +78,12 @@ def main():
                             fallback = repair_llm_fallback_summaries(db)
                             if fallback:
                                 logger.info("re-summarized %s llm-fallback articles", len(fallback))
+                            # 向量失败自愈：重派摘要完成但向量缺失的近期文章（重试耗尽后补上）
+                            from app.services.embedding_service import repair_stuck_embeddings
+
+                            stuck = repair_stuck_embeddings(db)
+                            if stuck:
+                                logger.info("re-dispatched %s stuck embeddings", len(stuck))
                         finally:
                             db.close()
                 finally:

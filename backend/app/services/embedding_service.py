@@ -5,6 +5,8 @@
 仍是旧模型"的漂移状态，提示运维执行 scripts/reembed_all.py 全量重嵌。
 本地哈希回退（未配置 API）不刷新指纹——哈希向量与 API 向量不可比，不能覆盖记录。
 """
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy.orm import Session
 
 from app.ai.embedding import embed
@@ -55,3 +57,41 @@ def generate_embedding(db: Session, article_id: int, trigger: str = "auto") -> A
     db.commit()
     db.refresh(article)
     return article
+
+
+def repair_stuck_embeddings(
+    db: Session, older_than_minutes: int = 30, within_hours: int = 24, limit: int = 10
+) -> list[int]:
+    """向量失败自愈：重派「摘要已完成但向量缺失」的近期文章，返回补派 id 列表。
+
+    场景：strict 模式（默认）下 Embedding API 失败由任务层指数退避重试 5 次，
+    全部耗尽后文章永久停留在 summarized 且无向量——事件聚类按向量相似度分组，
+    无向量文章从此不被聚合，且无任何机制补上（2026-09-12 全面审计识别，
+    与摘要/事件降级同类）。本函数随每轮采集触发：只回看 within_hours 内、
+    滞留超过 older_than_minutes（给任务内重试链留足时间，避免与退避中的
+    任务重复）的文章，单轮限量 limit；embedding 为 upsert 语义，补派幂等，
+    成功后 ai_status 变为 embedded 不再命中本查询。
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=within_hours)
+    matured = datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)
+    ids = [
+        row[0]
+        for row in (
+            db.query(Article.id)
+            .filter(
+                Article.created_at >= cutoff,
+                Article.created_at <= matured,
+                Article.ai_status == "summarized",
+                Article.embedding.is_(None),
+            )
+            .order_by(Article.id.desc())
+            .limit(limit)
+            .all()
+        )
+    ]
+    if ids:
+        from app.tasks.tasks import embedding_task  # 延迟导入避免循环依赖
+
+        for aid in ids:
+            embedding_task.delay(aid, trigger="manual_repair")
+    return ids

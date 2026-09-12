@@ -46,6 +46,7 @@ def crawler_task(trigger: str = "auto"):
                 for article_id in result["new_ids"]:
                     summary_task.delay(article_id)
                 # 孤儿自愈：补派历史滞留 pending（幂等，见 summary_service.repair_pending_summaries）
+                from app.services.embedding_service import repair_stuck_embeddings
                 from app.services.summary_service import (
                     repair_llm_fallback_summaries,
                     repair_pending_summaries,
@@ -58,6 +59,10 @@ def crawler_task(trigger: str = "auto"):
                 fallback = repair_llm_fallback_summaries(db)
                 if fallback:
                     run.detail += f" ｜ LLM 降级回填 {len(fallback)} 篇"
+                # 向量失败自愈：摘要完成但向量缺失的近期文章随本轮重派（幂等限流）
+                stuck = repair_stuck_embeddings(db)
+                if stuck:
+                    run.detail += f" ｜ 向量回填 {len(stuck)} 篇"
                 return result
             finally:
                 db.close()

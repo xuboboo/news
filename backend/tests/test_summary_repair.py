@@ -177,3 +177,69 @@ def test_event_repair_skips_llm_summary_and_old_events(db, monkeypatch):
 
     s = db.factory()
     assert event_service.repair_fallback_event_summaries(s) == 0
+
+
+# ———— 向量失败自愈（repair_stuck_embeddings） ————
+
+def _mk_stuck_article(db, *, title="卡死", hours_old=1.0, with_summary=True, with_vector=False):
+    """构造向量自愈的目标形态：ai_status=summarized 且无向量。"""
+    from datetime import datetime, timedelta, timezone as tz
+
+    s = db.factory()
+    a = Article(
+        title=title, url=f"https://x.test/{title}", channel="智能时代", source="IT之家",
+        news_id=title, content="正文",
+        publish_time=datetime.now(tz.utc) - timedelta(hours=hours_old),
+        created_at=datetime.now(tz.utc) - timedelta(hours=hours_old),
+        views=0, comments=0, shares=0, likes=0, ai_status="summarized",
+    )
+    s.add(a)
+    s.flush()
+    if with_summary:
+        s.add(ArticleSummary(article_id=a.id, summary_short="s", summary_long="s",
+                             key_points=[], tags=[], model="deepseek-flash"))
+    s.commit()
+    aid = a.id
+    s.close()
+    return aid
+
+
+def test_stuck_embedding_repair_dispatches(db, monkeypatch):
+    """摘要完成但无向量（重试耗尽形态）→ 补派 embedding_task。"""
+    from app.services.embedding_service import repair_stuck_embeddings
+    from app.tasks import tasks as tasks_mod
+
+    aid = _mk_stuck_article(db)
+    dispatched: list = []
+    monkeypatch.setattr(tasks_mod.embedding_task, "delay",
+                        lambda article_id, trigger="auto": dispatched.append((article_id, trigger)))
+
+    s = db.factory()
+    out = repair_stuck_embeddings(s)
+    s.close()
+    assert aid in out and dispatched == [(aid, "manual_repair")]
+
+
+def test_stuck_embedding_repair_skips_fresh_embedded_and_old(db, monkeypatch):
+    """刚入队（未成熟）/已有向量/超窗文章均不补派。"""
+    from app.services.embedding_service import repair_stuck_embeddings
+    from app.tasks import tasks as tasks_mod
+
+    fresh = _mk_stuck_article(db, title="新鲜", hours_old=0.1)  # 任务重试链可能仍在跑
+    old = _mk_stuck_article(db, title="超窗", hours_old=30.0)
+    s = db.factory()
+    a = s.get(Article, _mk_stuck_article(db, title="有向量", hours_old=1.0))
+    from pgvector.sqlalchemy import Vector  # noqa: F401 直接赋 384 维 0 向量
+    a.embedding = [0.0] * 384
+    a.ai_status = "embedded"
+    s.commit()
+    s.close()
+    dispatched: list = []
+    monkeypatch.setattr(tasks_mod.embedding_task, "delay",
+                        lambda article_id, trigger="auto": dispatched.append(article_id))
+
+    s = db.factory()
+    out = repair_stuck_embeddings(s)
+    s.close()
+    assert fresh not in out and old not in out and out == []
+    assert dispatched == []
