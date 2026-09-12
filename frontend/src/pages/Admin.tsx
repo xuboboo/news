@@ -15,6 +15,7 @@ import {
   LogOut,
   Play,
   RefreshCw,
+  RotateCcw,
   Save,
   Send,
   Server,
@@ -36,6 +37,7 @@ import {
   getStatus,
   getTaskRuns,
   putConfig,
+  resetConfig,
   testEmbedding,
   testLlm,
   testReportPush,
@@ -121,16 +123,19 @@ const LLM_PROTOCOLS: { value: string; label: string }[] = [
   { value: 'anthropic', label: 'Anthropic 原生（/v1/messages）' },
 ];
 
-const GROUPS: { title: string; hint: string; keys: string[] }[] = [
+// resettable：组头展示「恢复默认」按钮（整组删除 DB 覆盖、回落 .env 默认值）
+const GROUPS: { title: string; hint: string; keys: string[]; resettable?: boolean }[] = [
   {
     title: 'LLM 服务（AI 摘要）',
     hint: '支持 OpenAI 兼容 / Anthropic 原生双协议；留空时系统自动使用内置抽取式摘要',
     keys: ['llm_base_url', 'llm_api_key', 'llm_model', 'llm_protocol'],
+    resettable: true,
   },
   {
     title: 'Embedding 服务（事件聚合）',
     hint: '用于文章向量化与相似度聚类；向量维度需与 EMBED_DIM 一致',
     keys: ['embedding_base_url', 'embedding_api_key', 'embedding_model'],
+    resettable: true,
   },
   {
     title: '爬虫与聚合参数',
@@ -348,6 +353,35 @@ export default function Admin() {
       flash(true, `已清除覆盖：${FIELD_LABELS[key] ?? key}（回落 .env 默认）`);
     } catch (e: any) {
       flash(false, `清除失败：${e?.message ?? e}`);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  /** 整组恢复默认：删除该组全部 DB 覆盖，回落 .env 默认值（LLM 默认空 = 内置抽取摘要） */
+  const resetGroup = async (g: (typeof GROUPS)[number]) => {
+    const label = g.keys.map((k) => FIELD_LABELS[k] ?? k).join('、');
+    const extraHint = g.title.startsWith('LLM') ? '\n（LLM 组默认未配置 = 回退内置抽取式摘要）' : '';
+    if (
+      !window.confirm(
+        `确定把「${g.title}」整组恢复为 .env 默认值？\n将清除覆盖：${label}${extraHint}`,
+      )
+    )
+      return;
+    setBusy(`reset-${g.keys[0]}`);
+    try {
+      const next = await resetConfig(g.keys);
+      setConfig(next);
+      setEdits((m) => {
+        const copy = { ...m };
+        g.keys.forEach((k) => delete copy[k]);
+        return copy;
+      });
+      // 旧「连通 ✓」对应的是改前配置，不清空会误导；只清本组的，别组的仍然有效
+      setTestResult((r) => ({ ...r, [g.title.startsWith('LLM') ? 'llm' : 'embedding']: undefined }));
+      flash(true, `已恢复 .env 默认：${label}（清除 ${next.reset.length} 项覆盖）`);
+    } catch (e: any) {
+      flash(false, `恢复默认失败：${e?.message ?? e}`);
     } finally {
       setBusy('');
     }
@@ -625,7 +659,25 @@ export default function Admin() {
           {GROUPS.map((g) => (
             <div key={g.title} className="card p-4">
               <div className="flex items-baseline justify-between mb-3">
-                <div className="text-sm font-medium text-slate-200">{g.title}</div>
+                <div className="flex items-center gap-2">
+                  <div className="text-sm font-medium text-slate-200">{g.title}</div>
+                  {g.resettable && (
+                    <button
+                      type="button"
+                      onClick={() => void resetGroup(g)}
+                      disabled={busy === `reset-${g.keys[0]}`}
+                      title="清除该组全部 DB 覆盖，回落 .env 默认值（LLM 组默认未配置 = 内置抽取式摘要）"
+                      className="chip border border-radar-border bg-radar-panel text-slate-400 hover:text-amber-300 hover:border-amber-300/40 disabled:opacity-40 cursor-pointer"
+                    >
+                      {busy === `reset-${g.keys[0]}` ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <RotateCcw className="h-3 w-3" />
+                      )}
+                      恢复默认
+                    </button>
+                  )}
+                </div>
                 <div className="text-[11px] text-slate-500">{g.hint}</div>
               </div>
               <div className="grid md:grid-cols-3 gap-3">

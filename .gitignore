@@ -20,6 +20,8 @@ logs/
 # 工具/编辑器
 .zcode/
 .DS_Store
+# Mimosa 安全扫描插件运行时状态（扫描历史在仓库外 ~/.mimosa/）
+.mimosa/
 
 # 主题视觉验收临时截图
 .tmp-theme-shots/

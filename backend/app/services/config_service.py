@@ -227,6 +227,25 @@ def set_overrides(db: Session, data: dict[str, str]) -> list[str]:
     return updated
 
 
+def clear_overrides(db: Session, keys: list[str]) -> list[str]:
+    """删除指定键的 DB 覆盖（生效值立即回落 .env 默认），返回实际删除的 key 列表。
+
+    供管理面板「恢复默认」整组操作使用：与 set_overrides 的空串清除同语义，
+    独立成函数是为整组一次提交与独立审计（admin.config_reset）。
+    未知 key 抛 KeyError（端点层转 400）；不存在的覆盖静默跳过（幂等可重跑）。
+    """
+    removed: list[str] = []
+    for key in keys:
+        if key not in ALLOWED_KEYS:
+            raise KeyError(key)
+        row = db.get(SystemSetting, key)
+        if row is not None:
+            db.delete(row)
+            removed.append(key)
+    db.commit()
+    return removed
+
+
 def masked_view(db: Session) -> dict:
     """管理面板展示：生效值 + 来源（env/db）+ 类型，敏感值脱敏展示。
 

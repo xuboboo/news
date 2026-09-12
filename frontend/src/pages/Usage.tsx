@@ -16,6 +16,7 @@ import {
   RefreshCw,
   ShieldAlert,
   Tag,
+  Trash2,
   XCircle,
 } from 'lucide-react';
 import { Loading, PageHeader, StatCard } from '../components/common';
@@ -27,6 +28,7 @@ import {
   UsageLogItem,
   UsageSummary,
   deleteUsagePrice,
+  clearUsageLogs,
   exportUsageCsv,
   getUsageLogs,
   getUsagePrices,
@@ -241,6 +243,32 @@ export default function Usage() {
       flash(true, `CSV 已开始下载（${scopeText}${hasFilters ? ' · 含当前筛选' : ''}，含对账口径注释行）`);
     } catch (e: any) {
       flash(false, `导出失败：${e?.message ?? e}`);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  // 清空全部调用流水：破坏性操作，双重确认；后端单独审计（admin.usage_logs_cleared）
+  const clearLogs = async () => {
+    // logTotal 是当前筛选后的条数；清空始终作用于全量，筛选状态下必须说明白
+    const hasFilters = Boolean(filters.task_type || filters.status || filters.model);
+    const scopeText = hasFilters
+      ? '将清空全部流水（不受当前筛选限制）'
+      : `将清空全部流水（共 ${logTotal} 条）`;
+    if (
+      !window.confirm(
+        `确定清空调用流水？\n${scopeText}，成本统计随之归零，不可恢复；价目表不受影响。`,
+      )
+    )
+      return;
+    if (!window.confirm('再次确认：清空后无法找回，确定继续？')) return;
+    setBusy('clear-logs');
+    try {
+      const r = await clearUsageLogs();
+      flash(true, `已清空调用流水（删除 ${r.deleted} 条）`);
+      await refresh(); // 汇总卡/明细/分页一并归零刷新
+    } catch (e: any) {
+      flash(false, `清空失败：${e?.message ?? e}`);
     } finally {
       setBusy('');
     }
@@ -648,6 +676,15 @@ export default function Usage() {
             >
               {busy === 'export' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
               导出 CSV
+            </button>
+            <button
+              onClick={() => void clearLogs()}
+              disabled={busy === 'clear-logs'}
+              title="清空全部调用流水（不可恢复，需二次确认）"
+              className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-red-400 hover:border-red-400/40 disabled:opacity-40"
+            >
+              {busy === 'clear-logs' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              清空流水
             </button>
           </div>
         </div>

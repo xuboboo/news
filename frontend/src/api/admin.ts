@@ -162,6 +162,13 @@ export const putConfig = (data: Record<string, string>) =>
     body: JSON.stringify(data),
   });
 
+/** 恢复默认：删除指定配置项的 DB 覆盖，回落 .env 默认值（LLM 默认空 = 内置抽取） */
+export const resetConfig = (keys: string[]) =>
+  request<ConfigView & { reset: string[] }>('/config/reset', {
+    method: 'POST',
+    body: JSON.stringify({ keys }),
+  });
+
 export const testLlm = (payload: {
   base_url?: string;
   api_key?: string;
@@ -306,6 +313,10 @@ export const getUsageLogs = (page = 1, pageSize = 50, filters?: UsageLogFilters)
   if (filters?.model) qs.set('model', filters.model);
   return request<UsageLogsPage>(`/usage/logs?${qs.toString()}`);
 };
+
+/** 清空全部调用流水（破坏性、不可恢复；后端单独审计 admin.usage_logs_cleared） */
+export const clearUsageLogs = () =>
+  request<{ deleted: number }>('/usage/logs', { method: 'DELETE' });
 
 export interface ModelPriceItem {
   model: string;
