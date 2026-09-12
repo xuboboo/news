@@ -236,6 +236,46 @@ def test_watch_state_transitions(db, monkeypatch):
     assert "【恢复】" in pushes[1][2]
 
 
+def test_watch_renotify_persistent_bad(db, monkeypatch):
+    """持续坏：静默空轮不得推进 last_notify（否则随巡检周期滑动，30 分钟重推
+    条件永不满足）；满 30 分钟按「持续告警」重推，并推进 last_notify。"""
+    import types
+
+    from conftest import set_config
+
+    set_config(db, "alert_webhook_url", "http://hooks.example/x")
+    set_config(db, "alert_webhook_style", "wecom")
+
+    state: dict = {}
+    pushes: list[str] = []
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(alert_service, "time", types.SimpleNamespace(time=lambda: clock["t"]))
+    monkeypatch.setattr(alert_service, "redis_ping", lambda timeout=2.0: (True, 1))
+    monkeypatch.setattr(alert_service, "_load_state", lambda: dict(state))
+    monkeypatch.setattr(alert_service, "_save_state", lambda s: state.update(s) or True)
+    monkeypatch.setattr(alert_service, "_push", lambda url, style, text: pushes.append(text))
+    monkeypatch.setattr(alert_service, "_collect_problems", lambda s: ["无在线 Celery Worker"])
+
+    r1 = alert_service.watch(db.factory())  # 首次故障：立即推
+    assert r1["notified"] is True and state["last_notify"] == 1000.0
+
+    clock["t"] += 5 * 60  # 一轮巡检后仍坏：静默，last_notify 原地不动
+    r2 = alert_service.watch(db.factory())
+    assert r2["notified"] is False and len(pushes) == 1
+    assert state["last_notify"] == 1000.0
+
+    clock["t"] += 25 * 60  # 距首推 30 分钟仍坏：按「持续告警」重推
+    r3 = alert_service.watch(db.factory())
+    assert r3["notified"] is True and len(pushes) == 2
+    assert "【持续告警】" in pushes[1]
+    assert state["last_notify"] == clock["t"]
+
+    clock["t"] += 5 * 60  # 重推后又一轮巡检：继续静默
+    r4 = alert_service.watch(db.factory())
+    assert r4["notified"] is False and len(pushes) == 2
+    assert state["last_notify"] == clock["t"] - 5 * 60
+
+
 def test_watch_redis_down_no_spam(db, monkeypatch):
     """Redis 不可用时状态机停用：只记日志不推送，避免每 5 分钟重复轰炸。"""
     monkeypatch.setattr(alert_service, "redis_ping", lambda timeout=2.0: (False, None))
