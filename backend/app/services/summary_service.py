@@ -98,10 +98,11 @@ def repair_llm_fallback_summaries(db: Session, within_hours: int = 24, limit: in
     保证供应商故障期间的重试成本有硬上界；generate_summary 为 upsert 语义，
     补派幂等，成功后摘要即换为 LLM 版本，不再命中本查询。
 
-    仅当 LLM 现已配置时才动作（未配置时重派只会白跑一轮抽取式）。
+    仅当 LLM 三项（base_url/api_key/model）现已齐备时才动作（未配置或部分
+    配置时重派只会白跑一轮抽取式/必败调用）。
     返回补派 id 列表。
     """
-    if not any(config_service.effective_llm(db)[:3]):
+    if not all(config_service.effective_llm(db)[:3]):
         return []
     from app.services.usage_service import LOCAL_MODELS
 

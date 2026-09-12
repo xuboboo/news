@@ -198,6 +198,43 @@ def _event_members(db: Session, event_id: int) -> list[Article]:
     )
 
 
+def repair_fallback_event_summaries(db: Session, within_hours: int = 24, limit: int = 3) -> int:
+    """事件总结降级自愈：重算「总结仍是事实拼装且 LLM 现已配置」的近期事件。
+
+    场景：事件总结的 LLM 调用重试仍失败（api_fail/截断，2026-09-12 事件5 实测）
+    时永久停留 _compose_summary 事实拼装，只有成员再变动才会重建——静止事件
+    无人补上。本函数随 event_task（每 10 分钟）触发：以「围绕「」拼装引子为
+    签名识别降级事件（多成员拼装路径的固定开头；单成员路径回退摘要正文，
+    该形态不在此自愈范围），限近 within_hours 且单轮限量，成本有硬上界；
+    LLM 成功后签名消失自然收敛。
+
+    返回重算的事件数。
+    """
+    if not all(config_service.effective_llm(db)[:3]):
+        return 0
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=within_hours)
+    events = (
+        db.query(HotEvent)
+        .filter(
+            HotEvent.summary.like("围绕「%"),
+            HotEvent.last_time >= cutoff,
+        )
+        .order_by(HotEvent.last_time.desc())
+        .limit(limit)
+        .all()
+    )
+    rebuilt = 0
+    for ev in events:
+        members = _event_members(db, ev.id)
+        if not members:
+            continue
+        _rebuild_event_content(db, ev, members)
+        rebuilt += 1
+    if rebuilt:
+        db.commit()
+    return rebuilt
+
+
 def _rebuild_event_content(db: Session, ev: HotEvent, members: list[Article]) -> None:
     """重算事件标题 / 总结 / 核心影响（LLM 优先，失败降级事实拼装）并重建时间线。
 

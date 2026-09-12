@@ -169,7 +169,14 @@ def event_task(trigger: str = "auto"):
             try:
                 stats = run_event_clustering(db)
                 recompute_event_scores(db)
-                run.detail = str(stats)
+                # 事件总结降级自愈：静止事件的事实拼装总结随本轮重算（幂等限流）
+                from app.services.event_service import repair_fallback_event_summaries
+
+                healed = repair_fallback_event_summaries(db)
+                if healed:
+                    run.detail = f"{stats} ｜ 事件总结回填 {healed} 条"
+                else:
+                    run.detail = str(stats)
                 return stats
             finally:
                 db.close()

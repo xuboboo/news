@@ -118,3 +118,62 @@ def test_repair_respects_limit(db, monkeypatch):
     out = repair_llm_fallback_summaries(s, limit=2)
     s.close()
     assert len(out) == 2 and len(dispatched) == 2
+
+
+# ———— 事件总结降级自愈（repair_fallback_event_summaries） ————
+
+def _mk_event(db, *, hours_old=1.0, summary="围绕「某事件」共有 5 篇来自不同报道的关联文章：。"):
+    from app.models.event import HotEvent
+
+    s = db.factory()
+    ev = HotEvent(
+        title="事件", summary=summary,
+        last_time=datetime.now(timezone.utc) - timedelta(hours=hours_old),
+    )
+    s.add(ev)
+    s.commit()
+    eid = ev.id
+    s.close()
+    return eid
+
+
+def test_event_repair_rebuilds_fallback_summary(db, monkeypatch):
+    from app.services import event_service
+
+    eid = _mk_event(db)
+    _set_llm(db, configured=True)
+    rebuilt: list = []
+    monkeypatch.setattr(event_service, "_event_members", lambda s, eid: ["成员A", "成员B"])
+    monkeypatch.setattr(
+        event_service, "_rebuild_event_content",
+        lambda s, ev, members: rebuilt.append(ev.id),
+    )
+
+    s = db.factory()
+    assert event_service.repair_fallback_event_summaries(s) == 1
+    assert rebuilt == [eid]
+
+
+def test_event_repair_noop_when_unconfigured(db, monkeypatch):
+    from app.services import event_service
+
+    _mk_event(db)
+    _set_llm(db, configured=False)
+    monkeypatch.setattr(event_service, "_rebuild_event_content",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("不应重算")))
+
+    s = db.factory()
+    assert event_service.repair_fallback_event_summaries(s) == 0
+
+
+def test_event_repair_skips_llm_summary_and_old_events(db, monkeypatch):
+    from app.services import event_service
+
+    _mk_event(db, hours_old=1.0, summary="LLM 撰写的事件总结，不以拼装引子开头。")
+    _mk_event(db, hours_old=30.0)  # 超窗：事实拼装也不回填
+    _set_llm(db, configured=True)
+    monkeypatch.setattr(event_service, "_rebuild_event_content",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("不应重算")))
+
+    s = db.factory()
+    assert event_service.repair_fallback_event_summaries(s) == 0

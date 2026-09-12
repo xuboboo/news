@@ -23,7 +23,7 @@ from app.main import app
 # ai_usage_log / model_price：成本看板域（usage API、连通性测试落账）均为 SQLite 兼容类型
 _TEST_TABLES = (
     "tenant", "app_user", "user_session", "audit_log", "system_setting", "task_run",
-    "ai_usage_log", "model_price", "article", "article_summary",
+    "ai_usage_log", "model_price", "article", "article_summary", "event", "event_article",
 )
 
 # 统一测试密码（弱口令表会拒绝 12345678 等，此串不在其中）

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (Column, DateTime, Float, ForeignKey, Integer,
-                        String, Text, UniqueConstraint)
+                        JSON, String, Text, UniqueConstraint)
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.core.config import get_settings
@@ -20,12 +20,14 @@ class HotEvent(Base):
     id = Column(Integer, primary_key=True)
     title = Column(String(512), nullable=False)
     summary = Column(Text, default="")            # AI 事件总结
-    impacts = Column(JSONB, default=list)         # 核心影响
+    # PG 仍为 JSONB；JSON variant 仅为让事件自愈等测试能在 SQLite 内存库上建表
+    # （同 audit_log.detail / article_summary 先例）
+    impacts = Column(JSON().with_variant(JSONB, "postgresql"), default=list)   # 核心影响
     hot_score = Column(Float, default=0)
     first_time = Column(DateTime(timezone=True))  # 最早报道时间
     last_time = Column(DateTime(timezone=True), index=True)
     status = Column(String(16), default="发酵中")  # 发酵中 / 持续关注 / 已平息
-    timeline = Column(JSONB, default=list)        # [{time, text, source}]
+    timeline = Column(JSON().with_variant(JSONB, "postgresql"), default=list)  # [{time, text, source}]
     centroid = Column(Vector(get_settings().embed_dim))  # 事件向量质心（增量聚合用）
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
