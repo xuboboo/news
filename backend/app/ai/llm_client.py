@@ -21,7 +21,6 @@ from typing import Tuple
 
 import json
 import re
-from typing import Tuple
 
 import httpx
 
