@@ -25,8 +25,11 @@ from app.services.usage_service import extract_openai_usage
 
 ANTHROPIC_VERSION = "2023-06-01"
 PROTOCOLS = ("openai", "anthropic")
-# Anthropic 协议 max_tokens 必填；摘要/综述类 JSON 输出 1024 足够
-ANTHROPIC_DEFAULT_MAX_TOKENS = 1024
+# Anthropic 协议 max_tokens 必填。思考型模型（如 DeepSeek /anthropic 网关的
+# deepseek-flash，实测恒回 thinking 块）的思考 token 计入 max_tokens：默认值必须
+# 覆盖「思考 + JSON 正文」两者，1024 会被长文思考单独吃光（正文截断 → parse_fail）；
+# 按实际生成计费，上限放大无闲置成本
+ANTHROPIC_DEFAULT_MAX_TOKENS = 4096
 
 
 class LLMAPIError(Exception):
@@ -146,6 +149,20 @@ def parse_response(protocol: str, resp) -> Tuple[str, dict]:
             elif isinstance(b, str):
                 texts.append(b)
         if not texts:
+            # 思考型模型 + 预算过小：思考 token 计入 max_tokens，光思考就把预算
+            # 耗尽（stop_reason=max_tokens），正文块根本没生成——给出可操作的报错
+            # 而非泛化的「无 text 内容块」（2026-09-12 DeepSeek deepseek-flash 实测）
+            truncated_thinking = (
+                isinstance(data, dict)
+                and data.get("stop_reason") == "max_tokens"
+                and any(isinstance(b, dict) and b.get("type") == "thinking" for b in blocks or [])
+            )
+            if truncated_thinking:
+                raise LLMFormatError(
+                    "响应只有 thinking 块且被 max_tokens 截断（思考耗尽预算，正文未生成）："
+                    "请增大 max_tokens 或改用非思考模型",
+                    usage,
+                )
             raise LLMFormatError("响应无 text 内容块", usage)
         return texts[0], usage
     try:

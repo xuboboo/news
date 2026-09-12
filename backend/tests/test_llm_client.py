@@ -97,6 +97,35 @@ def test_parse_response_anthropic_maps_usage():
     assert usage == {"prompt_tokens": 35, "completion_tokens": 7, "cached_tokens": 20, "total_tokens": 42}
 
 
+def test_parse_response_anthropic_thinking_then_text_returns_text():
+    """思考型模型正常响应（thinking + text 两块）：跳过 thinking 取 text 正文。"""
+    text, usage = llm_client.parse_response("anthropic", _resp({
+        "content": [
+            {"type": "thinking", "thinking": "The user wants exactly two letters: OK",
+             "signature": "sig"},
+            {"type": "text", "text": "OK"},
+        ],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 37, "output_tokens": 19},
+    }))
+    assert text == "OK"
+    assert usage["prompt_tokens"] == 37 and usage["completion_tokens"] == 19
+
+
+def test_parse_response_anthropic_thinking_only_truncated_actionable_message():
+    """max_tokens 过小被思考耗尽（DeepSeek deepseek-flash 实测形态）：报错必须
+    指向「增大 max_tokens/换非思考模型」而非泛化的无 text 块，且 usage 不丢账。"""
+    with pytest.raises(llm_client.LLMFormatError) as ei:
+        llm_client.parse_response("anthropic", _resp({
+            "content": [{"type": "thinking", "thinking": "We need answer only two letters OK",
+                         "signature": "sig"}],
+            "stop_reason": "max_tokens",
+            "usage": {"input_tokens": 37, "output_tokens": 8},
+        }))
+    assert "max_tokens" in str(ei.value) and "thinking" in str(ei.value)
+    assert ei.value.usage["completion_tokens"] == 8
+
+
 def test_parse_response_anthropic_no_text_block_keeps_usage():
     with pytest.raises(llm_client.LLMFormatError) as ei:
         llm_client.parse_response("anthropic", _resp({
@@ -248,7 +277,7 @@ def test_rebuild_event_content_falls_back_when_unconfigured(db, monkeypatch):
     event_service._rebuild_event_content(db.factory(), ev, members)
 
     assert captured["llm"] == ("", "", "", "openai")
-    assert ev.summary == event_service._compose_summary(members)
+    assert ev.summary == event_service._compose_summary(members, anchor_title=ev.title)
 
 
 def test_llm_event_summary_empty_summary_recorded_parse_fail(monkeypatch):

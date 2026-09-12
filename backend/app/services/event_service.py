@@ -54,18 +54,24 @@ def _event_status(last_time: datetime) -> str:
     return "已平息"
 
 
-def _compose_summary(members: list[Article]) -> str:
-    """无 LLM 时的事件总结：纯事实拼装（来源 + 报道要点），不添加观点。"""
+def _compose_summary(members: list[Article], anchor_title: str | None = None) -> str:
+    """无 LLM 时的事件总结：纯事实拼装（来源 + 报道要点），不添加观点。
+
+    anchor_title：事件当前标题。引子「围绕「X」」必须与展示标题同源——
+    标题经选举可能与成员首篇不同，不传锚点会让面板上标题与总结各说各话
+    （LLM 路径的 prompt 本就以事件标题为上下文，兜底路径此处对齐）。
+    """
     members = [m for m in members if m]
     if len(members) == 1:
         a = members[0]
         if a.summary and a.summary.summary_short and not _summary_dirty(a.summary.summary_short):
             return a.summary.summary_short
         return a.title
+    anchor = (anchor_title or "").strip() or members[0].title
     lines = []
     for a in members[:4]:
         lines.append(f"{a.source}报道：{truncate(a.title, 48)}")
-    head = f"围绕「{truncate(members[0].title, 24)}」共有 {len(members)} 篇来自不同报道的关联文章："
+    head = f"围绕「{truncate(anchor, 24)}」共有 {len(members)} 篇来自不同报道的关联文章："
     return head + "；".join(lines) + "。"
 
 
@@ -209,7 +215,7 @@ def _rebuild_event_content(db: Session, ev: HotEvent, members: list[Article]) ->
     llm = _llm_event_summary(
         ev.title, members, llm=config_service.effective_llm(db), event_id=ev.id,
     )
-    ev.summary = llm[0] if llm else _compose_summary(members)
+    ev.summary = llm[0] if llm else _compose_summary(members, anchor_title=ev.title)
     if llm:
         # LLM 只给了总结没给 impacts 时，核心影响回落事实拼装，不空着
         ev.impacts = llm[1] or _compose_impacts(members)
@@ -534,7 +540,7 @@ def run_event_clustering(db: Session) -> dict:
             first_time, last_time = event_time_range(cluster.members)
             target_event = HotEvent(
                 title=title,
-                summary=_compose_summary(member_articles),
+                summary=_compose_summary(member_articles, anchor_title=title),
                 impacts=_compose_impacts(member_articles),
                 first_time=first_time,
                 last_time=last_time,

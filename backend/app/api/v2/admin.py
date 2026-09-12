@@ -124,6 +124,28 @@ def put_config(data: dict[str, str], request: Request, db: Session = Depends(get
     return {"updated": updated, **config_service.masked_view(db)}
 
 
+@router.post("/config/reset", dependencies=[Depends(require_admin)])
+def reset_config(payload: dict, request: Request, db: Session = Depends(get_db)):
+    """恢复指定配置项为 .env 默认：删除 DB 覆盖行，立即生效。
+
+    面板按配置组一键恢复（LLM / Embedding）。与 PUT 空串清除同语义，独立成
+    端点是为了单独审计（admin.config_reset）：整组破坏性操作必须与逐项编辑
+    可区分、可追责。不在覆盖中的 key 静默跳过（幂等）。
+    """
+    keys = [str(k) for k in ((payload or {}).get("keys") or [])]
+    if not keys:
+        raise HTTPException(400, "keys 不能为空")
+    unknown = sorted({k for k in keys if k not in config_service.ALLOWED_KEYS})
+    if unknown:
+        raise HTTPException(400, f"unknown config keys: {unknown}")
+    removed = config_service.clear_overrides(db, keys)
+    audit_service.record(
+        db, "admin.config_reset", request=request, user=current_user_of(request),
+        detail={"keys": removed, "skipped": sorted(set(keys) - set(removed))},
+    )
+    return {"reset": removed, **config_service.masked_view(db)}
+
+
 # ———————————————————— 连通性测试 ————————————————————
 
 def _normalize_base(base_url: str) -> str:
@@ -183,7 +205,11 @@ def test_llm(payload: dict | None = None, request: Request = None, db: Session =
         raise HTTPException(400, str(exc))
 
     url, headers, body = llm_client.build_request(
-        base_url, api_key, model, protocol, "只回复两个字母：OK", max_tokens=8,
+        base_url, api_key, model, protocol, "只回复两个字母：OK",
+        # 思考型模型的思考 token 计入 max_tokens（Anthropic 协议）：8 只够思考不够
+        # 输出正文，必然「只有 thinking 块被截断」而误报格式异常；openai 协议无此
+        # 语义，保持最小探针 8
+        max_tokens=8 if protocol == "openai" else 1024,
     )
     start = time.monotonic()
     try:
@@ -544,6 +570,21 @@ def usage_logs_api(
 ):
     """AI 调用流水分页明细（联 article 取标题，error 截断为摘要；可按任务/状态/模型过滤）。"""
     return usage_service.usage_logs(db, page, page_size, task_type=task_type, status=status, model=model)
+
+
+@router.delete("/usage/logs", dependencies=[Depends(require_admin)])
+def clear_usage_logs_api(request: Request, db: Session = Depends(get_db)):
+    """清空全部 AI 调用流水（破坏性、不可恢复），返回删除行数。
+
+    独立审计 admin.usage_logs_cleared 记录行数，与保留期清理（周任务）可区分；
+    价目表 model_price 不受影响。
+    """
+    deleted = usage_service.clear_usage_logs(db)
+    audit_service.record(
+        db, "admin.usage_logs_cleared", request=request, user=current_user_of(request),
+        detail={"deleted": deleted},
+    )
+    return {"deleted": deleted}
 
 
 def _usage_csv_stream(
