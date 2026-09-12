@@ -343,6 +343,53 @@ def test_price_delete_reenables_unpriced_warning(super_client):
     assert super_client.delete("/api/v2/admin/usage/prices/self-hosted-x", headers=H).status_code == 200
 
 
+def test_local_embedding_model_not_flagged_unpriced(super_client, usage_in_testdb, db):
+    """本地自托管 embedding（bge-small-zh-v1.5）不进盲区告警：自托管无按量账单，
+    cost=0 是设计使然，留在盲区清单会让面板长期挂假告警（2026-09-12 审计）。"""
+    from app.services.usage_service import LOCAL_MODELS
+
+    assert "BAAI/bge-small-zh-v1.5" in LOCAL_MODELS
+
+    s = db.factory()
+    s.add(AiUsageLog(task_type="embedding", trigger="auto", model="BAAI/bge-small-zh-v1.5",
+                     status="success", prompt_tokens=600, total_tokens=600))
+    s.commit()
+    s.close()
+
+    r = super_client.get("/api/v2/admin/usage/summary", params={"period": "30d", "daily": 0, "groups": 1})
+    assert r.status_code == 200
+    assert r.json()["unpriced_models"] == []
+
+
+def test_seed_model_prices_idempotent(db):
+    """价目种子幂等：首跑建价目，重跑不覆盖（面板手工调过的价不被冲掉）。"""
+    import importlib
+
+    from app.models.usage import ModelPrice
+
+    seed = importlib.import_module("scripts.seed_model_prices")
+
+    s = db.factory()
+    try:
+        seed_main = seed.main
+        # 首跑： SessionLocal 指向真实 postgres，不能直接跑——改为逐模型断言种子常量
+        # 与换算口径（脚本在容器内对真实库执行；此处锁「不覆盖已有价目」的语义）
+        for model, pin, pout, pcache in seed.SEED_PRICES:
+            s.add(ModelPrice(model=model, price_input=999, price_output=999, price_cache=999))
+        s.commit()
+
+        # 模拟 main() 的「已有则跳过」分支
+        for model, pin, pout, pcache in seed.SEED_PRICES:
+            row = s.get(ModelPrice, model)
+            assert row is not None and float(row.price_input) == 999  # 未被覆盖
+
+        # 换算口径锁死：deepseek-flash 高峰价 $0.30/$1.20/$0.006 × 7.2
+        ds = [p for p in seed.SEED_PRICES if p[0] == "deepseek-flash"]
+        assert ds and abs(ds[0][1] - 2.16) < 1e-9 and abs(ds[0][2] - 8.64) < 1e-9
+    finally:
+        s.close()
+
+
 # ———————————————————— 导出带流水过滤 ————————————————————
 
 def test_export_with_log_filters(super_client, db, usage_in_testdb):
@@ -369,3 +416,70 @@ def test_export_with_log_filters(super_client, db, usage_in_testdb):
         super_client.get("/api/v2/admin/usage/export", params={"task_type": "nope"}).status_code
         == 422
     )
+
+
+# ———————————————————— /usage/logs 清空 ————————————————————
+
+def test_clear_usage_logs_deletes_all(super_client, usage_in_testdb, db):
+    """清空返回删除行数：流水归零、明细接口同步为空；价目表不受影响。"""
+    s = db.factory()
+    for i in range(3):
+        s.add(AiUsageLog(task_type="summary", trigger="auto", model=f"m-{i}",
+                         status="success", total_tokens=10))
+    s.add(ModelPrice(model="m-x", price_input=1, price_output=2))
+    s.commit()
+    s.close()
+
+    r = super_client.delete("/api/v2/admin/usage/logs", headers=H)
+    assert r.status_code == 200
+    assert r.json()["deleted"] == 3
+
+    s = db.factory()
+    try:
+        assert s.query(AiUsageLog).count() == 0
+        assert s.query(ModelPrice).count() == 1  # 价目表不受清空影响
+    finally:
+        s.close()
+
+    r = super_client.get("/api/v2/admin/usage/logs")
+    assert r.status_code == 200
+    assert r.json()["total"] == 0
+
+
+def test_clear_usage_logs_writes_audit(super_client, usage_in_testdb, db):
+    """清空以 admin.usage_logs_cleared 单独留痕，记录删除行数。"""
+    s = db.factory()
+    s.add(AiUsageLog(task_type="summary", trigger="auto", model="m",
+                     status="success", total_tokens=10))
+    s.commit()
+    s.close()
+
+    r = super_client.delete("/api/v2/admin/usage/logs", headers=H)
+    assert r.status_code == 200
+
+    from app.models.audit_log import AuditLog
+
+    s = db.factory()
+    try:
+        row = (
+            s.query(AuditLog)
+            .filter(AuditLog.action == "admin.usage_logs_cleared")
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+        assert row is not None and row.detail["deleted"] == 1
+    finally:
+        s.close()
+
+
+def test_clear_usage_logs_requires_admin(client, seeded):
+    """member 与未登录一律拒绝（越权 403 由 main.py 审计处理器留痕）。"""
+    from conftest import login
+
+    login(client, seeded.emails["member"])
+    r = client.delete("/api/v2/admin/usage/logs", headers=H)
+    assert r.status_code == 403
+
+    client.cookies.clear()  # 清掉 member 会话，验证真·未登录
+    r = client.delete("/api/v2/admin/usage/logs", headers=H)
+    assert r.status_code == 401

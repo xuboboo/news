@@ -24,9 +24,14 @@ from app.utils.tz import TZ_BJ, bj_now
 
 logger = logging.getLogger(__name__)
 
-# 降级 / 本地模型标识：非真实 API 调用，不计入 LLM 覆盖率分子。
+# 降级 / 本地模型标识：非真实 API 调用（或本地自托管、无按量账单），不计入
+# LLM 覆盖率分子、不进未计价盲区告警。
 # extractive-textrank-v2 ↔ app/ai/summary.py；local-hash-256-v2 ↔ app/ai/embedding.py
-# 的 LOCAL_EMBED_MODEL（此处用字面量，反向 import 会循环依赖）——改名需两处同步。
+# 的 LOCAL_EMBED_MODEL（此处用字面量，反向 import 会循环依赖）。
+# bge-small-zh-v1.5 ↔ docker-compose.override.yml 的本地 embedding 服务
+# （fastembed 自托管，EMBEDDING_BASE_URL=http://embedding:80/v1）：真实成本为 0
+# 而非"未计价"，留在盲区清单会让面板长期挂假告警（2026-09-12 审计，库内 262 条
+# 流水被误报）。若改用硅基流动等云端 embedding，把该行移除并在价目表配价即可。
 # v1 旧名（extractive-textrank-v1 / local-hash-256）：改名前的历史流水仍在 30 天
 # 窗口内，不入名单会把本地兜底当成真实 LLM 成功，覆盖率虚高（2026-09-10 审计，
 # 实测 412 条 v1 流水被误计入分子）。
@@ -34,6 +39,7 @@ LOCAL_MODELS = {
     "extractive-textrank-v2", "extractive-textrank-v1",
     "local-hash-256-v2", "local-hash-256",
     "compose-facts",
+    "BAAI/bge-small-zh-v1.5",
 }
 
 # CSV 导出首行注释（对账口径说明）
@@ -457,6 +463,18 @@ def usage_day_summary(db: Session, day: date_type) -> dict:
     start = datetime(day.year, day.month, day.day, tzinfo=TZ_BJ)
     end = start + timedelta(days=1)
     return usage_window_summary(db, start, end)
+
+
+def clear_usage_logs(db: Session) -> int:
+    """清空全部 AI 调用流水，返回删除行数。
+
+    破坏性、不可恢复：仅供管理端「清空流水」按钮，调用方必须单独审计
+    （admin.usage_logs_cleared，记录删除行数）。价目表（model_price）不受影响；
+    常规清理仍走 auth_cleanup_task 的保留期机制（ai_usage_retention_days）。
+    """
+    deleted = db.query(AiUsageLog).delete(synchronize_session=False)
+    db.commit()
+    return deleted
 
 
 def usage_logs(
