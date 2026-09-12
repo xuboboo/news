@@ -19,6 +19,10 @@ build_request / parse_response，协议逻辑不重复实现。
 """
 from typing import Tuple
 
+import json
+import re
+from typing import Tuple
+
 import httpx
 
 from app.services.usage_service import extract_openai_usage
@@ -27,9 +31,10 @@ ANTHROPIC_VERSION = "2023-06-01"
 PROTOCOLS = ("openai", "anthropic")
 # Anthropic 协议 max_tokens 必填。思考型模型（如 DeepSeek /anthropic 网关的
 # deepseek-flash，实测恒回 thinking 块）的思考 token 计入 max_tokens：默认值必须
-# 覆盖「思考 + JSON 正文」两者，1024 会被长文思考单独吃光（正文截断 → parse_fail）；
-# 按实际生成计费，上限放大无闲置成本
-ANTHROPIC_DEFAULT_MAX_TOKENS = 4096
+# 覆盖「思考 + JSON 正文」两者。实测 4096 仍会被大事件（39 篇成员）的长思考
+# 单独吃光（正文截断 → parse_fail，2026-09-12 事件5）；按实际生成计费，
+# 上限放大无闲置成本
+ANTHROPIC_DEFAULT_MAX_TOKENS = 8192
 
 
 class LLMAPIError(Exception):
@@ -120,6 +125,85 @@ def extract_anthropic_usage(body: dict) -> dict:
         "cached_tokens": max(0, min(int(u.get("cache_read_input_tokens") or 0), prompt)),
         "total_tokens": prompt + max(0, completion),
     }
+
+
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.S)
+_JSON_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
+
+
+def _balanced_json_object(text: str, start: int) -> str | None:
+    """从 start 起扫描首个大括号平衡的 {...} 片段；字符串内的引号/转义不参与计数。"""
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def extract_json_object(raw: str) -> dict:
+    """从模型输出提取首个 JSON 对象并解析为 dict；失败抛 ValueError。
+
+    思考型模型/各网关的输出形态五花八门（纯 JSON、```json 围栏、前后杂文、
+    多个对象、尾随逗号），逐层收敛——比旧版贪婪 `\\{.*\\}` 正则更抗
+    「正文里含未转义引号/多对象/前后杂文」类残缺（2026-09-12 文章266 实测
+    parse_fail 的根因）：
+    1. 剥离 Markdown 代码块围栏后整段 json.loads；
+    2. 字符串感知的平衡扫描取顶层 {...} 片段逐个尝试；
+    3. 片段仍失败时修复尾随逗号再试。
+    """
+    if not isinstance(raw, str):
+        raise ValueError("模型输出不是文本")
+    text = raw.strip()
+    fence = _JSON_FENCE_RE.search(text)
+    if fence:
+        text = fence.group(1).strip()
+
+    candidates = [text]
+    i = text.find("{")
+    while i != -1 and len(candidates) <= 4:
+        obj = _balanced_json_object(text, i)
+        if obj is None:
+            i = text.find("{", i + 1)  # 截断的残缺对象：从下一个 { 另起
+        else:
+            candidates.append(obj)
+            i = text.find("{", i + len(obj))  # 跳过嵌套，只取顶层对象
+
+    last_err: Exception | None = None
+    for cand in candidates:
+        for variant in (cand, _JSON_TRAILING_COMMA_RE.sub(r"\1", cand)):
+            try:
+                data = json.loads(variant)
+            except ValueError as exc:
+                last_err = exc
+                continue
+            if isinstance(data, dict):
+                return data
+            last_err = ValueError(f"JSON 顶层不是对象（{type(data).__name__}）")
+    raise ValueError(f"无法从模型输出解析 JSON 对象：{last_err}")
+
+
+# JSON 解析失败后的重试反馈后缀（{error} 由调用方填实际解析错误）
+JSON_RETRY_HINT = (
+    "\n\n你上一次的输出无法解析为 JSON（{error}）。请重新输出："
+    "只输出一个合法的 JSON 对象，不要任何解释、前后缀或 Markdown 代码块围栏。"
+)
 
 
 def parse_response(protocol: str, resp) -> Tuple[str, dict]:

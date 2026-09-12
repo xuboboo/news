@@ -100,78 +100,78 @@ def _llm_event_summary(
 ) -> tuple[str, list[str]] | None:
     """LLM 生成事件总结 + 核心影响；未配置或失败返回 None（失败已落账）。
 
-    用量记账（task_type=event_summary）：成功记 success；HTTP 200 但解析失败记
-    parse_fail（token 已花）；连接/非 200 记 api_fail。未配置 LLM 时不落账
-    （降级拼装 _compose_summary 无 API 调用）。event_id 为空时（新建事件、
-    尚未 flush）流水只带标题上下文。
+    用量记账（task_type=event_summary）：成功记 success；HTTP 200 但 JSON 提取
+    失败记 parse_fail（token 已花）并带纠错反馈自动重试一次；连接/非 200 记
+    api_fail（不重试）。未配置 LLM 时不落账（降级拼装 _compose_summary 无
+    API 调用）。event_id 为空时（新建事件、尚未 flush）流水只带标题上下文。
     """
     if not llm or not (llm[0] and llm[1] and llm[2]):
         return None
     base_url, api_key, model, protocol = llm
     start = time.monotonic()
-    usage: dict = {}
+
+    def _record(status: str, error: str | None, **tokens) -> None:
+        record_usage(
+            task_type="event_summary",
+            model=model,
+            status=status,
+            error=error,
+            latency_ms=int((time.monotonic() - start) * 1000),
+            event_id=event_id,
+            **tokens,
+        )
+
     try:
         base_url = assert_public_http_url(base_url)  # 违规 → api_fail 落账后降级事实拼装
-        material = "\n".join(
-            f"- [{a.source}] {a.title}\n  摘要：{a.summary.summary_short if a.summary else ''}"
-            for a in members[:6]
-        )
-        prompt = (
-            "以下是一个科技热点事件的多篇报道。请输出严格 JSON："
-            '{"summary":"事件总结(150字内,客观,只保留事实)","impacts":["核心影响1","核心影响2","核心影响3"]}\n\n'
-            f"事件标题：{title}\n报道：\n{material}"
-        )
-        raw, usage = llm_client.chat(
-            base_url, api_key, model, protocol, prompt,
-            temperature=0.2, json_mode=True,
-        )
-        data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
-        raw_impacts = data.get("impacts")
-        summary = re.sub(r"\s+", " ", str(data.get("summary", ""))).strip()
-        if not summary:
-            # 空总结不落 success（同 _llm_overview 的 empty overview 口径）：
-            # token 已花按 parse_fail 入账，调用方降级事实拼装
-            raise ValueError("empty summary")
-        record_usage(
-            task_type="event_summary",
-            model=model,
-            status="success",
-            latency_ms=int((time.monotonic() - start) * 1000),
-            event_id=event_id,
-            **usage,
-        )
-        return (
-            truncate(summary, 300),
-            # 容器类型守卫：impacts 非 list（字符串/dict）时按缺失处理，
-            # 降级事实拼装（同 summary.key_points 的防线）
-            [str(i) for i in raw_impacts][:4] if isinstance(raw_impacts, list) else [],
-        )
-    except (llm_client.LLMAPIError, UrlNotAllowed) as exc:
-        # 连接失败 / 非 200 / URL 守卫拦截（未发出请求）→ api_fail
-        record_usage(
-            task_type="event_summary",
-            model=model,
-            status="api_fail",
-            error=str(exc),
-            latency_ms=int((time.monotonic() - start) * 1000),
-            event_id=event_id,
-            **usage,
-        )
+    except UrlNotAllowed as exc:
+        _record("api_fail", str(exc))
         return None
-    except Exception as exc:
-        # HTTP 200 之后的 JSON 提取 / 字段异常 → parse_fail（token 已花，必须入账；
-        # LLMFormatError.usage 带回 content 解析失败前已提取到的用量）
-        usage = getattr(exc, "usage", None) or usage
-        record_usage(
-            task_type="event_summary",
-            model=model,
-            status="parse_fail",
-            error=str(exc),
-            latency_ms=int((time.monotonic() - start) * 1000),
-            event_id=event_id,
-            **usage,
-        )
+
+    material = "\n".join(
+        f"- [{a.source}] {a.title}\n  摘要：{a.summary.summary_short if a.summary else ''}"
+        for a in members[:6]
+    )
+    prompt = (
+        "以下是一个科技热点事件的多篇报道。请输出严格 JSON："
+        '{"summary":"事件总结(150字内,客观,只保留事实)","impacts":["核心影响1","核心影响2","核心影响3"]}\n\n'
+        f"事件标题：{title}\n报道：\n{material}"
+    )
+    data = None
+    usage: dict = {}
+    feedback = ""
+    for attempt in range(2):
+        try:
+            raw, usage = llm_client.chat(
+                base_url, api_key, model, protocol, prompt + feedback,
+                temperature=0.2, json_mode=True,
+            )
+            data = llm_client.extract_json_object(raw)
+            break
+        except llm_client.LLMAPIError as exc:
+            _record("api_fail", str(exc), **usage)
+            return None
+        except (ValueError, llm_client.LLMFormatError) as exc:
+            # JSON 提取失败 / 响应结构异常：本次 token 如实落账（LLMFormatError
+            # 的 usage 由异常带回，chat 未返回），末次失败后由调用方降级
+            usage = getattr(exc, "usage", None) or usage
+            _record("parse_fail", str(exc), **usage)
+            feedback = llm_client.JSON_RETRY_HINT.format(error=exc)
+    if data is None:
         return None
+    raw_impacts = data.get("impacts")
+    summary = re.sub(r"\s+", " ", str(data.get("summary", ""))).strip()
+    if not summary:
+        # 空总结不落 success（同 _llm_overview 的 empty overview 口径）：
+        # token 已花按 parse_fail 入账，调用方降级事实拼装
+        _record("parse_fail", "empty summary", **usage)
+        return None
+    _record("success", None, **usage)
+    return (
+        truncate(summary, 300),
+        # 容器类型守卫：impacts 非 list（字符串/dict）时按缺失处理，
+        # 降级事实拼装（同 summary.key_points 的防线）
+        [str(i) for i in raw_impacts][:4] if isinstance(raw_impacts, list) else [],
+    )
 
 
 def _recompute_centroid(db: Session, event_id: int) -> list[float] | None:

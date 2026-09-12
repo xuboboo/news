@@ -126,6 +126,38 @@ def test_parse_response_anthropic_thinking_only_truncated_actionable_message():
     assert ei.value.usage["completion_tokens"] == 8
 
 
+# ———————— 健壮 JSON 提取（extract_json_object，2026-09-12 文章266 回归） ————————
+
+def test_extract_json_object_plain_and_fenced():
+    assert llm_client.extract_json_object('{"a": 1}') == {"a": 1}
+    assert llm_client.extract_json_object('前言\n```json\n{"a": {"b": 2},}\n```\n后记') == {"a": {"b": 2}}
+
+
+def test_extract_json_object_first_balanced_among_prose_and_objects():
+    """前后杂文 + 多对象：取首个顶层对象（旧贪婪正则会把两个对象连体误解析）。"""
+    raw = '说明 {"a": 1} 中间 {"b": 2}'
+    assert llm_client.extract_json_object(raw) == {"a": 1}
+
+
+def test_extract_json_object_repairs_trailing_comma():
+    assert llm_client.extract_json_object('{"a": [1, 2,], "b": "x",}') == {"a": [1, 2], "b": "x"}
+
+
+def test_extract_json_object_string_aware_braces():
+    """字符串里的大括号/引号不参与平衡计数（旧正则同款场景）。"""
+    raw = '{"code": "if (a[b] == \\"x\\") {return}", "n": 1}'
+    assert llm_client.extract_json_object(raw)["n"] == 1
+
+
+def test_extract_json_object_unparseable_raises_value_error():
+    import pytest
+
+    with pytest.raises(ValueError):
+        llm_client.extract_json_object('{"a":')  # 截断，无任何可解析对象
+    with pytest.raises(ValueError):
+        llm_client.extract_json_object("完全没有 JSON 的输出")
+
+
 def test_parse_response_anthropic_no_text_block_keeps_usage():
     with pytest.raises(llm_client.LLMFormatError) as ei:
         llm_client.parse_response("anthropic", _resp({
@@ -339,3 +371,86 @@ def test_set_overrides_rejects_bad_protocol(db):
         assert config_service.get_effective(s, "llm_protocol") == "anthropic"
     finally:
         s.close()
+
+
+# ———————— 摘要 JSON 残缺自动重试（2026-09-12 文章266 回归） ————————
+
+def _stub_chat_sequence(monkeypatch, responses: list[tuple[str, dict]]):
+    """按序返回 (raw, usage) 的 chat 桩；返回每次调用的入参。"""
+    calls: list[dict] = []
+    seq = list(responses)
+
+    def fake_chat(base_url, api_key, model, protocol, prompt, **kw):
+        calls.append({"prompt": prompt})
+        raw, usage = seq.pop(0)
+        return raw, usage
+
+    monkeypatch.setattr(llm_client, "chat", fake_chat)
+    return calls
+
+
+def test_summary_retry_recovers_from_malformed_json(db, monkeypatch):
+    """首次残缺 JSON → parse_fail 落账并带纠错反馈重试；第二次成功落 success。
+    此前单次解析失败即永久降级抽取式（token 白花、摘要质量降级）。"""
+    from app.ai import summary as summary_mod
+    from app.services import usage_service
+
+    usage_rows: list[dict] = []
+    monkeypatch.setattr(
+        summary_mod, "record_usage",
+        lambda **kw: usage_rows.append(kw),
+    )
+    calls = _stub_chat_sequence(monkeypatch, [
+        ('{"summary":"一句话",', {"prompt_tokens": 10, "completion_tokens": 5,
+                                  "total_tokens": 15}),  # 残缺：截断
+        ('{"summary":"修复后的摘要","points":["p1"],"tags":["t"]}',
+         {"prompt_tokens": 30, "completion_tokens": 20, "total_tokens": 50}),
+    ])
+
+    out = summary_mod._summarize_by_llm(
+        "标题", "正文", ("https://x.test", "k", "m", "openai"), article_id=1,
+    )
+    assert out is not None and out.model == "m"
+    assert out.summary_short == "修复后的摘要"
+    assert len(calls) == 2
+    # 第二次 prompt 带上了第一次的解析错误反馈
+    assert "无法解析" in calls[1]["prompt"] and calls[0]["prompt"] in calls[1]["prompt"]
+    # 逐次如实落账：parse_fail(15) + success(50)
+    assert [r["status"] for r in usage_rows] == ["parse_fail", "success"]
+    assert usage_rows[0]["total_tokens"] == 15 and usage_rows[1]["total_tokens"] == 50
+
+
+def test_summary_retry_exhausted_falls_back(db, monkeypatch):
+    """两次均残缺：两条 parse_fail 落账后返回 None（调用方降级抽取式）。"""
+    from app.ai import summary as summary_mod
+
+    usage_rows: list[dict] = []
+    monkeypatch.setattr(summary_mod, "record_usage", lambda **kw: usage_rows.append(kw))
+    _stub_chat_sequence(monkeypatch, [
+        ('{"summary":"一句话",', {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}),
+        ('还是不是 JSON', {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}),
+    ])
+
+    out = summary_mod._summarize_by_llm(
+        "标题", "正文", ("https://x.test", "k", "m", "openai"), article_id=1,
+    )
+    assert out is None
+    assert [r["status"] for r in usage_rows] == ["parse_fail", "parse_fail"]
+
+
+def test_summary_api_fail_does_not_retry(db, monkeypatch):
+    """连接层失败（api_fail）不重试：单条落账后立即降级。"""
+    from app.ai import summary as summary_mod
+
+    usage_rows: list[dict] = []
+    monkeypatch.setattr(summary_mod, "record_usage", lambda **kw: usage_rows.append(kw))
+
+    def fake_chat(*a, **kw):
+        raise llm_client.LLMAPIError("HTTP 503")
+
+    monkeypatch.setattr(llm_client, "chat", fake_chat)
+    out = summary_mod._summarize_by_llm(
+        "标题", "正文", ("https://x.test", "k", "m", "openai"), article_id=1,
+    )
+    assert out is None
+    assert [r["status"] for r in usage_rows] == ["api_fail"]

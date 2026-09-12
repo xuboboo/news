@@ -8,7 +8,6 @@
    重叠度）上跑 PageRank，混合标题相关覆盖率与导语位置权重，MMR 去冗余选 5 句，
    同样产出三要素，保证流水线闭环可运行。
 """
-import json
 import math
 import re
 import time
@@ -106,70 +105,70 @@ def _summarize_by_llm(
     article_id: int | None = None,
     trigger: str = "auto",
 ) -> SummaryResult | None:
-    """调用 LLM 生成摘要。内部负责用量记账（每次调用恰好落一条 ai_usage_log）：
+    """调用 LLM 生成摘要。内部负责用量记账（每次尝试各落一条 ai_usage_log）：
 
     - HTTP 200 且解析成功 → status=success（token 照记）；
-    - HTTP 200 但响应解析 / JSON 提取失败 → status=parse_fail（token 已花，必须入账）；
-    - 连接异常 / 非 200 / URL 守卫拦截 → status=api_fail。
+    - HTTP 200 但 JSON 提取失败 → status=parse_fail（token 已花，必须入账），
+      并带纠错反馈自动重试一次——思考型模型偶发残缺 JSON（2026-09-12 文章266
+      实测：第 346 字符处语法错误，整篇永久降级抽取式），重试可挽回；
+    - 连接异常 / 非 200 / URL 守卫拦截 → status=api_fail（连接层失败重试
+      意义有限，不重试）。
     返回 None 表示调用失败，由调用方降级抽取式（业务零感知）。
     """
     base_url, api_key, model, protocol = llm
     prompt = PROMPT_TEMPLATE.format(title=title, content=(content or title)[:4000])
     start = time.monotonic()
-    usage: dict = {}
+
+    def _record(status: str, error: str | None, **tokens) -> None:
+        record_usage(
+            task_type="summary",
+            model=model,
+            status=status,
+            error=error,
+            latency_ms=_elapsed_ms(start),
+            article_id=article_id,
+            trigger=trigger,
+            **tokens,
+        )
+
     try:
         base_url = assert_public_http_url(base_url)  # 违规 → api_fail 落账后降级抽取式
-        raw, usage = llm_client.chat(
-            base_url, api_key, model, protocol, prompt,
-            temperature=0.2, json_mode=True,
-        )
-        data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
-        record_usage(
-            task_type="summary",
-            model=model,
-            status="success",
-            latency_ms=_elapsed_ms(start),
-            article_id=article_id,
-            trigger=trigger,
-            **usage,
-        )
-        return SummaryResult(
-            summary_short=truncate(str(data.get("summary", "")), 80),
-            summary_long=truncate(str(data.get("summary", "")), 400),
-            # 容器类型守卫：模型把 points/tags 返回成字符串时逐字符拆分会产出
-            # 单字要点污染摘要，dict 会产出键名——非 list 一律按缺失处理
-            key_points=[str(p) for p in data.get("points")][:5] if isinstance(data.get("points"), list) else [],
-            tags=[str(t) for t in data.get("tags")][:5] if isinstance(data.get("tags"), list) else [],
-            model=model,
-        )
-    except (llm_client.LLMAPIError, UrlNotAllowed) as exc:
-        # 连接失败 / 非 200 / URL 守卫拦截（未发出请求）→ api_fail
-        record_usage(
-            task_type="summary",
-            model=model,
-            status="api_fail",
-            error=str(exc),
-            latency_ms=_elapsed_ms(start),
-            article_id=article_id,
-            trigger=trigger,
-            **usage,
-        )
+    except UrlNotAllowed as exc:
+        _record("api_fail", str(exc))
         return None
-    except Exception as exc:
-        # HTTP 200 之后的 JSON 提取 / 字段异常 → parse_fail（token 已花，必须入账；
-        # LLMFormatError.usage 带回 content 解析失败前已提取到的用量）
-        usage = getattr(exc, "usage", None) or usage
-        record_usage(
-            task_type="summary",
-            model=model,
-            status="parse_fail",
-            error=str(exc),
-            latency_ms=_elapsed_ms(start),
-            article_id=article_id,
-            trigger=trigger,
-            **usage,
-        )
+
+    data = None
+    usage: dict = {}
+    feedback = ""
+    for attempt in range(2):
+        try:
+            raw, usage = llm_client.chat(
+                base_url, api_key, model, protocol, prompt + feedback,
+                temperature=0.2, json_mode=True,
+            )
+            data = llm_client.extract_json_object(raw)
+            break
+        except llm_client.LLMAPIError as exc:
+            _record("api_fail", str(exc), **usage)
+            return None
+        except (ValueError, llm_client.LLMFormatError) as exc:
+            # JSON 提取失败 / 响应结构异常：本次 token 如实落账（LLMFormatError
+            # 的 usage 由异常带回，chat 未返回），末次失败后由调用方降级
+            usage = getattr(exc, "usage", None) or usage
+            _record("parse_fail", str(exc), **usage)
+            feedback = llm_client.JSON_RETRY_HINT.format(error=exc)
+    if data is None:
         return None
+    _record("success", None, **usage)
+    return SummaryResult(
+        summary_short=truncate(str(data.get("summary", "")), 80),
+        summary_long=truncate(str(data.get("summary", "")), 400),
+        # 容器类型守卫：模型把 points/tags 返回成字符串时逐字符拆分会产出
+        # 单字要点污染摘要，dict 会产出键名——非 list 一律按缺失处理
+        key_points=[str(p) for p in data.get("points")][:5] if isinstance(data.get("points"), list) else [],
+        tags=[str(t) for t in data.get("tags")][:5] if isinstance(data.get("tags"), list) else [],
+        model=model,
+    )
 
 
 def _pagerank(sim: List[List[float]], d: float = 0.85, iters: int = 30) -> List[float]:

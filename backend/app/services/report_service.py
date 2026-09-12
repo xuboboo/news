@@ -122,83 +122,85 @@ def _compose_overview(
 def _llm_overview(llm: tuple[str, str, str, str], content: dict, trigger: str = "auto") -> str | None:
     """LLM 撰写今日综述；未配置或任何失败返回 None（失败已落账），调用方回退模板。
 
-    用量记账（task_type=report，成本看板「日报」类型）：HTTP 200 但解析失败记
-    parse_fail（token 已花）；连接/非 200/URL 守卫拦截记 api_fail；未配置 LLM 时
-    不调用不落账。与 event_service._llm_event_summary 同款「落账 + 降级」模式。
+    用量记账（task_type=report，成本看板「日报」类型）：HTTP 200 但 JSON 提取
+    失败记 parse_fail（token 已花）并带纠错反馈自动重试一次；连接/非 200/URL
+    守卫拦截记 api_fail（不重试）；未配置 LLM 时不调用不落账。
+    与 event_service._llm_event_summary 同款「落账 + 降级」模式。
     """
     if not (llm and llm[0] and llm[1] and llm[2]):
         return None
     base_url, api_key, model, protocol = llm
     start = time.monotonic()
-    usage: dict = {}
+
+    def _record(status: str, error: str | None, **tokens) -> None:
+        record_usage(
+            task_type="report",
+            model=model,
+            status=status,
+            error=error,
+            latency_ms=int((time.monotonic() - start) * 1000),
+            trigger=trigger,
+            **tokens,
+        )
+
     try:
         base_url = assert_public_http_url(base_url)
-        events = content.get("top_events") or []
-        quick = content.get("quick_news") or []
-        channels = content.get("channel_stats") or []
-        ev_lines = "\n".join(
-            f"- {e.get('title', '')}（{e.get('articles_count', 0)}篇/"
-            f"{e.get('sources_count', 0)}源，{e.get('status', '')}）\n"
-            f"  摘要：{truncate(str(e.get('summary') or ''), 80)}"
-            for e in events[:5]
-        )
-        quick_lines = "；".join(
-            f"{a.get('title', '')}（{a.get('source', '')}）" for a in quick[:8]
-        )
-        ch_lines = "、".join(f"{c.get('channel', '')} {c.get('count', 0)}篇" for c in channels[:4])
-        prompt = (
-            "以下是软件行业资讯日报的素材。请写一段80~140字的中文今日综述："
-            "概括当日最热事件及其交叉报道情况、其他值得注意的热点、收录量与频道分布。"
-            "要求：客观陈述事实、不加观点、不使用任何 markdown 标记、不要称呼与客套。\n"
-            '输出严格 JSON：{"overview":"综述文本"}\n\n'
-            f"共收录 {content.get('articles_total', 0)} 篇报道。\n"
-            f"热点事件：\n{ev_lines or '（无聚合事件）'}\n"
-            f"其他热点：{quick_lines or '（无）'}\n"
-            f"频道分布：{ch_lines or '（无）'}"
-        )
-        raw, usage = llm_client.chat(
-            base_url, api_key, model, protocol, prompt,
-            temperature=0.3, json_mode=True,
-        )
-        data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
-        overview = re.sub(r"\s+", " ", str(data.get("overview", ""))).strip()
-        if not overview:
-            raise ValueError("empty overview")
-        record_usage(
-            task_type="report",
-            model=model,
-            status="success",
-            latency_ms=int((time.monotonic() - start) * 1000),
-            trigger=trigger,
-            **usage,
-        )
-        return truncate(overview, 300)
-    except (llm_client.LLMAPIError, UrlNotAllowed) as exc:
-        # 连接失败 / 非 200 / URL 守卫拦截（未发出请求）→ api_fail
-        record_usage(
-            task_type="report",
-            model=model,
-            status="api_fail",
-            error=str(exc),
-            latency_ms=int((time.monotonic() - start) * 1000),
-            trigger=trigger,
-            **usage,
-        )
+    except UrlNotAllowed as exc:
+        _record("api_fail", str(exc))
         return None
-    except Exception as exc:
-        # HTTP 200 之后的 JSON 提取 / 字段异常 → parse_fail（token 已花，必须入账；
-        # LLMFormatError.usage 带回 content 解析失败前已提取到的用量）
-        usage = getattr(exc, "usage", None) or usage
-        record_usage(
-            task_type="report",
-            model=model,
-            status="parse_fail",
-            error=str(exc),
-            latency_ms=int((time.monotonic() - start) * 1000),
-            trigger=trigger,
-            **usage,
-        )
+
+    events = content.get("top_events") or []
+    quick = content.get("quick_news") or []
+    channels = content.get("channel_stats") or []
+    ev_lines = "\n".join(
+        f"- {e.get('title', '')}（{e.get('articles_count', 0)}篇/"
+        f"{e.get('sources_count', 0)}源，{e.get('status', '')}）\n"
+        f"  摘要：{truncate(str(e.get('summary') or ''), 80)}"
+        for e in events[:5]
+    )
+    quick_lines = "；".join(
+        f"{a.get('title', '')}（{a.get('source', '')}）" for a in quick[:8]
+    )
+    ch_lines = "、".join(f"{c.get('channel', '')} {c.get('count', 0)}篇" for c in channels[:4])
+    prompt = (
+        "以下是软件行业资讯日报的素材。请写一段80~140字的中文今日综述："
+        "概括当日最热事件及其交叉报道情况、其他值得注意的热点、收录量与频道分布。"
+        "要求：客观陈述事实、不加观点、不使用任何 markdown 标记、不要称呼与客套。\n"
+        '输出严格 JSON：{"overview":"综述文本"}\n\n'
+        f"共收录 {content.get('articles_total', 0)} 篇报道。\n"
+        f"热点事件：\n{ev_lines or '（无聚合事件）'}\n"
+        f"其他热点：{quick_lines or '（无）'}\n"
+        f"频道分布：{ch_lines or '（无）'}"
+    )
+    data = None
+    usage: dict = {}
+    feedback = ""
+    for attempt in range(2):
+        try:
+            raw, usage = llm_client.chat(
+                base_url, api_key, model, protocol, prompt + feedback,
+                temperature=0.3, json_mode=True,
+            )
+            data = llm_client.extract_json_object(raw)
+            break
+        except llm_client.LLMAPIError as exc:
+            _record("api_fail", str(exc), **usage)
+            return None
+        except (ValueError, llm_client.LLMFormatError) as exc:
+            # JSON 提取失败 / 响应结构异常：本次 token 如实落账（LLMFormatError
+            # 的 usage 由异常带回，chat 未返回），末次失败后由调用方降级
+            usage = getattr(exc, "usage", None) or usage
+            _record("parse_fail", str(exc), **usage)
+            feedback = llm_client.JSON_RETRY_HINT.format(error=exc)
+    if data is None:
         return None
+    overview = re.sub(r"\s+", " ", str(data.get("overview", ""))).strip()
+    if not overview:
+        # 空综述不落 success：token 已花按 parse_fail 入账，调用方回退模板
+        _record("parse_fail", "empty overview", **usage)
+        return None
+    _record("success", None, **usage)
+    return truncate(overview, 300)
 
 
 def build_report(db: Session, day: date_type) -> dict:
