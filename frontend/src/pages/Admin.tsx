@@ -78,6 +78,8 @@ const FIELD_LABELS: Record<string, string> = {
   report_push_wecom_webhook_url: '企业微信机器人 URL',
   report_push_feishu_webhook_url: '飞书机器人 URL',
   report_push_feishu_secret: '飞书签名密钥（未开启校验留空）',
+  ai_daily_cost_budget: 'AI 日成本预算（元，0 = 不告警）',
+  ai_usage_retention_days: 'AI 流水保留（天，0 = 永久）',
 };
 
 const SENSITIVE = new Set([
