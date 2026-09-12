@@ -72,6 +72,12 @@ def main():
                             repaired = repair_pending_summaries(db)
                             if repaired:
                                 logger.info("repaired %s stuck-pending articles", len(repaired))
+                            # LLM 降级自愈：重派近期仍停留抽取式摘要的文章（LLM 恢复后补上）
+                            from app.services.summary_service import repair_llm_fallback_summaries
+
+                            fallback = repair_llm_fallback_summaries(db)
+                            if fallback:
+                                logger.info("re-summarized %s llm-fallback articles", len(fallback))
                         finally:
                             db.close()
                 finally:

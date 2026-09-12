@@ -18,11 +18,12 @@ from app.auth import passwords, throttle
 from app.core.db import Base, get_db
 from app.main import app
 
-# 用户/租户域 + 运维监控域测试所需的最小表集（不含 article 等需要 pgvector 的表）
+# 用户/租户域 + 运维监控域测试所需的最小表集（article/article_summary 已验证
+# 可在 SQLite 建，摘要自愈等测试需要它们）
 # ai_usage_log / model_price：成本看板域（usage API、连通性测试落账）均为 SQLite 兼容类型
 _TEST_TABLES = (
     "tenant", "app_user", "user_session", "audit_log", "system_setting", "task_run",
-    "ai_usage_log", "model_price",
+    "ai_usage_log", "model_price", "article", "article_summary",
 )
 
 # 统一测试密码（弱口令表会拒绝 12345678 等，此串不在其中）

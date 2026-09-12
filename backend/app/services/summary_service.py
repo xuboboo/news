@@ -87,3 +87,42 @@ def repair_pending_summaries(
         for aid in ids:
             summary_task.delay(aid)
     return ids
+
+
+def repair_llm_fallback_summaries(db: Session, within_hours: int = 24, limit: int = 10) -> list[int]:
+    """LLM 降级自愈：重派「摘要仍是本地抽取式且 LLM 现已配置」的近期文章。
+
+    场景：LLM 调用重试后仍失败（api_fail，如供应商短时抖动）时文章永久停留
+    抽取式摘要，没有任何机制在 LLM 恢复后补上（2026-09-12 审计遗漏项）。
+    本函数随每轮采集触发：只回看 within_hours 内的近期文章、单轮限量 limit，
+    保证供应商故障期间的重试成本有硬上界；generate_summary 为 upsert 语义，
+    补派幂等，成功后摘要即换为 LLM 版本，不再命中本查询。
+
+    仅当 LLM 现已配置时才动作（未配置时重派只会白跑一轮抽取式）。
+    返回补派 id 列表。
+    """
+    if not any(config_service.effective_llm(db)[:3]):
+        return []
+    from app.services.usage_service import LOCAL_MODELS
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=within_hours)
+    ids = [
+        row[0]
+        for row in (
+            db.query(Article.id)
+            .join(ArticleSummary, ArticleSummary.article_id == Article.id)
+            .filter(
+                Article.created_at >= cutoff,
+                ArticleSummary.model.in_(tuple(LOCAL_MODELS)),
+            )
+            .order_by(Article.id.desc())
+            .limit(limit)
+            .all()
+        )
+    ]
+    if ids:
+        from app.tasks.tasks import summary_task  # 延迟导入避免循环依赖
+
+        for aid in ids:
+            summary_task.delay(aid)
+    return ids

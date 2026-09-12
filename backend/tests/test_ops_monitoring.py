@@ -312,13 +312,20 @@ def test_watch_private_webhook_blocked(db, monkeypatch):
 # ———————————————————— 深度健康探针 ————————————————————
 
 def test_health_light_and_deep(client, monkeypatch):
-    # 测试库不含 article 表（pgvector）：轻探针走 db 失败路径，恰好验证 degraded 行为
+    # 注入 DB 故障（轻探针的 db 失败路径 → degraded）：article 表已进测试表集，
+    # 不能再靠"表不存在"触发，改为让探针查询本身抛错
+    from app.api.v2 import public as public_api
+
+    class _BrokenArticle:
+        class id:  # func.count(_BrokenArticle.id) 建表达式即抛 → 探针判 db 不可用
+            def __init__(self):
+                raise RuntimeError("db down")
+
+    monkeypatch.setattr(public_api, "Article", _BrokenArticle)
     light = client.get("/api/v2/health").json()
     assert light["status"] == "degraded" and light["db"] is False
 
     # deep 结果有 15s 模块级缓存：先清掉，确保本用例的 monkeypatch 生效
-    from app.api.v2 import public as public_api
-
     public_api._DEEP_CACHE["t"] = 0.0
     public_api._DEEP_CACHE["data"] = None
     monkeypatch.setattr(infra_status, "redis_ping", lambda timeout=2.0: (True, 3))

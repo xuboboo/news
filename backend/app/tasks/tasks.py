@@ -46,11 +46,18 @@ def crawler_task(trigger: str = "auto"):
                 for article_id in result["new_ids"]:
                     summary_task.delay(article_id)
                 # 孤儿自愈：补派历史滞留 pending（幂等，见 summary_service.repair_pending_summaries）
-                from app.services.summary_service import repair_pending_summaries
+                from app.services.summary_service import (
+                    repair_llm_fallback_summaries,
+                    repair_pending_summaries,
+                )
 
                 repaired = repair_pending_summaries(db)
                 if repaired:
                     run.detail += f" ｜ 补派 pending {len(repaired)} 篇"
+                # LLM 降级自愈：近期仍停留抽取式摘要的文章随本轮重派（幂等限流）
+                fallback = repair_llm_fallback_summaries(db)
+                if fallback:
+                    run.detail += f" ｜ LLM 降级回填 {len(fallback)} 篇"
                 return result
             finally:
                 db.close()
