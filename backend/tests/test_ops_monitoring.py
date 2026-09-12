@@ -309,6 +309,42 @@ def test_watch_private_webhook_blocked(db, monkeypatch):
     assert "非公网" in r["reason"]
 
 
+def test_hot_paused_stats_exempt_from_failed_and_degraded_alerts(db, monkeypatch):
+    """面板热停 stats 后，停用前遗留的 failed/degraded 记录不再告警。
+
+    节奏停摆检查本就豁免热停任务，但「失败未恢复」「连续 3 轮降级」此前不豁免——
+    按 crawler/stats.py 文档建议「热停 stats_poll_enabled 熔断」后，遗留异常记录
+    会以 30 分钟节奏永久重复告警（直至 90 天记录清理），恰在执行修复动作后误报不止。
+    """
+    from conftest import set_config
+
+    # alert_service 以 from-import 绑定了本名引用，须 patch 其命名空间
+    monkeypatch.setattr(alert_service, "redis_ping", lambda timeout=2.0: (True, 1))
+    monkeypatch.setattr(alert_service, "celery_workers_ping", lambda timeout=4.0: (["celery@a"], None))
+
+    now = datetime.now(timezone.utc)
+    s = db.factory()
+    # failed 行在前（更早），其后 3 轮 degraded：让「失败未恢复」与「连续降级」两条件同时成立
+    s.add(TaskRun(name="stats", trigger="auto", status="failed",
+                  started_at=now - timedelta(minutes=60), detail="boom"))
+    for i in range(3):  # stats 最近 3 轮连续 degraded（触发「连续降级」条件）
+        s.add(TaskRun(name="stats", trigger="auto", status="degraded",
+                      started_at=now - timedelta(minutes=50 - i)))
+    s.commit()
+    s.close()
+
+    # stats 启用中：失败未恢复 + 连续降级照常告警
+    set_config(db, "stats_poll_enabled", "true")
+    problems = alert_service._collect_problems(db.factory())
+    assert any("任务失败未恢复" in p for p in problems)
+    assert any("任务连续降级" in p for p in problems)
+
+    # 面板热停后：遗留异常全部豁免（基础设施健康、无其他任务 → problems 为空）
+    set_config(db, "stats_poll_enabled", "false")
+    problems = alert_service._collect_problems(db.factory())
+    assert problems == []
+
+
 # ———————————————————— 深度健康探针 ————————————————————
 
 def test_health_light_and_deep(client, monkeypatch):

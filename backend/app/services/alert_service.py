@@ -73,7 +73,11 @@ def _collect_problems(db: Session) -> list[str]:
         stats_enabled = config_service.get_effective(db, "stats_poll_enabled")
     except Exception:
         stats_enabled = None
-    for item in cadence_warnings(db, interval, skip={"stats"} if stats_enabled is False else set()):
+    # 面板热停（enabled=false）的任务与「被人为熔断的故障」同义：节奏停摆、失败未恢复、
+    # 连续降级三类检查都要豁免——否则按 crawler/stats.py 文档建议「热停 stats 熔断」后，
+    # 停用前遗留的 failed/degraded 记录会以 30 分钟节奏永久重复告警（直至 90 天记录清理）
+    paused_tasks: set[str] = {"stats"} if stats_enabled is False else set()
+    for item in cadence_warnings(db, interval, skip=paused_tasks):
         problems.append(
             f"任务停摆：{item['label']}（{item['name']}）最近运行 "
             f"{_fmt_dt(item['last_run_at'])}，距今 {item['age_minutes']} 分钟，超过阈值 "
@@ -86,7 +90,7 @@ def _collect_problems(db: Session) -> list[str]:
     last_failed = (
         db.query(TaskRun).filter(TaskRun.status == "failed").order_by(TaskRun.id.desc()).first()
     )
-    if last_failed:
+    if last_failed and last_failed.name not in paused_tasks:
         recovered = (
             db.query(TaskRun)
             .filter(
@@ -106,7 +110,10 @@ def _collect_problems(db: Session) -> list[str]:
     # 部分失败（degraded）连续 3 轮未恢复：单来源采集持续失效时任务不再是 success，
     # 但偶发 1-2 轮降级只进面板不打扰；连续 3 轮说明对应来源已稳定故障
     degraded_names = (
-        db.query(TaskRun.name).filter(TaskRun.status == "degraded").distinct().all()
+        db.query(TaskRun.name)
+        .filter(TaskRun.status == "degraded", TaskRun.name.notin_(paused_tasks))
+        .distinct()
+        .all()
     )
     for (name,) in degraded_names:
         recent = (
