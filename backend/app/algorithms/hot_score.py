@@ -1,12 +1,26 @@
-"""热度算法（PRD 3.1）：HotScore = Engagement × TimeDecay
+"""热度算法（PRD 3.1，2026-09-13 改版）：HotScore = ln(1+Engagement) × TimeDecay
 
 Engagement = views + comments × COMMENT_WEIGHT + likes × LIKE_WEIGHT + shares × SHARE_WEIGHT
 TimeDecay  = e^(−λ × 距发布小时数)
 
 不加入人工权重、不加入华军偏好。
 
+改版动因（2026-09-13 审计）：旧版 Engagement 线性进分，一篇爆文会把同窗口其余
+文章的归一化分数压扁到个位数（max 归一化对离群值敏感）。log1p 压缩量纲后
+"互动量差一个数量级 ≈ 分差 2.3 倍"而非 10 倍，榜单中后段保有区分度；
+Reddit hot 公式的 log10 项同理。
+
+零互动降级：来源未公开互动数据时（阅读/分享无公开数据源恒为 0，评论/点赞由
+crawler/stats.py 轮询且首采前为 0），取 decay × ln(1+ZERO_REF)。锚定 ZERO_REF=100
+表示"零数据 ≈ 100 点原始互动"的新近度——旧版直接 decay×100（原始量纲）会让
+刚发布、零数据的新文在安静时段登顶热榜；对数尺度下其分数约 4.6，与一篇
+百级互动的文章相当，不再空降。锚定是固定下限、与正枝在 0 处不连续（只有
+个位数互动的文章分数低于零数据文章），这是有意的取舍：未首采/无数据
+不应比"有真实互动"更亏。
+
 hot_score_expr 提供与 hot_score() 数值一致的 SQL 表达式，供排序/聚合下推
-数据库（避免每请求把近期全量文章拉进 Python 打分）。
+数据库（避免每请求把近期全量文章拉进 Python 打分）。注意 PostgreSQL 的
+log() 是 10 底，自然对数必须用 ln()。
 """
 import math
 from datetime import datetime, timezone
@@ -14,6 +28,11 @@ from datetime import datetime, timezone
 from sqlalchemy import case, func
 
 from app.core.config import get_settings
+
+# 零互动降级的锚定参考量（原始 Engagement 量纲）：零数据文章 ≈ 有 100 点互动
+ZERO_REF = 100.0
+# math.log1p(ZERO_REF) ≈ 4.615；SQL 侧引用同一常数保证两版本逐位一致
+ZERO_REF_LOG = math.log1p(ZERO_REF)
 
 
 def raw_engagement(views: int, comments: int, shares: int, likes: int = 0) -> float:
@@ -42,16 +61,15 @@ def hot_score(
     engagement = raw_engagement(views, comments, shares, likes)
     decay = time_decay(publish_time, now)
     if engagement <= 0:
-        # 来源未公开互动数据时的降级策略：以时间衰减为主导的真实热度
-        # （评论/点赞由 crawler/stats.py 轮询，阅读/分享无公开数据源恒为 0）
-        return decay * 100.0
-    return engagement * decay
+        return decay * ZERO_REF_LOG
+    return math.log1p(engagement) * decay
 
 
 def hot_score_expr(model):
     """hot_score() 的 SQL 版本（SQLAlchemy 列表达式），语义逐项对齐：
 
-    - Engagement 各字段 COALESCE 0；Engagement=0 时取 decay×100（降级策略）；
+    - Engagement 各字段 COALESCE 0；Engagement=0 时取 decay×ln(1+ZERO_REF)（降级策略）；
+    - 自然对数用 func.ln（PG 的 log() 是 10 底）；
     - 时距取 epoch 秒差，负值（未来发布时间）按 0 处理，与 Python max(0.0, ...) 一致。
     排序/取极值请用它（DB 内完成），逐篇展示仍可用 Python 版。
     """
@@ -64,4 +82,7 @@ def hot_score_expr(model):
     )
     hours = func.extract("epoch", func.now() - model.publish_time) / 3600.0
     decay = func.exp(-s.decay_per_hour * func.greatest(hours, 0.0))
-    return case((engagement <= 0, decay * 100.0), else_=engagement * decay)
+    return case(
+        (engagement <= 0, decay * ZERO_REF_LOG),
+        else_=func.ln(1 + engagement) * decay,
+    )

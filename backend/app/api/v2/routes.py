@@ -7,6 +7,7 @@ article 内嵌 summary 与 events，前端可直接渲染。
 recompute_event_scores 共用同一表达式）；列表查询统一 selectinload 预取
 summary、批量取事件成员关联，禁止逐行懒加载。
 """
+import hashlib
 from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 
@@ -18,6 +19,7 @@ from app.algorithms.hot_score import hot_score, hot_score_expr
 from app.api.v2.admin import require_admin
 from app.auth.deps import require_json_mutation
 from app.core.db import get_db
+from app.services.api_cache import cache_get_json, cache_set_json
 from app.utils.tz import bj_now
 from app.models.article import Article
 from app.models.event import EventArticle, HotEvent
@@ -41,9 +43,11 @@ def _escape_like(term: str) -> str:
 def _summary_dict(s: ArticleSummary | None) -> dict | None:
     if not s:
         return None
+    # 不含 summary_long：前端类型/mapper 从不消费该字段（列表页只渲染 summary_short
+    # 与 tags），去掉后 latest?limit=400 每次轮询的响应体积近乎减半；
+    # 按需全文仍走 GET /article/{id}/summary
     return {
         "summary_short": s.summary_short,
-        "summary_long": s.summary_long,
         "key_points": s.key_points or [],
         "tags": s.tags or [],
         "model": s.model,
@@ -55,7 +59,9 @@ def _article_dict(a: Article, event_ids: dict[int, list[int]] | None = None, max
     views, comments, shares = a.views or 0, a.comments or 0, a.shares or 0
     likes = a.likes or 0
     raw = hot_score(views, comments, shares, likes, a.publish_time)
-    hs = round((raw / max_raw) * 100, 1) if max_raw > 0 else round(raw, 1)
+    # min 钳制：max_raw 与列表是两条语句（READ COMMITTED 两个快照），两次取数间
+    # 落一次互动更新会使个别 raw 超出基准，显示 >100 的分数（2026-09-13 审计）
+    hs = min(round((raw / max_raw) * 100, 1), 100.0) if max_raw > 0 else round(raw, 1)
     return {
         "id": a.id,
         "title": a.title,
@@ -188,6 +194,11 @@ def stats(db: Session = Depends(get_db)):
 _HOT_WINDOWS: dict[str, int] = {"24h": 24, "3d": 72, "7d": 168, "all": 8760}
 
 
+def _chan_key(channel: str | None) -> str:
+    """缓存键里的频道段：用户输入任意字符串，哈希定长防键爆炸/超长。"""
+    return hashlib.sha256((channel or "全部").encode("utf-8")).hexdigest()[:16]
+
+
 @router.get("/hot/board")
 def hot_board(
     channel: str | None = None,
@@ -195,6 +206,11 @@ def hot_board(
     limit: int = Query(40, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
+    cache_key = f"cache:hotboard:v1:{window}:{_chan_key(channel)}:{limit}"
+    cached = cache_get_json(cache_key)
+    if cached is not None:
+        return cached
+
     hours = _HOT_WINDOWS[window]
     now = datetime.now(timezone.utc)
     filters = [Article.publish_time >= now - timedelta(hours=hours)]
@@ -203,14 +219,10 @@ def hot_board(
 
     expr = hot_score_expr(Article)
     total = db.query(func.count(Article.id)).filter(*filters).scalar() or 0
-    # 归一化基准取窗口内全频道最大原始分（不含频道过滤）：
-    # 切换频道筛选时分数保持稳定可比，不随选择范围缩放
-    max_raw = float(
-        db.query(func.max(expr))
-        .filter(Article.publish_time >= now - timedelta(hours=hours))
-        .scalar()
-        or 0.0
-    )
+    # 归一化基准全局统一（近 120h 全频道最大原始分，同 _max_raw）：窗口只决定
+    # 入围范围，不缩放分数——同一篇文章在热榜各窗口、最新资讯、详情页的
+    # hot_score 恒等（2026-09-13 审计：旧版按窗口取 max，跨页分数互相矛盾）
+    max_raw = _max_raw(db)
     articles = (
         db.query(Article)
         .options(selectinload(Article.summary))
@@ -225,11 +237,13 @@ def hot_board(
     if max_raw <= 0:
         max_raw = _page_max_raw(articles)
     links = _event_links(db, [a.id for a in articles])
-    return {
+    payload = {
         "items": [_article_dict(a, links, max_raw) for a in articles],
         "total": total,
         "window": window,
     }
+    cache_set_json(cache_key, payload)
+    return payload
 
 
 # ———————————————————— 最新资讯 ————————————————————
@@ -242,6 +256,15 @@ def articles_latest(
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
+    # 只缓存默认页（无搜索词、首页）：前端 60s 轮询走的就是这个形态；
+    # 搜索/翻页命中长尾，缓存键空间大且收益低，保持直连
+    cache_key = None
+    if not q and offset == 0:
+        cache_key = f"cache:latest:v1:{_chan_key(channel)}:{limit}"
+        cached = cache_get_json(cache_key)
+        if cached is not None:
+            return cached
+
     query = db.query(Article).options(selectinload(Article.summary))
     if channel and channel != "全部":
         query = query.filter(Article.channel == channel)
@@ -269,7 +292,10 @@ def articles_latest(
     if max_raw <= 0:
         max_raw = _page_max_raw(articles)
     links = _event_links(db, [a.id for a in articles])
-    return {"items": [_article_dict(a, links, max_raw) for a in articles], "total": total}
+    payload = {"items": [_article_dict(a, links, max_raw) for a in articles], "total": total}
+    if cache_key is not None:
+        cache_set_json(cache_key, payload)
+    return payload
 
 
 @router.get("/article/{article_id}")

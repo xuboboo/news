@@ -23,7 +23,7 @@ const WINDOWS: { key: HotWindow; label: string }[] = [
   { key: '24h', label: '近24小时' },
   { key: '3d', label: '近3天' },
   { key: '7d', label: '近7天' },
-  { key: 'all', label: '全部' },
+  { key: 'all', label: '全部(1年)' },
 ];
 
 /** 默认时间窗口：近 24 小时（URL 无 win 参数或参数非法时生效） */
@@ -108,7 +108,7 @@ export default function HotBoard() {
     <div>
       <PageHeader
         title="热榜中心"
-        description="服务端热度榜 · HotScore = Engagement × TimeDecay · 可按时间窗口与频道切换"
+        description="服务端热度榜 · HotScore = ln(1+Engagement) × TimeDecay · 可按时间窗口与频道切换"
       />
       {/* 概览 */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
@@ -122,7 +122,7 @@ export default function HotBoard() {
           icon={<TrendingUp className="h-5 w-5" />}
           label="平均热度"
           value={formatScore(avgScore)}
-          sub="TimeDecay 已计入"
+          sub={`在榜 TOP ${filtered.length} 均分 · TimeDecay 已计入`}
         />
         <StatCard
           icon={<Bot className="h-5 w-5" />}

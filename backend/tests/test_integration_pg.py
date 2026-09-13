@@ -608,3 +608,37 @@ def test_hot_board_windows_and_stable_order(pg):
         assert ids24.index(tie_b.id) < ids24.index(tie_a.id)
     finally:
         db.close()
+
+
+def test_hot_board_score_consistent_across_windows_and_latest(pg, monkeypatch):
+    """统一归一化基准（2026-09-13 审计 P1-4）：同一篇文章的 hot_score 在热榜
+    各窗口与最新资讯四处恒等，且所有展示分 ≤100（防 max/列表快照差竞态）。
+    """
+    from app.api.v2 import routes as routes_mod
+
+    # 隔离 Redis 响应缓存：单测内直连 DB，防跨用例读到别的用例写入的缓存
+    monkeypatch.setattr(routes_mod, "cache_get_json", lambda key: None)
+    monkeypatch.setattr(routes_mod, "cache_set_json", lambda key, val: None)
+
+    db = pg()
+    try:
+        base = {"channel": "智能时代", "vec": _vec([1.0, 0.0])}
+        target = _mk_article(db, title="跨页一致文章", source="IT之家", views=2000,
+                             published=NOW - timedelta(hours=5), **base)
+        _mk_article(db, title="更大的爆文", source="IT之家", views=90000,
+                    published=NOW - timedelta(hours=6), **base)
+        db.commit()
+
+        scores = {}
+        for win in ("24h", "7d", "all"):
+            r = routes_mod.hot_board(channel=None, window=win, limit=40, db=db)
+            item = next(i for i in r["items"] if i["id"] == target.id)
+            scores[win] = item["hot_score"]
+        r_latest = routes_mod.articles_latest(channel=None, q=None, limit=50, offset=0, db=db)
+        item = next(i for i in r_latest["items"] if i["id"] == target.id)
+        scores["latest"] = item["hot_score"]
+
+        assert len(set(scores.values())) == 1, f"跨页分数不一致: {scores}"
+        assert all(0 <= s <= 100 for s in scores.values())
+    finally:
+        db.close()
