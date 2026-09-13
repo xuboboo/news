@@ -104,6 +104,8 @@ def stats_task(trigger: str = "auto"):
                 )
                 if r.get("skipped_backoff"):
                     run.detail += " ｜ 域名限流跳过 %d 篇（保持到期下轮再试）" % r["skipped_backoff"]
+                if r.get("healed"):
+                    run.detail += " ｜ 自愈重排 %d 篇放弃文章" % r["healed"]
                 if r.get("deadline_hit"):
                     run.detail += " ｜ 触达轮次时长截止，剩余文章下轮再试"
                 return r

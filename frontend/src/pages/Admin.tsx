@@ -72,6 +72,7 @@ const FIELD_LABELS: Record<string, string> = {
   audit_retention_days: '审计日志保留（天）',
   stats_poll_enabled: '互动轮询开关',
   stats_poll_batch: '单轮轮询批量（篇）',
+  stats_heal_batch: '自愈重排批次（篇，0 = 关闭）',
   alert_webhook_url: '告警 Webhook URL',
   alert_webhook_style: '告警消息格式',
   report_push_enabled: '日报推送总开关',
@@ -108,6 +109,7 @@ const NUMERIC_RULES: Record<string, { min: number; max: number }> = {
   login_ip_throttle_window_seconds: { min: 60, max: 86400 },
   audit_retention_days: { min: 30, max: 3650 },
   stats_poll_batch: { min: 1, max: 50 },
+  stats_heal_batch: { min: 0, max: 50 },
   ai_daily_cost_budget: { min: 0, max: 100000 },
   ai_usage_retention_days: { min: 0, max: 3650 },
 };
@@ -154,7 +156,7 @@ const GROUPS: { title: string; hint: string; keys: string[]; resettable?: boolea
   {
     title: '互动数据轮询',
     hint: '评论/点赞数回采接入热度算法；关闭后热度回退纯时间衰减，任务表不再产生 stats 记录',
-    keys: ['stats_poll_enabled', 'stats_poll_batch'],
+    keys: ['stats_poll_enabled', 'stats_poll_batch', 'stats_heal_batch'],
   },
   {
     title: '安全与会话',

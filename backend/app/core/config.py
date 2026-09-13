@@ -87,9 +87,18 @@ class Settings(BaseSettings):
     # —— 互动数据轮询（crawler/stats.py；总开关与批次可在管理面板热调）——
     stats_poll_enabled: bool = True
     stats_poll_batch: int = 50
+    # 放弃终态自愈：每健康轮次重排的「连败放弃」文章上限；0 = 关闭自愈。
+    # 站点熔断/停机 ≥8h 会把黄金期文章打进放弃终态（6 连败），不重排则热度
+    # 数据永久冻结在故障时刻
+    stats_heal_batch: int = 10
 
     # —— 日报 ——
     report_issue_epoch: str = "2026-04-15"  # 第 1 期基准日
+
+    # —— 读接口响应缓存（services/api_cache.py）——
+    # 热榜/最新资讯的 Redis 缓存 TTL（秒），0 = 禁用（回滚开关）；
+    # 与前端 60s 轮询对齐，DB 压力从每客户端降为每缓存键
+    api_cache_ttl_seconds: int = 45
 
 
 def _assert_production_safe(s: "Settings") -> None:

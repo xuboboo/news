@@ -418,3 +418,105 @@ def test_poll_first_time_backfill_beats_reschedule_queue(db, monkeypatch):
     assert any("action.ashx?tid=4001" in u for u in polled), f"首采被饿死: {polled}"
     db.refresh(fresh_it)
     assert fresh_it.comments == 0  # 复采文本轮未被服务
+
+
+# ———————————————————— 放弃终态自愈（2026-09-13 审计） ————————————————————
+
+def _mk_gave_up(db, news_id, hours_old):
+    """直接构造放弃终态文章（fail_count 打满 + 无排期），模拟站点故障期间的 6 连败。"""
+    return _mk_article(
+        db, "快科技", news_id, hours_old=hours_old, stats_fail_count=GIVE_UP_FAILS
+    )
+
+
+def _ok_respond():
+    def respond(url):
+        if "action.ashx" in url:
+            return ((5, 5), "")
+        if "comment/count" in url:
+            return (7, "")
+        return (11, "")
+
+    return respond
+
+
+def test_heal_requeues_gave_up_on_healthy_round(db, monkeypatch):
+    """健康轮次（ok>=3 且 failed==0）后：窗口内的放弃文章被重排回待采。"""
+    gave_up = _mk_gave_up(db, "9001", hours_old=5)
+    for i in range(3):
+        _mk_article(db, "IT之家", f"910{i}")  # 3 篇必成功，凑健康轮次
+
+    _stub_no_network(monkeypatch, _ok_respond())
+    result = poll_due_articles(db)
+    assert (result["ok"], result["failed"]) == (3, 0)
+    assert result["healed"] == 1
+
+    db.refresh(gave_up)
+    assert gave_up.stats_fail_count == 0
+    assert gave_up.stats_next_poll_at is not None
+    assert gave_up.stats_polled_at is None  # 重排不写成功戳（语义=成功轮询过）
+
+
+def test_heal_blocked_when_round_has_failure(db, monkeypatch):
+    """轮内有失败（站点可能仍在故障）：即使 ok 达标也不重排，防空耗配额。"""
+    gave_up = _mk_gave_up(db, "9201", hours_old=5)
+    _mk_article(db, "IT之家", "9202")
+    _mk_article(db, "IT之家", "9203")
+    fail_kj = _mk_article(db, "快科技", "9204")
+
+    def respond(url):
+        if "action.ashx?tid=9204" in url:
+            return (None, "still 403")
+        if "action.ashx" in url:
+            return ((5, 5), "")
+        if "comment/count" in url:
+            return (7, "")
+        return (11, "")
+
+    _stub_no_network(monkeypatch, respond)
+    result = poll_due_articles(db)
+    assert (result["ok"], result["failed"]) == (2, 1)
+    assert result["healed"] == 0
+
+    db.refresh(gave_up)
+    assert gave_up.stats_fail_count == GIVE_UP_FAILS
+    assert gave_up.stats_next_poll_at is None
+
+
+def test_heal_disabled_when_batch_zero(db, monkeypatch):
+    """stats_heal_batch=0（面板关闭自愈）：健康轮次也不重排。"""
+    import app.services.config_service as config_service_mod
+
+    gave_up = _mk_gave_up(db, "9401", hours_old=5)
+    for i in range(3):
+        _mk_article(db, "IT之家", f"941{i}")
+
+    def _fake_get_effective(db_, key):
+        if key == "stats_heal_batch":
+            return 0
+        raise RuntimeError("no system_setting table")  # 其余键走真实回退路径（默认 50）
+
+    monkeypatch.setattr(config_service_mod, "get_effective", _fake_get_effective)
+    _stub_no_network(monkeypatch, _ok_respond())
+    result = poll_due_articles(db)
+    assert (result["ok"], result["failed"]) == (3, 0)
+    assert result["healed"] == 0
+
+    db.refresh(gave_up)
+    assert gave_up.stats_fail_count == GIVE_UP_FAILS
+
+
+def test_heal_skips_articles_beyond_stats_window(db, monkeypatch):
+    """超 14 天停采窗口的放弃文章不救：重排也会被 next_poll_after 判终态，白耗批次。"""
+    stale = _mk_gave_up(db, "9501", hours_old=24 * 15)
+    for i in range(3):
+        _mk_article(db, "IT之家", f"952{i}")
+
+    _stub_no_network(monkeypatch, _ok_respond())
+    result = poll_due_articles(db)
+    assert (result["ok"], result["failed"]) == (3, 0)
+    assert result["healed"] == 0
+
+    db.refresh(stale)
+    assert stale.stats_fail_count == GIVE_UP_FAILS
+    assert stale.stats_next_poll_at is None

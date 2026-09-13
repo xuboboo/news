@@ -27,6 +27,7 @@ ALLOWED_KEYS: dict[str, type] = {
     # —— 互动数据轮询 ——
     "stats_poll_enabled": bool,
     "stats_poll_batch": int,
+    "stats_heal_batch": int,
     "sim_threshold": float,
     "keyword_jaccard_threshold": float,
     "high_band_kw_floor": float,
@@ -73,6 +74,7 @@ CONFIG_RANGES: dict[str, tuple[int | float, int | float]] = {
     "login_ip_throttle_window_seconds": (60, 86400),
     "audit_retention_days": (30, 3650),
     "stats_poll_batch": (1, 50),
+    "stats_heal_batch": (0, 50),
     # 预算 0 = 关闭告警；流水保留 0 = 永久保留（财务记录可全量归档不删）
     "ai_daily_cost_budget": (0, 100000),
     "ai_usage_retention_days": (0, 3650),

@@ -227,6 +227,52 @@ def _poll_article(article: Article) -> tuple[int | None, int | None, str, str]:
     return comments, likes, count_err, grade_err
 
 
+def _heal_gave_up(db: Session, now: datetime, ok: int, failed: int) -> int:
+    """放弃终态自愈：站点级故障（403 熔断/停机 ≥8h，6 连败退避累计）会把黄金期
+    文章打进 fail_count>=GIVE_UP 的永久冻结——热度数据停在故障时刻，榜单永久
+    失真且无任何恢复路径（2026-09-13 审计）。本函数在「健康轮次」后小批量重排
+    近期放弃的文章，让它们重新进入正常轮询节奏。
+
+    触发条件 ok>=3 且 failed==0：本轮站点接口明显健康才重排，避免站点仍故障时
+    把重排队列反复打进失败退避白耗配额。重排不写 stats_polled_at（语义是
+    "成功轮询过"）；no_nid 文章（同签名）会被捞回但在任何 HTTP 请求前短路重标记，
+    成本可忽略。返回重排篇数。
+    """
+    if ok < 3 or failed > 0:
+        return 0
+    try:
+        from app.services import config_service
+
+        batch = int(config_service.get_effective(db, "stats_heal_batch"))
+    except Exception:
+        batch = get_settings().stats_heal_batch
+    batch = min(max(0, int(batch)), _MAX_BATCH)
+    if batch <= 0:
+        return 0
+
+    rows = (
+        db.query(Article)
+        .filter(
+            stats_source_filter(),
+            Article.stats_fail_count >= GIVE_UP_FAILS,
+            Article.stats_next_poll_at.is_(None),
+            # 只救仍在停采窗口内的：超窗文章即使重排也会被 next_poll_after 判终态
+            Article.publish_time > now - timedelta(hours=_STATS_WINDOW_HOURS),
+        )
+        # 越新越优先：黄金期冻结对榜单的伤害最大
+        .order_by(Article.publish_time.desc())
+        .limit(batch)
+        .all()
+    )
+    for article in rows:
+        article.stats_fail_count = 0
+        article.stats_next_poll_at = now
+    if rows:
+        db.commit()
+        logger.info("stats heal: requeued %d gave-up articles", len(rows))
+    return len(rows)
+
+
 def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
     """轮询一批到期文章的互动数据并入库（单篇提交，崩溃不丢已处理进度）。
 
@@ -376,10 +422,11 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
         ok += 1
 
     polled = ok + failed + no_nid
+    healed = _heal_gave_up(db, now, ok, failed)
     logger.info(
         "stats poll done: due=%s polled=%s ok=%s failed=%s gave_up=%s no_nid=%s "
-        "skipped_backoff=%s deadline_hit=%s",
-        len(due), polled, ok, failed, gave_up, no_nid, skipped_backoff, deadline_hit,
+        "skipped_backoff=%s deadline_hit=%s healed=%s",
+        len(due), polled, ok, failed, gave_up, no_nid, skipped_backoff, deadline_hit, healed,
     )
     return {
         "due": len(due),
@@ -391,4 +438,5 @@ def poll_due_articles(db: Session, now: datetime | None = None) -> dict:
         "skipped_backoff": skipped_backoff,
         "aborted_backoff": aborted_backoff,
         "deadline_hit": deadline_hit,
+        "healed": healed,
     }
