@@ -39,7 +39,7 @@ export default function App() {
           <Route path="/latest" element={bound('最新资讯', <Latest />)} />
           <Route path="/events" element={bound('热点事件', <Events />)} />
           <Route path="/events/:id" element={bound('事件详情', <EventDetail />)} />
-          <Route path="/report" element={bound('软件日报', <DailyReport />)} />
+          <Route path="/report" element={bound('今日早报', <DailyReport />)} />
           <Route path="/account" element={bound('账号设置', <Account />)} />
           <Route path="/users" element={bound('用户与租户', <Users />)} />
           <Route path="/audit" element={bound('审计日志', <Audit />)} />

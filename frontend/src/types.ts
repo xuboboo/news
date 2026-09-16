@@ -41,7 +41,7 @@ export interface Article {
   eventIds?: string[];
   /** AI 处理状态（后端 ai_status）：pending 处理中 / summarized 已总结 / clustered 已聚类 */
   aiStatus?: string;
-  /** 对行业变化的描述（用于软件日报） */
+  /** 对行业变化的描述（用于今日早报） */
   industryChange?: string;
 }
 

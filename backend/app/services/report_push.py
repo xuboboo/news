@@ -1,4 +1,6 @@
-"""日报 Webhook 推送：企业微信 + 飞书双通道机器人，markdown 日报卡片。
+"""早报 Webhook 推送：企业微信 + 飞书双通道机器人，markdown 早报卡片。
+
+（原「软件日报」，2026-09-17 改版为「今日早报」：每日 08:00 推送昨日全天速览。）
 
 配置三层（与全站配置语义一致）：运维面板 DB 覆盖 > .env 默认 > 关闭。
 - report_push_enabled：总开关（面板开关 / env REPORT_PUSH_ENABLED）
@@ -6,13 +8,14 @@
 - report_push_feishu_webhook_url：飞书自定义机器人地址（留空 = 该通道关闭）
 - report_push_feishu_secret：飞书机器人开启「签名校验」时的密钥（未开启留空）
 
-两个通道可同时配置、同时推送。推送失败只记日志返回状态串，绝不影响日报生成本身。
+两个通道可同时配置、同时推送。推送失败只记日志返回状态串，绝不影响早报生成本身。
 """
 import base64
 import hashlib
 import hmac
 import logging
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -65,7 +68,7 @@ def _public_url(url: str) -> bool:
         assert_public_http_url(url)
         return True
     except UrlNotAllowed as exc:
-        logger.warning("日报推送目标未通过公网校验，已跳过：%s", exc)
+        logger.warning("早报推送目标未通过公网校验，已跳过：%s", exc)
         return False
 
 
@@ -80,16 +83,36 @@ def _fmt_score(v) -> str:
         return "0"
 
 
+_WEEKDAY_CN = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+
+def _weekday_cn(date_str: str) -> str:
+    """早报刊头星期标注：解析失败返回空串（不阻断推送）。"""
+    try:
+        return _WEEKDAY_CN[datetime.fromisoformat(str(date_str)).weekday()]
+    except ValueError:
+        return ""
+
+
+def _clip(text: object, limit: int) -> str:
+    s = re.sub(r"\s+", " ", str(text or "")).strip()
+    return s[: limit - 1] + "…" if len(s) > limit else s
+
+
 def render_report_markdown(content: dict, provider: str = "wecom") -> str:
-    """日报快照 → markdown 消息体。
+    """早报快照 → markdown 消息体。
 
     两通道 markdown 方言不同（官方文档核对 2026-09-11）：企微支持有限 HTML
     （<font color="comment">）；飞书卡片 markdown 不支持 HTML 标签，按原文显示，
     脚注须用纯文本。provider 决定脚注写法。
+
+    结构（2026-09-17 早报改版）：刊头带星期 → 头条事件（含摘要）→ 其余热点。
     """
     date = content.get("date", "")
+    weekday = _weekday_cn(date)
+    head = f"华军软件园 · 今日早报 {date}" + (f"（{weekday}）" if weekday else "")
     lines: list[str] = [
-        f"## 华军软件园 · 软件日报 {date}（第 {content.get('issue_no', 1)} 期）",
+        f"## {head} · 第 {content.get('issue_no', 1)} 期",
         "",
     ]
     overview = str(content.get("overview") or "").strip()
@@ -102,13 +125,24 @@ def render_report_markdown(content: dict, provider: str = "wecom") -> str:
         lines += [f"> 共收录 **{total}** 篇报道", ""]
     events = content.get("top_events") or []
     if events:
-        lines += ["**当日 TOP 热点**", ""]
-        for i, e in enumerate(events, 1):
-            lines.append(
-                f"{i}. **{e.get('title', '')}**（热度 {_fmt_score(e.get('hot_score'))}，"
-                f"{e.get('articles_count', 0)} 篇/{e.get('sources_count', 0)} 源）"
-            )
+        lead, rest = events[0], events[1:]
+        lines += ["**【今日头条】**", ""]
+        lines.append(
+            f"**{lead.get('title', '')}**（热度 {_fmt_score(lead.get('hot_score'))}，"
+            f"{lead.get('articles_count', 0)} 篇/{lead.get('sources_count', 0)} 源）"
+        )
+        summary = _clip(lead.get("summary"), 90)
+        if summary:
+            lines += ["", f"> {summary}"]
         lines.append("")
+        if rest:
+            lines += ["**更多热点**", ""]
+            for i, e in enumerate(rest, 2):
+                lines.append(
+                    f"{i}. **{e.get('title', '')}**（热度 {_fmt_score(e.get('hot_score'))}，"
+                    f"{e.get('articles_count', 0)} 篇/{e.get('sources_count', 0)} 源）"
+                )
+            lines.append("")
     changes = content.get("industry_changes") or []
     if changes:
         lines += ["**行业变化**", ""]
@@ -174,7 +208,7 @@ def build_payload(provider: str, md: str, feishu_secret: str = "") -> dict:
             "msg_type": "interactive",
             "card": {
                 "header": {
-                    "title": {"tag": "plain_text", "content": "华军软件园 · 软件日报"},
+                    "title": {"tag": "plain_text", "content": "华军软件园 · 今日早报"},
                 },
                 "elements": [{"tag": "markdown", "content": md}],
             },

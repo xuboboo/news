@@ -1,4 +1,7 @@
-"""日报服务（PRD 第 7 节）：每日自动生成 / report_task 落库。"""
+"""早报服务（原「软件日报」，2026-09-17 改版）：每日 08:00 自动生成 / report_task 落库。
+
+产品定位「今日早报」：早间发布昨日全天速览，统计窗口为前一个北京时间自然日。
+"""
 import json
 import re
 import time
@@ -89,8 +92,9 @@ def _compose_overview(
     channel_stats: list[dict],
     articles_total: int,
 ) -> str:
-    """今日综述（无 LLM 的确定性模板）：头条事件 + 其余热点 + 频道亮点。
+    """早报综述（无 LLM 的确定性模板）：头条事件 + 其余热点 + 频道亮点。
 
+    早报于 08:00 发布、统计前一自然日全天，故措辞取「昨日最热」口径。
     生成链路先试 _llm_overview（配了 LLM 才调），任何失败回退本实现。
     """
     if articles_total <= 0:
@@ -98,7 +102,7 @@ def _compose_overview(
     parts: list[str] = []
     if top_events:
         e1 = top_events[0]
-        lead = f"今日最热「{truncate_boundary(e1['title'], 48)}」"
+        lead = f"昨日最热「{truncate_boundary(e1['title'], 48)}」"
         if e1['articles_count'] > 1:
             lead += f"，聚合 {e1['articles_count']} 篇报道"
         if e1['sources_count'] > 1:
@@ -120,9 +124,9 @@ def _compose_overview(
 
 
 def _llm_overview(llm: tuple[str, str, str, str], content: dict, trigger: str = "auto") -> str | None:
-    """LLM 撰写今日综述；未配置或任何失败返回 None（失败已落账），调用方回退模板。
+    """LLM 撰写早报综述；未配置或任何失败返回 None（失败已落账），调用方回退模板。
 
-    用量记账（task_type=report，成本看板「日报」类型）：HTTP 200 但 JSON 提取
+    用量记账（task_type=report，成本看板「早报」类型）：HTTP 200 但 JSON 提取
     失败记 parse_fail（token 已花）并带纠错反馈自动重试一次；连接/非 200/URL
     守卫拦截记 api_fail（不重试）；未配置 LLM 时不调用不落账。
     与 event_service._llm_event_summary 同款「落账 + 降级」模式。
@@ -163,8 +167,9 @@ def _llm_overview(llm: tuple[str, str, str, str], content: dict, trigger: str = 
     )
     ch_lines = "、".join(f"{c.get('channel', '')} {c.get('count', 0)}篇" for c in channels[:4])
     prompt = (
-        "以下是软件行业资讯日报的素材。请写一段80~140字的中文今日综述："
-        "概括当日最热事件及其交叉报道情况、其他值得注意的热点、收录量与频道分布。"
+        "这是科技资讯「今日早报」的素材（早间 8 点发布，统计前一自然日全天）。"
+        "请写一段80~140字的中文早报综述："
+        "概括昨日最热事件及其交叉报道情况、其他值得注意的热点、收录量与频道分布。"
         "要求：客观陈述事实、不加观点、不使用任何 markdown 标记、不要称呼与客套。\n"
         '输出严格 JSON：{"overview":"综述文本"}\n\n'
         f"共收录 {content.get('articles_total', 0)} 篇报道。\n"
@@ -204,7 +209,7 @@ def _llm_overview(llm: tuple[str, str, str, str], content: dict, trigger: str = 
 
 
 def build_report(db: Session, day: date_type) -> dict:
-    """构建日报内容（前端可直接渲染的结构）。
+    """构建早报内容（前端可直接渲染的结构）。
 
     day 为发布日（北京时间口径）：统计窗口取前一个北京时间自然日全天
     （day-1 00:00 → day 00:00 北京时间）。每日 08:00（北京时间）自动生成
@@ -346,7 +351,7 @@ def build_report(db: Session, day: date_type) -> dict:
         "issue_no": issue_no_for(day),
         # 快照生成时刻：重新生成会覆盖，前端据此展示"生成于"
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        # 今日综述（确定性模板；接入 LLM 后替换为 AI 撰写并以此兜底）
+        # 早报综述（确定性模板；接入 LLM 后替换为 AI 撰写并以此兜底）
         "overview": _compose_overview(top_events, channel_stats, len(day_articles)),
         "top_events": top_events,
         "quick_news": quick_news,
@@ -363,7 +368,7 @@ def build_report(db: Session, day: date_type) -> dict:
 def generate_daily_report(
     db: Session, day: date_type | None = None, trigger: str = "auto", allow_push: bool = True
 ) -> tuple[DailyReport, str]:
-    """生成某日日报并落库，返回 (日报行, 推送状态串)。
+    """生成某日早报并落库，返回 (早报行, 推送状态串)。
 
     day 为发布日（北京时间口径），缺省取「今天」——每日 08:00（北京时间）
     自动生成当日发布期刊，统计窗口为前一个北京时间自然日全天（build_report

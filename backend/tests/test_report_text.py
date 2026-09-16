@@ -7,6 +7,7 @@ import pytest
 
 from app.services.report_push import (
     _feishu_sign,
+    _weekday_cn,
     build_payload,
     clip_markdown_bytes,
     push_targets,
@@ -99,7 +100,7 @@ def test_overview_lead_event_and_channels():
         {"channel": "软件之家", "count": 8},
     ]
     text = _compose_overview(events, channels, 42)
-    assert text.startswith("今日最热「微软发布 Win11 大版本更新」，聚合 3 篇报道，2 家来源交叉报道。")
+    assert text.startswith("昨日最热「微软发布 Win11 大版本更新」，聚合 3 篇报道，2 家来源交叉报道。")
     assert "「DeepSeek 新模型内测」" in text
     assert "智能时代以 26 篇收录居首" in text
     assert "软件之家 8 篇次之" in text
@@ -108,7 +109,7 @@ def test_overview_lead_event_and_channels():
 def test_overview_single_event_no_rest():
     events = [{"title": "某事件", "articles_count": 1, "sources_count": 1}]
     text = _compose_overview(events, [], 5)
-    assert text == "今日最热「某事件」。"
+    assert text == "昨日最热「某事件」。"
 
 
 def test_render_markdown_sections():
@@ -126,10 +127,11 @@ def test_render_markdown_sections():
         "generated_at": "2026-09-08T18:40:00+00:00",
     }
     md = render_report_markdown(content)
-    assert "## 华军软件园 · 软件日报 2026-09-08（第 147 期）" in md
+    assert "## 华军软件园 · 今日早报 2026-09-08（周二） · 第 147 期" in md
     assert "今日最热「A」。" in md
     assert "共收录 **42** 篇报道" in md
-    assert "1. **A**（热度 100，3 篇/2 源）" in md
+    assert "**【今日头条】**" in md
+    assert "**A**（热度 100，3 篇/2 源）" in md
     assert "- 变化一" in md
     assert "- 某文（IT之家）" in md
     assert "- 智能时代：26 篇" in md
@@ -138,7 +140,49 @@ def test_render_markdown_sections():
 
 def test_render_markdown_minimal():
     md = render_report_markdown({"date": "2026-09-01", "issue_no": 1})
-    assert "软件日报 2026-09-01" in md
+    assert "今日早报 2026-09-01" in md
+
+
+def test_weekday_cn_helper():
+    """刊头星期标注：合法日期 → 周X；坏日期返回空串不阻断推送。"""
+    assert _weekday_cn("2026-09-08") == "周二"
+    assert _weekday_cn("2026-09-17") == "周四"
+    assert _weekday_cn("not-a-date") == ""
+    assert _weekday_cn("") == ""
+
+
+def test_render_markdown_headline_with_summary_and_rest():
+    """早报改版：TOP1 独立「今日头条」块（含摘要引文），其余热点接续编号。"""
+    content = {
+        "date": "2026-09-10",
+        "issue_no": 149,
+        "top_events": [
+            {"title": "头条事件", "hot_score": 100, "articles_count": 5, "sources_count": 3,
+             "summary": "科技媒体披露最新进展，多家来源交叉报道。"},
+            {"title": "次级热点", "hot_score": 80, "articles_count": 2, "sources_count": 2},
+        ],
+    }
+    md = render_report_markdown(content)
+    assert "**【今日头条】**" in md
+    assert "**头条事件**（热度 100，5 篇/3 源）" in md
+    assert "> 科技媒体披露最新进展，多家来源交叉报道。" in md
+    assert "**更多热点**" in md
+    assert "2. **次级热点**（热度 80，2 篇/2 源）" in md
+
+
+def test_render_markdown_headline_summary_clipped():
+    """头条摘要超 90 字截断加省略号。"""
+    content = {
+        "date": "2026-09-10",
+        "issue_no": 149,
+        "top_events": [
+            {"title": "头条", "hot_score": 100, "articles_count": 1, "sources_count": 1,
+             "summary": "长" * 200},
+        ],
+    }
+    md = render_report_markdown(content)
+    assert "> " + "长" * 89 + "…" in md
+    assert "**更多热点**" not in md  # 仅 1 条热点时不渲染空栏目
 
 
 def test_feishu_payload_card_with_sign():
@@ -275,7 +319,7 @@ def test_overview_single_rest_phrasing():
         {"title": "B 事件标题", "articles_count": 1, "sources_count": 1},
     ]
     text = _compose_overview(events, [], 3)
-    assert text.startswith("今日最热「A 事件标题」。")
+    assert text.startswith("昨日最热「A 事件标题」。")
     assert "此外，「B 事件标题」亦在持续发酵。" in text
 
 

@@ -52,7 +52,7 @@ docker compose up -d --build     # 一键上线全套服务
 backend/app/
 ├── api/v2/          # REST 接口
 ├── models/          # article / article_summary / event / event_article / daily_report
-├── services/        # 摘要、向量、事件、日报四个业务服务
+├── services/        # 摘要、向量、事件、早报四个业务服务
 ├── algorithms/      # hot_score（HotScore = Engagement × TimeDecay）
 ├── ai/              # summary.py / embedding.py / event_cluster.py
 ├── tasks/           # Celery：summary_task / embedding_task / event_task / report_task
@@ -71,8 +71,8 @@ backend/app/
 | GET | /api/v2/article/{id}/summary | **AI 摘要**（PRD 12） |
 | GET | /api/v2/events | **热点事件**（PRD 12） |
 | GET | /api/v2/events/{id} | 事件详情（含时间线/相关报道） |
-| GET | /api/v2/report/daily?date= | **软件日报**（PRD 12） |
-| GET | /api/v2/report/dates | 可用日报日期 |
+| GET | /api/v2/report/daily?date= | **今日早报**（原软件日报，PRD 12） |
+| GET | /api/v2/report/dates | 可用早报日期 |
 | GET | /api/v2/stats / health | 系统统计 / 健康检查 |
 | POST | /api/v2/admin/crawl · /admin/events · /admin/report?date= | 手动触发任务（需 X-Admin-Token） |
 
@@ -92,7 +92,7 @@ backend/app/
 Token 来源优先级同样是 DB 覆盖 > `.env` 的 `ADMIN_TOKEN`；**未配置时管理面板不可用**（接口返回 503 并给出设置提示）。
 注意：修改 admin_token 会立即使旧 Token 失效。
 
-**任务执行记录**：`task_run` 表记录采集（常驻爬虫每轮 + 手动触发）、事件聚合、日报任务的
+**任务执行记录**：`task_run` 表记录采集（常驻爬虫每轮 + 手动触发）、事件聚合、早报任务的
 started/finished/耗时/成败/错误摘要；逐篇 summary/embedding 任务不记录（量大且低价值）。
 
 ## AI 能力说明（重要）

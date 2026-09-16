@@ -76,8 +76,8 @@ _CADENCE: dict[str, dict] = {
     "crawler": {"label": "文章采集", "base_minutes": 45, "multiplier": 3},
     # beat 每 15 分钟调度 stats_task；面板热停（enabled=false）时不产生记录，调用方负责豁免
     "stats": {"label": "互动轮询", "base_minutes": 15, "multiplier": 3},
-    # 日报每日 08:00（北京时间）；阈值 26h 容忍正常日内波动
-    "report": {"label": "日报生成", "base_minutes": 26 * 60, "multiplier": 1},
+    # 早报每日 08:00（北京时间）；阈值 26h 容忍正常日内波动
+    "report": {"label": "早报生成", "base_minutes": 26 * 60, "multiplier": 1},
 }
 
 

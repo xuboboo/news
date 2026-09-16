@@ -383,7 +383,7 @@ def event_detail(event_id: int, db: Session = Depends(get_db)):
     return _events_payload(db, [ev], _max_raw(db))[0]
 
 
-# ———————————————————— 软件日报（PRD 12）————————————————————
+# ———————————————————— 今日早报（原软件日报，PRD 12）————————————————————
 
 def _has_report_content(content) -> bool:
     """有实质内容（非占位空刊）：与 latest 回退同一判定口径。"""
@@ -404,7 +404,7 @@ def report_daily(date: str | None = None, db: Session = Depends(get_db)):
         # 快照在先、显式字段在后：date/issue_no 以行为准，不被历史快照里的旧值覆盖
         return {**(row.content or {}), "date": row.date.isoformat(), "issue_no": row.issue_no}
     # latest 取最近一个有实质内容的报告：全空报告（如凌晨窗口刚开启时的误生成占位）
-    # 不应顶掉前一日的有效报告——否则日报页白天展示一整天空内容
+    # 不应顶掉前一日的有效报告——否则早报页白天展示一整天空内容
     rows = db.query(DailyReport).order_by(DailyReport.date.desc()).limit(7).all()
     if not rows:
         raise HTTPException(404, "no report yet")
@@ -417,10 +417,10 @@ def report_daily(date: str | None = None, db: Session = Depends(get_db)):
 
 @router.get("/report/dates")
 def report_dates(limit: int = Query(60, ge=1, le=366), db: Session = Depends(get_db)):
-    """日报期号列表（新→旧）。limit 控制扫描规模，默认最近 60 行。
+    """早报期号列表（新→旧）。limit 控制扫描规模，默认最近 60 行。
 
     占位空刊（窗口未开启时误生成的 0 内容行）不出现在期号列表——前端默认选中
-    列表首项，把空刊列进来等于日报页默认展示一整天空内容；次日定时任务会用
+    列表首项，把空刊列进来等于早报页默认展示一整天空内容；次日定时任务会用
     完整数据覆盖该日期行，届时自然重新可见。
     """
     rows = db.query(DailyReport).order_by(DailyReport.date.desc()).limit(limit).all()
@@ -495,9 +495,9 @@ def trigger_report(
 
 @router.post("/admin/report/push-test")
 def test_report_push(request: Request, db: Session = Depends(get_db), _: None = Depends(require_admin)):
-    """立即把最新一期日报推到已配置通道（webhook 配置自检，不必等次日 08:00）。
+    """立即把最新一期早报推到已配置通道（webhook 配置自检，不必等次日 08:00）。
 
-    取最近一期有实质内容的快照推送（占位空刊不作为样张）；库中尚无日报时现场
+    取最近一期有实质内容的快照推送（占位空刊不作为样张）；库中尚无早报时现场
     按当期口径构建报告（不落库）。同步调用（每通道超时 10s），返回各通道状态串，
     如 "wecom:ok；feishu:ok"。
     """
@@ -507,7 +507,7 @@ def test_report_push(request: Request, db: Session = Depends(get_db), _: None = 
     from app.services.report_service import build_report
 
     if not push_enabled(db):
-        raise HTTPException(400, "日报推送未启用：请先打开总开关并填写至少一个通道 URL")
+        raise HTTPException(400, "早报推送未启用：请先打开总开关并填写至少一个通道 URL")
     rows = db.query(DailyReport).order_by(DailyReport.date.desc()).limit(7).all()
     row = next((r for r in rows if _has_report_content(r.content)), None)
     if row:

@@ -40,7 +40,7 @@ const TASK_LABELS: Record<string, string> = {
   summary: '文章摘要',
   event_summary: '事件总结',
   embedding: '向量化',
-  report: '日报',
+  report: '早报',
   conn_test: '连通性测试',
 };
 

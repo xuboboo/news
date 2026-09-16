@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     audit_retention_days: int = 180      # 审计日志保留天数（beat 每周清理超期行）
     enable_docs: bool = True             # 是否公开 /docs /redoc /openapi.json（公网部署建议 false）
 
-    # —— 日报 Webhook 推送（面板可热调；.env 仅作默认值，留空 = 该通道关闭） ——
+    # —— 早报 Webhook 推送（面板可热调；.env 仅作默认值，留空 = 该通道关闭） ——
     report_push_enabled: bool = False
     report_push_wecom_webhook_url: str = ""
     report_push_feishu_webhook_url: str = ""
@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     # 数据永久冻结在故障时刻
     stats_heal_batch: int = 10
 
-    # —— 日报 ——
+    # —— 今日早报 ——
     report_issue_epoch: str = "2026-04-15"  # 第 1 期基准日
 
     # —— 读接口响应缓存（services/api_cache.py）——

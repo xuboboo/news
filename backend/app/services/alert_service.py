@@ -63,7 +63,7 @@ def _collect_problems(db: Session) -> list[str]:
 
     workers, _err = celery_workers_ping()
     if not workers:
-        problems.append("无在线 Celery Worker（事件聚类/AI 摘要/日报将停摆）")
+        problems.append("无在线 Celery Worker（事件聚类/AI 摘要/早报将停摆）")
 
     try:
         interval = config_service.get_effective(db, "crawler_interval_minutes")

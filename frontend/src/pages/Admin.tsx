@@ -75,7 +75,7 @@ const FIELD_LABELS: Record<string, string> = {
   stats_heal_batch: '自愈重排批次（篇，0 = 关闭）',
   alert_webhook_url: '告警 Webhook URL',
   alert_webhook_style: '告警消息格式',
-  report_push_enabled: '日报推送总开关',
+  report_push_enabled: '早报推送总开关',
   report_push_wecom_webhook_url: '企业微信机器人 URL',
   report_push_feishu_webhook_url: '飞书机器人 URL',
   report_push_feishu_secret: '飞书签名密钥（未开启校验留空）',
@@ -179,8 +179,8 @@ const GROUPS: { title: string; hint: string; keys: string[]; resettable?: boolea
     keys: ['alert_webhook_url', 'alert_webhook_style'],
   },
   {
-    title: '日报推送（企业微信 / 飞书）',
-    hint: '每日 08:00 生成当期日报后自动推送（不传日期的手动触发同样推送；历史补算/空报告不推）；总开关打开 + 任一通道填 URL 即启用，双通道可并存',
+    title: '早报推送（企业微信 / 飞书）',
+    hint: '每日 08:00 生成当期「今日早报」后自动推送（不传日期的手动触发同样推送；历史补算/空报告不推）；总开关打开 + 任一通道填 URL 即启用，双通道可并存',
     keys: [
       'report_push_enabled',
       'report_push_wecom_webhook_url',
@@ -421,7 +421,7 @@ export default function Admin() {
     }
   };
 
-  // 日报推送自检：立即推最新一期到已配置通道，配置对不对当场见分晓（不必等次日 08:00）
+  // 早报推送自检：立即推最新一期到已配置通道，配置对不对当场见分晓（不必等次日 08:00）
   const runPushTest = async () => {
     setBusy('test-push');
     setPushTestResult(null);
@@ -429,10 +429,10 @@ export default function Admin() {
       const { results } = await testReportPush();
       const allOk = results.split('；').every((r) => r.endsWith(':ok'));
       setPushTestResult({ ok: allOk, text: allOk ? `推送成功：${results}` : `部分失败：${results}` });
-      flash(allOk, `日报测试推送：${results}`);
+      flash(allOk, `早报测试推送：${results}`);
     } catch (e: any) {
       setPushTestResult({ ok: false, text: `失败：${e?.message ?? e}` });
-      flash(false, `日报测试推送失败：${e?.message ?? e}`);
+      flash(false, `早报测试推送失败：${e?.message ?? e}`);
     } finally {
       setBusy('');
     }
@@ -458,7 +458,7 @@ export default function Admin() {
           getTaskRuns(50)
             .then((r) => setRuns(r.items ?? []))
             .catch(() => {});
-          // 日报生成入队后同步强制刷新日报缓存（绕过 60s 节流），软件日报页即可见
+          // 早报生成入队后同步强制刷新早报缓存（绕过 60s 节流），今日早报页即可见
           if (name === 'report' && ms === 12000) void loadReports(true);
         }, ms)
       );
@@ -827,12 +827,12 @@ export default function Admin() {
                   )}
                 </div>
               )}
-              {g.title.startsWith('日报推送') && (
+              {g.title.startsWith('早报推送') && (
                 <div className="mt-3 flex items-center gap-2 flex-wrap">
                   <button
                     onClick={() => void runPushTest()}
                     disabled={busy === 'test-push'}
-                    title="立即推送最新一期日报到已配置通道，验证 webhook 配置"
+                    title="立即推送最新一期早报到已配置通道，验证 webhook 配置"
                     className="chip border border-radar-border bg-radar-panel text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40"
                   >
                     {busy === 'test-push' ? (
@@ -879,7 +879,7 @@ export default function Admin() {
               <Play className="h-3.5 w-3.5" /> 立即轮询互动
             </button>
             <button onClick={() => trigger('report')} disabled={busy === 'trigger-report'} className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40">
-              <Play className="h-3.5 w-3.5" /> 生成日报
+              <Play className="h-3.5 w-3.5" /> 生成早报
             </button>
           </div>
         </div>

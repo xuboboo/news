@@ -31,11 +31,24 @@ import {
 import { activateOnKey, useBootstrapReady, useDataVersion, usePageTitle } from '../utils/hooks';
 import { clockTime, formatScore } from '../utils/format';
 
+// 早报刊头星期标注（窗口口径为北京时间，用 UTC 构造避免本地时区偏移）
+const WEEKDAY_CN = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const weekdayOf = (date: string): string => {
+  const m = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return '';
+  return WEEKDAY_CN[new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay()];
+};
+// 头条摘要引文截断（与后端 report_push._clip 同口径：压平空白 + 省略号）
+const clipHeadline = (s: string, n: number): string => {
+  const t = s.replace(/\s+/g, ' ').trim();
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+};
+
 export default function DailyReport() {
   const bootReady = useBootstrapReady();
   const dataVer = useDataVersion();
 
-  usePageTitle('软件日报');
+  usePageTitle('今日早报');
 
   // dataVer 变化（loadReports 完成 / 周期刷新）时重新读取可用日期
   // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVer 变化触发重算
@@ -157,15 +170,15 @@ export default function DailyReport() {
     return (
       <div>
         <PageHeader
-          title="软件日报"
-          description="系统每日 08:00 自动生成 · TOP 热点 / 事件摘要 / 行业变化 / 重点来源"
+          title="今日早报"
+          description="系统每日 08:00 自动生成 · 昨日热点 / 事件摘要 / 行业变化 / 重点来源"
         >
           {dateChips}
         </PageHeader>
         {noDates ? (
           <div className="card py-16 text-center">
             <div className="text-sm text-slate-500 mb-4">
-              暂无可用日报 · 日报由系统每日 08:00 自动生成，也可在「运维监控」页手动触发
+              暂无可用早报 · 早报由系统每日 08:00 自动生成，也可在「运维监控」页手动触发
             </div>
             <button
               onClick={() => void retryLoadReports()}
@@ -177,7 +190,7 @@ export default function DailyReport() {
           </div>
         ) : loadFailed ? (
           <div className="card py-16 text-center text-sm text-slate-500">
-            该日期暂无日报（{effectiveDateKey}）· 可在「运维监控」页手动触发生成
+            该日期暂无早报（{effectiveDateKey}）· 可在「运维监控」页手动触发生成
           </div>
         ) : (
           <Loading />
@@ -189,7 +202,7 @@ export default function DailyReport() {
   // 收录总数：优先用快照里的当日窗口文章总数（历史快照缺省时回退收录条数）
   const collectedTotal = report.articlesTotal ?? report.quickNews.length;
 
-  // 统计窗口口径：日报日期为发布日，统计前一个北京时间自然日全天
+  // 统计窗口口径：早报日期为发布日，统计前一个北京时间自然日全天
   const winLabel = (() => {
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(report.date);
     if (!m) return null;
@@ -233,19 +246,30 @@ export default function DailyReport() {
   // 导出：客户端拼 Markdown（企业微信/语雀/邮件均友好），clipboard 不可用时 execCommand 兜底
   const reportToMarkdown = (r: DailyReportView): string => {
     const lines: string[] = [];
-    lines.push(`## 华军软件园 · 软件日报 ${r.date}（第 ${r.issueNo} 期）`, '');
+    const wd = weekdayOf(r.date);
+    lines.push(`## 华军软件园 · 今日早报 ${r.date}${wd ? `（${wd}）` : ''} · 第 ${r.issueNo} 期`, '');
     if (r.overview) lines.push(r.overview, '');
     if (r.articlesTotal != null) lines.push(`> 共收录 **${r.articlesTotal}** 篇报道`, '');
     if (r.topEvents.length) {
-      lines.push('### 当日 TOP 热点', '');
-      r.topEvents.forEach((e, i) => {
+      const eventStats = (e: DailyReportView['topEvents'][number], rank: number) => {
         const stats: string[] = [`热度 ${formatScore(e.hotScore)}`];
         if (e.reportArticles != null) {
           stats.push(`${e.reportArticles} 篇${e.reportSources ? `/${e.reportSources} 源` : ''}`);
         }
-        lines.push(`${i + 1}. **${e.title}**（${stats.join('，')}）`);
-      });
-      lines.push('');
+        return `${rank}. **${e.title}**（${stats.join('，')}）`;
+      };
+      const [lead, ...rest] = r.topEvents;
+      lines.push('### 【今日头条】', '', `**${lead.title}**（热度 ${formatScore(lead.hotScore)}${
+        lead.reportArticles != null
+          ? `，${lead.reportArticles} 篇${lead.reportSources ? `/${lead.reportSources} 源` : ''}`
+          : ''
+      }）`, '');
+      if (lead.summary) lines.push(`> ${clipHeadline(lead.summary, 90)}`, '');
+      if (rest.length) {
+        lines.push('### 更多热点', '');
+        rest.forEach((e, i) => lines.push(eventStats(e, i + 2)));
+        lines.push('');
+      }
     }
     if (r.industryChanges.length) {
       lines.push('### 行业变化', '');
@@ -258,7 +282,7 @@ export default function DailyReport() {
       lines.push('');
     }
     if (r.topArticles.length) {
-      lines.push('### 当日热榜 TOP 5', '');
+      lines.push('### 昨日热榜 TOP 5', '');
       r.topArticles.forEach((a, i) =>
         lines.push(`${i + 1}. ${a.title}（热度 ${formatScore(a.hotScore)}）`)
       );
@@ -300,13 +324,13 @@ export default function DailyReport() {
   return (
     <div>
       <PageHeader
-        title="软件日报"
-        description="系统每日 08:00 自动生成 · TOP 热点 / 事件摘要 / 行业变化 / 重点来源"
+        title="今日早报"
+        description="系统每日 08:00 自动生成 · 昨日热点 / 事件摘要 / 行业变化 / 重点来源"
       >
         {dateChips}
       </PageHeader>
 
-      {/* 日报刊头 */}
+      {/* 早报刊头 */}
       <div className="card p-6 mb-4 relative overflow-hidden">
         <div className="absolute top-0 right-0 w-64 h-64 bg-accent/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3 pointer-events-none" />
         <div className="relative flex flex-wrap items-start justify-between gap-4">
@@ -335,13 +359,14 @@ export default function DailyReport() {
               )}
             </div>
             <h2 className="text-2xl font-semibold text-slate-100">
-              华军软件园 · 软件日报 {report.date}
+              华军软件园 · 今日早报 {report.date}
+              {weekdayOf(report.date) && <span className="text-slate-400"> · {weekdayOf(report.date)}</span>}
             </h2>
             <p className="text-sm text-slate-300 mt-2 leading-relaxed max-w-3xl">
               {report.overview ??
                 (report.topEvents.length > 0
-                  ? `当日 ${report.topEvents.length} 个热点事件持续发酵，共聚合 ${collectedTotal} 篇报道。`
-                  : `当日暂无聚合事件，共收录 ${collectedTotal} 篇重点报道。`)}
+                  ? `昨日 ${report.topEvents.length} 个热点事件持续发酵，共聚合 ${collectedTotal} 篇报道。`
+                  : `昨日暂无聚合事件，共收录 ${collectedTotal} 篇重点报道。`)}
             </p>
           </div>
           <div className="flex flex-col items-end gap-3">
@@ -386,14 +411,14 @@ export default function DailyReport() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* 左列 */}
         <div className="lg:col-span-2 space-y-4">
-          {/* 当日 TOP 热点 */}
+          {/* 昨日热点事件 */}
           <section className="card p-5">
             <div className="flex items-center gap-2 mb-4">
               <Flame className="h-4 w-4 text-orange-400" />
-              <h2 className="text-sm font-semibold text-slate-200">当日 TOP 热点</h2>
+              <h2 className="text-sm font-semibold text-slate-200">昨日热点事件</h2>
             </div>
             {report.topEvents.length === 0 ? (
-              <p className="text-xs text-slate-500 py-4">当日暂无聚合热点事件，请查看下方「热点速览」。</p>
+              <p className="text-xs text-slate-500 py-4">该期暂无聚合热点事件，请查看下方「热点速览」。</p>
             ) : (
               <div className="space-y-3">
                 {report.topEvents.map((e, i) => (
@@ -410,6 +435,11 @@ export default function DailyReport() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap mb-1">
                         <h3 className="text-sm font-medium text-slate-100">{e.title}</h3>
+                        {i === 0 && (
+                          <span className="chip bg-orange-500/10 text-orange-300 border border-orange-400/30">
+                            头条
+                          </span>
+                        )}
                         <EventStatusTag status={e.status} />
                       </div>
                       <p className="text-xs text-slate-400 leading-relaxed line-clamp-2">{e.summary}</p>
@@ -462,7 +492,7 @@ export default function DailyReport() {
             </div>
             <div className="divide-y divide-radar-border">
               {report.quickNews.length === 0 ? (
-                <p className="text-xs text-slate-500 py-4">当日暂无速览条目。</p>
+                <p className="text-xs text-slate-500 py-4">该期暂无速览条目。</p>
               ) : (
                 report.quickNews.map((a) => (
                 <div
@@ -498,11 +528,11 @@ export default function DailyReport() {
 
         {/* 右列 */}
         <div className="space-y-4">
-          {/* 当日热榜 TOP5 */}
+          {/* 昨日热榜 TOP5 */}
           <section className="card p-5">
             <div className="flex items-center gap-2 mb-4">
               <FileBarChart className="h-4 w-4 text-amber-400" />
-              <h2 className="text-sm font-semibold text-slate-200">当日热榜 TOP 5</h2>
+              <h2 className="text-sm font-semibold text-slate-200">昨日热榜 TOP 5</h2>
             </div>
             <div className="space-y-3">
               {report.topArticles.map((a, i) => (
@@ -563,12 +593,12 @@ export default function DailyReport() {
             </section>
           )}
 
-          {/* 日报窗口 AI 成本（日报 content.ai_cost，有则显示；历史日报无此字段自动隐藏） */}
+          {/* 早报窗口 AI 成本（日报 content.ai_cost，有则显示；历史早报无此字段自动隐藏） */}
           {report.aiCost && (
             <section className="card p-5">
               <div className="flex items-center gap-2 mb-3">
                 <Coins className="h-4 w-4 text-amber-400" />
-                <h2 className="text-sm font-semibold text-slate-200">日报窗口 AI 成本</h2>
+                <h2 className="text-sm font-semibold text-slate-200">早报窗口 AI 成本</h2>
               </div>
               <div className="grid grid-cols-3 gap-2 text-center">
                 <div>
@@ -599,9 +629,9 @@ export default function DailyReport() {
               <h2 className="text-sm font-semibold text-slate-200">生成说明</h2>
             </div>
             <ul className="space-y-2 text-xs text-slate-500 leading-relaxed">
-              <li>· 本报告由系统于每日 08:00 自动生成</li>
+              <li>· 本期早报由系统于每日 08:00 自动生成（早间速览昨日全天要闻）</li>
               <li>
-                · 今日综述：
+                · 早报综述：
                 {report.overviewSource === 'llm' ? 'AI 撰写（失败时自动回退模板）' : '确定性模板生成（配置 LLM 后自动升级）'}
               </li>
               <li>· 事件摘要基于 event 聚合结果与 AI 总结交叉生成</li>

@@ -2,7 +2,7 @@
 
 # 📡 华军软件园资讯雷达系统
 
-**多源科技资讯聚合 · AI 摘要 · 热点事件聚类 · 热度排行 · 每日软件日报**
+**多源科技资讯聚合 · AI 摘要 · 热点事件聚类 · 热度排行 · 每日 08:00 今日早报**
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
@@ -19,10 +19,10 @@
 
 ## 项目简介
 
-华军软件园资讯雷达系统是一套面向内部编辑、运营、产品团队的**多源科技资讯聚合与热点分析系统**：从 IT之家与快科技自动采集资讯，经 AI 摘要压缩阅读成本，通过 Embedding 向量聚类把多家媒体的报道归并为同一热点事件，再以热度算法排行、每日自动生成软件日报。
+华军软件园资讯雷达系统是一套面向内部编辑、运营、产品团队的**多源科技资讯聚合与热点分析系统**：从 IT之家与快科技自动采集资讯，经 AI 摘要压缩阅读成本，通过 Embedding 向量聚类把多家媒体的报道归并为同一热点事件，再以热度算法排行、每日 08:00 自动生成「今日早报」。
 
 - **V1 解决**「今天发生了什么？」—— 频道热榜、最新资讯时间轴
-- **V2 解决**「这件事是什么？为什么重要？有哪些媒体关注？后续如何发展？」—— AI 摘要、热点事件聚合、多来源关联、软件日报
+- **V2 解决**「这件事是什么？为什么重要？有哪些媒体关注？后续如何发展？」—— AI 摘要、热点事件聚合、多来源关联、今日早报
 
 第一阶段基于 IT之家体系频道（软件之家 / Win11之家 / Win10之家 / 智能时代）与快科技（桌面系统 / 电脑软件 / 移动应用 / 手机系统，2026-09 接入）建设，架构上预留多来源扩展能力。
 
@@ -34,7 +34,7 @@
 | 📰 **最新资讯** | 按发布时间倒序的实时资讯流，支持频道筛选、标题/标签检索与「加载更早」分页 |
 | 🤖 **AI 摘要** | 一句话摘要 + 3~5 条核心信息 + 标签提取；支持任意 **OpenAI 兼容 LLM**，未配置时自动降级为内置 TextRank v2 抽取式摘要（句图 PageRank + MMR 去冗余），双模式对上层透明 |
 | 🧩 **热点事件聚合** | 本地语义向量服务（fastembed + bge-small-zh-v1.5，384 维）+ **三段式聚类门槛**（相似度带 × 标题关键词 × 跨来源佐证，同来源一律不并高位带）+ 48h 时间窗 + 事件级二阶段合并，多来源报道归并为一个事件，附事件时间线与相关报道 |
-| 📅 **软件日报** | 每日 08:00 自动生成**当日发布期刊**（统计前一个北京时间自然日 00:00–发布日 00:00，期号幂等）：今日综述、TOP 热点、事件摘要、行业变化、重点来源、日报窗口 AI 成本；支持复制 Markdown / 打印导出 PDF / 期号对比；生成后自动推送**企业微信 + 飞书**双通道（运维监控面板「日报推送」热配置，飞书可选签名校验） |
+| 📅 **今日早报** | 每日 08:00 自动生成**当日发布期刊**（早报定位：早间速览昨日全天，统计前一个北京时间自然日 00:00–发布日 00:00，期号幂等）：早报综述、今日头条、昨日热点事件、事件摘要、行业变化、热点速览、重点来源、早报窗口 AI 成本，刊头带星期标注；支持复制 Markdown / 打印导出 PDF / 期号对比；生成后自动推送**企业微信 + 飞书**双通道（卡片含「今日头条」栏目，运维监控面板「早报推送」热配置，飞书可选签名校验） |
 | 💰 **AI 用量与成本看板** | LLM / Embedding 的 token 消耗、按模型价目表（含缓存价）核算成本、未计价模型盲区告警、近 7 天日均与月末成本预估、30 天北京时间趋势整日桶、日预算超限告警、流水保留期自动清理、调用流水明细（含连通性测试落账）、CSV 导出（可带筛选，超管专属） |
 | 🛠️ **运维监控面板** | 基础设施连通性（DB/Redis/Celery）、任务执行记录（含 **degraded 降级态**）与任务节奏心跳（停摆感知）、互动数据轮询水位、告警 Webhook（企业微信/钉钉/飞书，每 5 分钟巡检）、**运行时配置热更新**（DB 覆盖 > .env，保存即生效无需重建）、LLM/Embedding 连通性测试 |
 | 🌗 **界面主题** | 浅色 / 深色 / 跟随系统三态切换（顶栏与移动端抽屉均可切换）；浅色为 **macOS 设计语言**（Apple 灰窗体 + 白卡悬浮 + 蓝色 accent + 毛玻璃顶栏）；偏好本地持久化、刷新不丢失，「跟随系统」实时响应操作系统深浅色变化 |
@@ -48,10 +48,10 @@ flowchart LR
     CR --> PG[(PostgreSQL 16<br/>+ pgvector)]
     PG --> RD{{Redis 任务队列}}
     RD --> AI[ai-worker<br/>AI 摘要 / Embedding]
-    RD --> WK[worker<br/>事件聚合 / 日报]
+    RD --> WK[worker<br/>事件聚合 / 早报]
     EMB[embedding<br/>fastembed 语义向量<br/>bge-small-zh-v1.5 · 384 维]
     AI -.->|调用| EMB
-    BT[beat 定时调度<br/>事件聚类 / 互动轮询 / 告警巡检<br/>每日 08:00 日报] --> RD
+    BT[beat 定时调度<br/>事件聚类 / 互动轮询 / 告警巡检<br/>每日 08:00 早报] --> RD
     AI --> PG
     WK --> PG
     NG[nginx :80<br/>前端静态资源 + API 反代] --> BE[backend FastAPI :8000]
@@ -63,7 +63,7 @@ flowchart LR
 | --- | --- |
 | `backend` | FastAPI REST API（容器内 8000，宿主机映射 `127.0.0.1:18000`） |
 | `crawler` | 常驻循环：多来源采集（IT之家页面即频道真相 / 快科技文章页面包屑即频道真相）→ 入库 → 派发 AI 任务；心跳文件供健康检查 |
-| `worker` | Celery 默认队列：事件聚合 / 日报生成 |
+| `worker` | Celery 默认队列：事件聚合 / 早报生成 |
 | `ai-worker` | Celery AI 队列：摘要 / Embedding |
 | `beat` | 定时调度：事件聚类（10 分钟）、互动数据轮询（15 分钟）、告警巡检（5 分钟）、每日 08:00 生成当日发布期刊、每周清理 |
 | `embedding` | 本地语义向量服务（docker-compose.override.yml 自动合并）：fastembed(ONNX) + BAAI/bge-small-zh-v1.5，OpenAI 兼容 `/v1/embeddings`，免 GPU、模型经镜像站缓存于卷 |
@@ -123,11 +123,11 @@ docker compose up -d --build           # 一键上线全套 9 个服务（含 ov
 | `CRAWLER_INTERVAL_MINUTES` ★ / `CRAWL_LIMIT_PER_FEED` | 采集间隔（分钟，热调立即生效）/ 单源单轮抓取上限 |
 | `STATS_POLL_ENABLED` ★ / `STATS_POLL_BATCH` ★ | 互动数据轮询总开关 / 批次大小（IT之家 + 快科技的评论数与点赞数，分层衰减节奏） |
 
-**日报推送与告警（推荐直接在面板配置）**
+**早报推送与告警（推荐直接在面板配置）**
 
 | 变量 | 说明 |
 | --- | --- |
-| `REPORT_PUSH_ENABLED` ★ + `REPORT_PUSH_WEBHOOK_URL` ★ | 企业微信机器人推送（日报生成后自动推） |
+| `REPORT_PUSH_ENABLED` ★ + `REPORT_PUSH_WEBHOOK_URL` ★ | 企业微信机器人推送（早报生成后自动推） |
 | `REPORT_PUSH_FEISHU_WEBHOOK_URL` ★ / `REPORT_PUSH_FEISHU_SECRET` ★ | 飞书机器人推送 / 可选签名校验密钥 |
 | `ALERT_WEBHOOK_URL` ★ / `ALERT_WEBHOOK_STYLE` ★ | 运维告警 Webhook（每 5 分钟巡检 Redis/Worker/任务停摆，状态转坏/恢复才推送；格式 wecom/dingtalk/feishu/raw） |
 
@@ -166,7 +166,7 @@ docker compose up -d --build           # 一键上线全套 9 个服务（含 ov
 | GET | `/api/v2/articles/latest?channel=&q=&limit=&offset=` | 最新资讯（时间倒序 + 检索 + 分页） |
 | GET | `/api/v2/article/{id}` / `/api/v2/article/{id}/summary` | 文章详情（内嵌 summary 与 eventIds）/ **AI 摘要** |
 | GET | `/api/v2/events?limit=&offset=&status=&q=` / `/api/v2/events/{id}` | 热点事件列表（分页 + 过滤）/ 事件详情（时间线、相关报道、来源分布） |
-| GET | `/api/v2/report/daily?date=` / `/api/v2/report/dates` | **软件日报** / 期号列表 |
+| GET | `/api/v2/report/daily?date=` / `/api/v2/report/dates` | **今日早报** / 期号列表 |
 | GET | `/api/v2/stats` | 系统统计（需登录） |
 | POST | `/api/v2/auth/login` · `/auth/logout` | 登录 / 登出（HttpOnly 会话 Cookie，IP 限速 + 失败锁定） |
 | GET | `/api/v2/auth/me` · GET `/auth/sessions` | 当前用户 / 我的活跃会话 |
@@ -175,7 +175,7 @@ docker compose up -d --build           # 一键上线全套 9 个服务（含 ov
 | GET/POST | `/api/v2/admin/users` · PUT `/admin/users/{id}` | 用户管理（超管全局 / 租户管理员限本租户 member） |
 | POST | `/api/v2/admin/users/{id}/password-reset` · `/admin/users/{id}/unlock` | 重置密码（强制首登改密）/ 解除登录锁定 |
 | GET | `/api/v2/admin/audit-logs` · `/audit-logs/export` · `/audit-actions` | 审计日志查询（超管，哈希链防篡改）/ CSV 导出 / 动作清单 |
-| GET/POST | `/api/v2/admin/crawl` · `/admin/events` · `/admin/stats` · `/admin/report` | 手动触发：采集 / 事件聚类 / 互动轮询 / 日报（需超管会话或 Token） |
+| GET/POST | `/api/v2/admin/crawl` · `/admin/events` · `/admin/stats` · `/admin/report` | 手动触发：采集 / 事件聚类 / 互动轮询 / 早报（需超管会话或 Token） |
 | GET/PUT | `/api/v2/admin/config` | 运行时配置热更新（敏感值脱敏，留空 = 不修改） |
 | POST | `/api/v2/admin/test/llm` · `/test/embedding` | AI 连通性测试（可先验证未保存的 key 再存） |
 | GET | `/api/v2/admin/status` · `/admin/task-runs` | 运维总览（含任务节奏心跳、轮询水位）· 任务执行记录 |
@@ -191,7 +191,7 @@ news/
 │   │   ├── api/v2/        # REST 接口（业务 + auth + admin + 审计）
 │   │   ├── auth/          # 会话/密码/限速/CSRF 依赖
 │   │   ├── models/        # article / summary / event / daily_report / task_run / usage / user / tenant / session / audit_log / setting（11 表）
-│   │   ├── services/      # 摘要、向量、事件、日报、推送、告警、审计（哈希链）、用量成本、配置热更
+│   │   ├── services/      # 摘要、向量、事件、早报、推送、告警、审计（哈希链）、用量成本、配置热更
 │   │   ├── algorithms/    # hot_score：HotScore = Engagement × TimeDecay（含 SQL 表达式一致性）
 │   │   ├── ai/            # summary（LLM/TextRank v2）/ embedding（API/本地哈希）/ event_cluster（三段式门槛）
 │   │   ├── tasks/         # Celery：summary / embedding / event / report / stats / alert / 清理
@@ -202,7 +202,7 @@ news/
 │   ├── tests/             # pytest 测试（离线 SQLite + 容器内 pgvector 集成）
 │   └── .env.example       # 配置模板（含生产部署检查单）
 ├── frontend/              # React 18 + TypeScript + Vite + Tailwind（HashRouter）
-│   └── src/pages/         # 热榜 / 最新 / 事件 / 日报 / 成本看板 / 运维监控 / 用户与租户 / 审计 / 账号 / 登录
+│   └── src/pages/         # 热榜 / 最新 / 事件 / 早报 / 成本看板 / 运维监控 / 用户与租户 / 审计 / 账号 / 登录
 ├── embedding-server/      # 本地语义向量服务：fastembed + bge-small-zh-v1.5（384 维，OpenAI 兼容）
 ├── docs/                  # 审计报告与整改清单、运维笔记
 └── docker-compose.yml     # 8 服务编排 + override 追加 embedding（共 9 个）
@@ -212,7 +212,7 @@ news/
 
 全站强制登录：未登录访问任何页面会跳转登录页（`/health` 等基础设施探针除外）。账号**无注册入口**，全部由管理员后台创建（用户与租户页 → 新建用户），初始密码一次性线下发放，**首次登录强制修改**。
 
-- **角色**：`super_admin` 平台超管（租户/用户/审计/运维/成本全部可见）→ `tenant_admin` 租户管理员（本租户内管理成员）→ `member` 成员（热榜/最新/事件/日报只读）
+- **角色**：`super_admin` 平台超管（租户/用户/审计/运维/成本全部可见）→ `tenant_admin` 租户管理员（本租户内管理成员）→ `member` 成员（热榜/最新/事件/早报只读）
 - **会话**：HttpOnly Cookie（SameSite=Lax，模板默认 7 天），改密/停用/登出即时吊销；空闲超时默认 24h；连续失败 5 次锁定 15 分钟；单 IP 登录限速 30 次/5 分钟（成功登录清零，NAT 不连坐）
 - **审计**：登录成功/失败/锁定、用户与租户变更、配置修改、手动触发任务、越权访问全部留痕（操作者/IP/UA/时间），行间 **SHA-256 哈希链**可离线校验篡改；超管在「审计日志」页可查可导出，保留 180 天自动清理
 - **忘记超管密码**：`docker compose exec backend python scripts/manage_user.py reset-password <邮箱> <新密码>`
@@ -250,7 +250,7 @@ cd frontend && npm test                                # 前端 vitest
 
 ## ✅ 质量与验收
 
-- 后端 pytest **177 个用例**（171 离线 + 6 个容器内 pgvector 集成，`TEST_DATABASE_URL` 未设置自动跳过）+ 前端 vitest **10 个用例**，全部通过。
+- 后端 pytest **317 个用例通过**（14 个容器内 pgvector 集成用例需 `TEST_DATABASE_URL`，未设置自动跳过）+ 前端 vitest **10 个用例**，全部通过。
 - 验收脚本（需后端已在 18000 运行）：
 
 ```bash

@@ -2,7 +2,7 @@
 
 覆盖面（action 清单）：登录成功/失败/锁定/登出/改密/会话吊销/越权访问、
 租户与用户增改停、密码重置、运行时配置修改、LLM/Embedding 连通测试、
-手动触发采集/聚合/日报。
+手动触发采集/聚合/早报。
 
 防篡改：audit_log 逐行哈希链——row_hash = sha256(prev_hash ‖ 行内容规范化 JSON)，
 行按 id 链接；写路径用 PostgreSQL advisory lock 串行化「读链尾 → 写入」，

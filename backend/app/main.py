@@ -165,7 +165,7 @@ async def _audit_access_denied(request: Request, exc: HTTPException):
 
 # 公开探针（/api/v2/health）——全站门禁的例外，新增公开端点必须放 public.py
 app.include_router(public.router)
-# 业务数据接口：全站强制登录（含 stats/热榜/最新/文章/事件/日报 + 运维触发）
+# 业务数据接口：全站强制登录（含 stats/热榜/最新/文章/事件/早报 + 运维触发）
 app.include_router(router, dependencies=[Depends(require_user)])
 # 认证：登录/登出/me/改密/我的会话
 app.include_router(auth_router)
