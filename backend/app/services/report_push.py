@@ -175,6 +175,130 @@ def render_report_markdown(content: dict, provider: str = "wecom") -> str:
     return "\n".join(lines)
 
 
+def render_feishu_card(content: dict) -> dict:
+    """早报快照 → 飞书结构化卡片 JSON（1.0 结构，纯函数供测试）。
+
+    设计（2026-09-17 美化改版）：蓝色主题 header（副标题=日期·星期·期号）→
+    综述导语 → 三栏数据行（收录/热点/来源）→ 分区 markdown（🔥今日头条/
+    📈更多热点/🧭行业变化/⚡热点速览/📡重点来源）→ note 脚注。
+    飞书卡片 markdown 不支持 HTML（<font> 等），脚注走 note 组件；
+    整卡远小于自定义机器人 20KB 请求体上限。
+    """
+    date = content.get("date", "")
+    weekday = _weekday_cn(date)
+    issue = f"第 {content.get('issue_no', 1)} 期"
+    subtitle = (date + (f"（{weekday}）" if weekday else "") + f" · {issue}") if date else issue
+
+    elements: list[dict] = []
+    overview = str(content.get("overview") or "").strip()
+    if overview:
+        if content.get("overview_source") == "llm":
+            overview += "（AI 撰写）"
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": overview}})
+
+    total = content.get("articles_total")
+    channels = content.get("channel_stats") or content.get("source_stats") or []
+    if total is not None:
+        stats = [(f"📰 **{total}**", "收录报道")]
+        if content.get("top_events"):
+            stats.append((f"🔥 **{len(content['top_events'])}**", "热点事件"))
+        if channels:
+            stats.append((f"📡 **{len(channels)}**", "来源栏目"))
+        columns = [
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "vertical_align": "top",
+                "elements": [{"tag": "markdown", "content": f"{num}\n{text}"}],
+            }
+            for num, text in stats
+        ]
+        elements.append({
+            "tag": "column_set",
+            "flex_mode": "bisect",
+            "background_style": "default",
+            "columns": columns,
+        })
+
+    events = content.get("top_events") or []
+    if events:
+        lead, rest = events[0], events[1:]
+        lead_md = (
+            f"**{lead.get('title', '')}**（热度 {_fmt_score(lead.get('hot_score'))}，"
+            f"{lead.get('articles_count', 0)} 篇/{lead.get('sources_count', 0)} 源）"
+        )
+        summary = _clip(lead.get("summary"), 90)
+        elements.append({"tag": "hr"})
+        elements.append({
+            "tag": "markdown",
+            "content": "**🔥 今日头条**\n" + lead_md + (f"\n{summary}" if summary else ""),
+        })
+        if rest:
+            rest_lines = [
+                f"{i}. **{e.get('title', '')}**（热度 {_fmt_score(e.get('hot_score'))}，"
+                f"{e.get('articles_count', 0)} 篇/{e.get('sources_count', 0)} 源）"
+                for i, e in enumerate(rest, 2)
+            ]
+            elements.append({
+                "tag": "markdown",
+                "content": "**📈 更多热点**\n" + "\n".join(rest_lines),
+            })
+
+    changes = content.get("industry_changes") or []
+    if changes:
+        elements.append({"tag": "hr"})
+        elements.append({
+            "tag": "markdown",
+            "content": "**🧭 行业变化**\n" + "\n".join(f"- {c}" for c in changes),
+        })
+
+    quick = content.get("quick_news") or []
+    if quick:
+        elements.append({"tag": "hr"})
+        elements.append({
+            "tag": "markdown",
+            "content": "**⚡ 热点速览**\n"
+            + "\n".join(f"- {a.get('title', '')}（{a.get('source', '')}）" for a in quick),
+        })
+
+    if channels:
+        elements.append({"tag": "hr"})
+        elements.append({
+            "tag": "markdown",
+            "content": "**📡 重点来源**\n"
+            + "\n".join(
+                f"- {c.get('channel') or c.get('source', '')}：{c.get('count', 0)} 篇"
+                for c in channels
+            ),
+        })
+
+    gen = content.get("generated_at")
+    stamp = ""
+    if gen:
+        try:
+            dt = datetime.fromisoformat(str(gen)).astimezone(timezone(timedelta(hours=8)))
+            stamp = f"生成于 {dt.strftime('%Y-%m-%d %H:%M')} 北京时间"
+        except ValueError:
+            pass
+    footer = " · ".join(x for x in (stamp, "华军软件园资讯雷达自动生成") if x)
+    if footer:
+        elements.append({
+            "tag": "note",
+            "elements": [{"tag": "plain_text", "content": f"🤖 {footer}"}],
+        })
+
+    return {
+        "config": {"wide_screen_mode": True, "enable_forward": True},
+        "header": {
+            "template": "blue",
+            "title": {"tag": "plain_text", "content": "华军软件园 · 今日早报"},
+            "subtitle": {"tag": "plain_text", "content": subtitle},
+        },
+        "elements": elements,
+    }
+
+
 # 企微 markdown 消息体上限 4096 字节，超限直接拒收（HTTP 200 + errcode 非 0）；
 # 留出尾部标注与转义余量按 4000 字节预算在行界截断
 _WECOM_MAX_BYTES = 4000
@@ -201,18 +325,24 @@ def _feishu_sign(secret: str, timestamp: str) -> str:
     return base64.b64encode(hmac_code).decode("utf-8")
 
 
-def build_payload(provider: str, md: str, feishu_secret: str = "") -> dict:
-    """按通道包装消息体（纯函数，供测试）。"""
+def build_payload(provider: str, md: "str | dict", feishu_secret: str = "") -> dict:
+    """按通道包装消息体（纯函数，供测试）。
+
+    feishu 的第二参：传 dict = render_feishu_card 产出的完整卡片 JSON（推荐）；
+    传 str = 兼容旧单 markdown 块结构。
+    """
     if provider == "feishu":
-        body: dict = {
-            "msg_type": "interactive",
-            "card": {
+        card: dict
+        if isinstance(md, dict):
+            card = md
+        else:
+            card = {
                 "header": {
                     "title": {"tag": "plain_text", "content": "华军软件园 · 今日早报"},
                 },
                 "elements": [{"tag": "markdown", "content": md}],
-            },
-        }
+            }
+        body = {"msg_type": "interactive", "card": card}
         if feishu_secret:
             ts = str(int(time.time()))
             body["timestamp"] = ts
@@ -240,14 +370,17 @@ def _provider_ok(provider: str, resp: httpx.Response) -> bool:
 
 
 def push_report(db: Session | None, content: dict) -> str:
-    """推送日报到所有已配置通道。返回状态描述；未启用返回空串。"""
+    """推送早报到所有已配置通道。返回状态描述；未启用返回空串。"""
     targets = push_targets(db)
     if not targets:
         return ""
     results: list[str] = []
     for provider, url, secret in targets:
-        md = render_report_markdown(content, provider=provider)
-        body_md = clip_markdown_bytes(md) if provider == "wecom" else md
+        if provider == "feishu":
+            # 飞书走结构化卡片（header/分栏/分区/note）；卡片远小于 20KB 上限，不裁剪
+            body_md: str | dict = render_feishu_card(content)
+        else:
+            body_md = clip_markdown_bytes(render_report_markdown(content, provider=provider))
         try:
             resp = httpx.post(url, json=build_payload(provider, body_md, secret), timeout=_PUSH_TIMEOUT)
             if resp.status_code == 200 and _provider_ok(provider, resp):
@@ -255,10 +388,10 @@ def push_report(db: Session | None, content: dict) -> str:
             else:
                 results.append(f"{provider}:HTTP{resp.status_code}")
                 logger.warning(
-                    "日报 webhook 推送失败[%s]: HTTP %s %s",
+                    "早报 webhook 推送失败[%s]: HTTP %s %s",
                     provider, resp.status_code, resp.text[:200],
                 )
         except Exception as exc:  # 网络/超时等一切异常都不上抛
             results.append(f"{provider}:fail:{exc.__class__.__name__}")
-            logger.warning("日报 webhook 推送失败[%s]: %s", provider, exc)
+            logger.warning("早报 webhook 推送失败[%s]: %s", provider, exc)
     return "；".join(results)

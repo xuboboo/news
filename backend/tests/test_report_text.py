@@ -11,6 +11,7 @@ from app.services.report_push import (
     build_payload,
     clip_markdown_bytes,
     push_targets,
+    render_feishu_card,
     render_report_markdown,
 )
 from app.services.report_service import _clean_change_text, _compose_overview, _dedupe_texts
@@ -208,6 +209,77 @@ def test_feishu_sign_known_vector():
     # 与飞书官方文档算法一致的构造：仅验证 key 拼接与摘要确定性
     assert _feishu_sign("s", "123") == _feishu_sign("s", "123")
     assert _feishu_sign("s", "123") != _feishu_sign("s2", "123")
+
+
+# ———— 飞书结构化卡片（2026-09-17 美化改版） ————
+
+def _card_content():
+    return {
+        "date": "2026-09-10",
+        "issue_no": 149,
+        "overview": "昨夜今晨最热「A」，聚合多篇报道。",
+        "overview_source": "llm",
+        "articles_total": 42,
+        "top_events": [
+            {"title": "头条事件", "hot_score": 100, "articles_count": 5, "sources_count": 3,
+             "summary": "头条摘要。"},
+            {"title": "次级热点", "hot_score": 80, "articles_count": 2, "sources_count": 2},
+        ],
+        "industry_changes": ["变化一"],
+        "quick_news": [{"title": "某文", "source": "IT之家"}],
+        "channel_stats": [{"channel": "智能时代", "count": 26}],
+        "generated_at": "2026-09-10T00:30:00+00:00",
+    }
+
+
+def test_feishu_card_header_and_stats():
+    """header 蓝色主题 + 副标题（日期·星期·期号）；三栏数据行齐全。"""
+    card = render_feishu_card(_card_content())
+    assert card["header"]["template"] == "blue"
+    assert card["header"]["title"]["content"] == "华军软件园 · 今日早报"
+    assert card["header"]["subtitle"]["content"] == "2026-09-10（周四） · 第 149 期"
+    tags = [e["tag"] for e in card["elements"]]
+    assert "column_set" in tags
+    cols = next(e for e in card["elements"] if e["tag"] == "column_set")["columns"]
+    assert len(cols) == 3
+    assert "42" in cols[0]["elements"][0]["content"]
+    assert "2" in cols[1]["elements"][0]["content"]  # 热点事件数
+    assert "1" in cols[2]["elements"][0]["content"]  # 来源栏目数
+
+
+def test_feishu_card_sections_and_note():
+    """分区内容齐全、无 HTML（飞书不支持 <font>）、脚注为 note 组件。"""
+    card = render_feishu_card(_card_content())
+    mds = [e.get("content", "") for e in card["elements"] if e["tag"] == "markdown"]
+    joined = "\n".join(mds)
+    assert "**🔥 今日头条**" in joined
+    assert "**头条事件**（热度 100，5 篇/3 源）" in joined
+    assert "2. **次级热点**" in joined
+    assert "**🧭 行业变化**" in joined and "- 变化一" in joined
+    assert "**⚡ 热点速览**" in joined and "- 某文（IT之家）" in joined
+    assert "**📡 重点来源**" in joined and "智能时代：26 篇" in joined
+    assert "<font" not in joined
+    overview_el = next(e for e in card["elements"] if e["tag"] == "div")
+    assert "（AI 撰写）" in overview_el["text"]["content"]
+    note = next(e for e in card["elements"] if e["tag"] == "note")
+    assert "生成于" in note["elements"][0]["content"] and "北京时间" in note["elements"][0]["content"]
+
+
+def test_feishu_card_minimal_no_empty_sections():
+    """最小快照：无数据段全部跳过，副标题退化为仅期号。"""
+    card = render_feishu_card({"date": "", "issue_no": 1})
+    assert card["header"]["subtitle"]["content"] == "第 1 期"
+    assert all(e["tag"] != "column_set" for e in card["elements"])
+    assert all(e["tag"] != "hr" for e in card["elements"])
+
+
+def test_feishu_payload_wraps_card_dict_with_sign():
+    """build_payload 收到 dict 卡片时整体作为 card；签名与 str 路径同款。"""
+    card = render_feishu_card(_card_content())
+    p = build_payload("feishu", card, "s3cret")
+    assert p["msg_type"] == "interactive"
+    assert p["card"] is card
+    assert p["timestamp"] and p["sign"] == _feishu_sign("s3cret", p["timestamp"])
 
 
 # ———— 企微 markdown 字节上限守卫（2026-09-10 审计） ————
