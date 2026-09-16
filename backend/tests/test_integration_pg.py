@@ -1,4 +1,4 @@
-"""数据库集成测试（2026-09-09 审计补齐：run_event_clustering / 日报窗口 / 热榜窗口）。
+"""数据库集成测试（2026-09-09 审计补齐：run_event_clustering / 早报窗口 / 热榜窗口）。
 
 需要 postgres + pgvector 的**独立测试库**，未设置 TEST_DATABASE_URL 时整体跳过：
     TEST_DATABASE_URL=postgresql+psycopg://hjradar:hjradar@postgres:5432/hjradar_test \
@@ -333,33 +333,44 @@ def test_recompute_event_scores_sums_members_and_flips_status(pg):
         db.close()
 
 
-# ———— build_report：日报窗口口径（审计 P1） ————
+# ———— build_report：早报窗口口径（审计 P1；2026-09-17 改「昨夜今晨」窗口） ————
 
 def test_build_report_event_stats_window_scoped(pg):
-    """日报事件统计限定窗口内：跨日事件的 articles_count 只数窗口内成员，
+    """早报事件统计限定窗口内：跨日事件的 articles_count 只数窗口内成员，
     全生命周期数字放 lifecycle_* 字段。
 
-    窗口口径（2026-09-11 改版）：build_report(db, day) 的 day 为发布日，
-    窗口 = 北京时间 day-1 00:00 → day 00:00。"""
+    窗口口径（2026-09-17 早报改版）：build_report(db, day) 的 day 为发布日，
+    窗口 = 北京时间 (day-1) 00:00 → day 08:00「昨夜今晨」——overnight
+    （00:00–08:00）报道归当期而非顺延一天，win_end 严格排他。"""
     from app.services.report_service import build_report
 
     db = pg()
     try:
         day = (NOW - timedelta(days=1)).date()  # 发布日
         win_start = datetime(day.year, day.month, day.day, tzinfo=TZ_BJ) - timedelta(days=1)
+        win_end = datetime(day.year, day.month, day.day, 8, 0, tzinfo=TZ_BJ)
         v = _vec([1.0, 0.1])
         in_win_a = _mk_article(db, title="某事件窗口内报道A", source="IT之家", vec=v,
                                published=win_start + timedelta(hours=10))
         out_win_a = _mk_article(db, title="某事件窗口外报道B", source="快科技", vec=v,
                                 published=win_start - timedelta(hours=14))
+        # overnight：今晨 06:00 发布，旧自然日窗口会漏掉，新窗口必须归入当期
+        overnight_a = _mk_article(db, title="今晨overnight报道C", source="IT之家", vec=v,
+                                  published=win_end - timedelta(hours=2))
+        # 边界：恰在 win_end 08:00 发布（排他），不得计入；其唯一来源快科技
+        # 若被误计入会把 sources_count 抬到 2，构成精确的边界探针
+        boundary_a = _mk_article(db, title="八点截稿后报道D", source="快科技", vec=v,
+                                 published=win_end)
         db.add(HotEvent(title="跨日事件标题", summary="事件总结", impacts=[],
-                        first_time=out_win_a.publish_time, last_time=in_win_a.publish_time,
+                        first_time=out_win_a.publish_time, last_time=overnight_a.publish_time,
                         status="发酵中", centroid=v, timeline=[]))
         db.flush()
         ev = db.query(HotEvent).one()
         db.add_all([
             EventArticle(event_id=ev.id, article_id=in_win_a.id),
             EventArticle(event_id=ev.id, article_id=out_win_a.id),
+            EventArticle(event_id=ev.id, article_id=overnight_a.id),
+            EventArticle(event_id=ev.id, article_id=boundary_a.id),
             AiUsageLog(
                 created_at=win_start + timedelta(hours=1),
                 task_type="summary", model="test-model", total_tokens=100, cost=0.25,
@@ -368,25 +379,32 @@ def test_build_report_event_stats_window_scoped(pg):
                 created_at=win_start - timedelta(seconds=1),
                 task_type="summary", model="test-model", total_tokens=200, cost=1.00,
             ),
+            # 昨日 24:00（= day 00:00）旧窗口已结束，新「昨夜今晨」窗口仍开启：计入
             AiUsageLog(
                 created_at=datetime(day.year, day.month, day.day, tzinfo=TZ_BJ),
                 task_type="summary", model="test-model", total_tokens=300, cost=2.00,
+            ),
+            # 今晨 08:00 整点：win_end 排他，不计入
+            AiUsageLog(
+                created_at=win_end,
+                task_type="summary", model="test-model", total_tokens=400, cost=4.00,
             ),
         ])
         db.commit()
 
         report = build_report(db, day)
         top = {e["id"]: e for e in report["top_events"]}
-        assert top[ev.id]["articles_count"] == 1  # 仅窗口内 1 篇
-        assert top[ev.id]["sources_count"] == 1  # 窗口内仅 IT之家
-        assert top[ev.id]["lifecycle_articles_count"] == 2  # 全周期 2 篇
+        assert top[ev.id]["articles_count"] == 2  # 窗口内 2 篇（A + overnight C）
+        assert top[ev.id]["sources_count"] == 1  # 窗口内仅 IT之家（边界 D 的快科技被排除）
+        assert top[ev.id]["lifecycle_articles_count"] == 4  # 全周期 4 篇
         assert top[ev.id]["lifecycle_sources_count"] == 2
-        assert report["ai_cost"] == {"calls": 1, "tokens": 100, "cost": 0.25}
+        # AI 成本窗口随早报窗口：含昨日午夜后、不含今晨 08:00 整点
+        assert report["ai_cost"] == {"calls": 2, "tokens": 400, "cost": 2.25}
     finally:
         db.close()
 
 
-# ———— generate_daily_report：期号递增与同日幂等（审计：日报真实生成链路无集成测试） ————
+# ———— generate_daily_report：期号递增与同日幂等（审计：早报真实生成链路无集成测试） ————
 
 def test_generate_daily_report_issue_no_and_idempotency(pg):
     """同日重复生成更新同一行（advisory lock + 更新分支，issue_no 不变）；
@@ -440,7 +458,7 @@ def test_generate_daily_report_push_policy(pg, monkeypatch):
         assert status == "内容为空，未推送"
         assert pushed == []
 
-        # 当期新刊（发布日=今天，窗口=北京昨日）且有内容：推送并透出状态；
+        # 当期新刊（发布日=今天，窗口=北京昨夜今晨）且有内容：推送并透出状态；
         # 综述走模板兜底（测试环境无 LLM）
         v = _vec([1.0, 0.0])
         win_start = datetime(today.year, today.month, today.day, tzinfo=TZ_BJ) - timedelta(days=1)
@@ -469,7 +487,7 @@ def test_generate_daily_report_push_policy(pg, monkeypatch):
 
 def test_report_daily_latest_skips_empty_placeholder(pg):
     """latest 跳过全空报告（凌晨窗口刚开启时的误生成占位），回退最近一个有实质内容的；
-    指定 date 仍可原样访问（审计口径：日报页不应白天展示一整天空内容）。"""
+    指定 date 仍可原样访问（审计口径：早报页不应白天展示一整天空内容）。"""
     from fastapi import HTTPException
 
     from app.api.v2.routes import report_daily
@@ -500,7 +518,7 @@ def test_report_daily_latest_skips_empty_placeholder(pg):
 # ———— /report/dates：占位空刊不进期号列表（2026-09-10 审计） ————
 
 def test_report_dates_hides_empty_placeholder(pg):
-    """前端默认选中期号列表首项：空刊在列 = 日报页默认展示空内容。
+    """前端默认选中期号列表首项：空刊在列 = 早报页默认展示空内容。
     期号列表只收录有实质内容的期；次日定时任务覆盖空刊日期行后自然复现。"""
     from app.api.v2.routes import report_dates
 

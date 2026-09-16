@@ -1,6 +1,7 @@
 """早报服务（原「软件日报」，2026-09-17 改版）：每日 08:00 自动生成 / report_task 落库。
 
-产品定位「今日早报」：早间发布昨日全天速览，统计窗口为前一个北京时间自然日。
+产品定位「今日早报」：早间速览「昨夜今晨」，统计窗口为
+（发布日-1）00:00 → 发布日 08:00（北京时间）， overnight 报道不再顺延一天。
 """
 import json
 import re
@@ -36,6 +37,12 @@ def issue_no_for(day: date_type) -> int:
     s = get_settings()
     start = datetime.fromisoformat(s.report_issue_epoch).date()
     return max(1, (day - start).days + 1)
+
+
+# 早报统计窗口的今晨截稿时刻（发布日 08:00 北京时间）：与 beat 每日 08:00 的
+# report_task 生成时刻对齐，overnight（00:00–08:00）报道归当期而非顺延一天；
+# 窗口 [day-1 00:00, day 08:00) 内每篇报道恰好归属唯一一期，无缝无重叠
+REPORT_WINDOW_END_HOUR = 8
 
 
 # 「IT之家 9 月 8 日消息，」「快科技 9 月 9 日讯，」等媒体导语壳（含「2026 年 9 月 8 日」带年份变体）
@@ -94,7 +101,8 @@ def _compose_overview(
 ) -> str:
     """早报综述（无 LLM 的确定性模板）：头条事件 + 其余热点 + 频道亮点。
 
-    早报于 08:00 发布、统计前一自然日全天，故措辞取「昨日最热」口径。
+    早报于 08:00 发布、统计昨夜今晨（昨日 00:00 → 发布日 08:00），
+    故措辞取「昨夜今晨最热」口径（与 36氪早报「昨夜今晨」定位一致）。
     生成链路先试 _llm_overview（配了 LLM 才调），任何失败回退本实现。
     """
     if articles_total <= 0:
@@ -102,7 +110,7 @@ def _compose_overview(
     parts: list[str] = []
     if top_events:
         e1 = top_events[0]
-        lead = f"昨日最热「{truncate_boundary(e1['title'], 48)}」"
+        lead = f"昨夜今晨最热「{truncate_boundary(e1['title'], 48)}」"
         if e1['articles_count'] > 1:
             lead += f"，聚合 {e1['articles_count']} 篇报道"
         if e1['sources_count'] > 1:
@@ -167,9 +175,9 @@ def _llm_overview(llm: tuple[str, str, str, str], content: dict, trigger: str = 
     )
     ch_lines = "、".join(f"{c.get('channel', '')} {c.get('count', 0)}篇" for c in channels[:4])
     prompt = (
-        "这是科技资讯「今日早报」的素材（早间 8 点发布，统计前一自然日全天）。"
-        "请写一段80~140字的中文早报综述："
-        "概括昨日最热事件及其交叉报道情况、其他值得注意的热点、收录量与频道分布。"
+        "这是科技资讯「今日早报」的素材（早间 8 点发布，统计昨夜今晨："
+        "昨日 00:00 → 今晨 08:00）。请写一段80~140字的中文早报综述："
+        "概括昨夜今晨最热事件及其交叉报道情况、其他值得注意的热点、收录量与频道分布。"
         "要求：客观陈述事实、不加观点、不使用任何 markdown 标记、不要称呼与客套。\n"
         '输出严格 JSON：{"overview":"综述文本"}\n\n'
         f"共收录 {content.get('articles_total', 0)} 篇报道。\n"
@@ -211,14 +219,15 @@ def _llm_overview(llm: tuple[str, str, str, str], content: dict, trigger: str = 
 def build_report(db: Session, day: date_type) -> dict:
     """构建早报内容（前端可直接渲染的结构）。
 
-    day 为发布日（北京时间口径）：统计窗口取前一个北京时间自然日全天
-    （day-1 00:00 → day 00:00 北京时间）。每日 08:00（北京时间）自动生成
-    当日发布期刊时，窗口已于 8 小时前完整闭合。
+    day 为发布日（北京时间口径）：统计窗口取「昨夜今晨」——
+    （day-1）00:00 → day 08:00 北京时间。每日 08:00（北京时间）自动生成
+    当日发布期刊时窗口恰在生成时刻闭合；凌晨出现的外媒 overnight 消息
+    归入当期早报，不再顺延一天。
     """
     win_start = bj_day_start(day - timedelta(days=1))
-    win_end = bj_day_start(day)
+    win_end = bj_day_start(day) + timedelta(hours=REPORT_WINDOW_END_HOUR)
 
-    day_articles = (
+    win_articles = (
         db.query(Article)
         .options(selectinload(Article.summary))
         .filter(Article.publish_time >= win_start, Article.publish_time < win_end)
@@ -228,26 +237,26 @@ def build_report(db: Session, day: date_type) -> dict:
     def with_score(a: Article):
         return a, hot_score(a.views, a.comments, a.shares, a.likes or 0, a.publish_time)
 
-    scored = sorted(map(with_score, day_articles), key=lambda p: p[1], reverse=True)
+    scored = sorted(map(with_score, win_articles), key=lambda p: p[1], reverse=True)
     max_raw = scored[0][1] if scored else 0
 
-    # —— TOP 事件（当天有报道的事件）——
+    # —— TOP 事件（窗口内有报道的事件）——
     # 4 条集合查询替代逐事件 N+1（旧实现 = 1 + 2×事件总数 条查询）；
-    # articles_count / sources_count 为日报窗口内统计（2026-09-09 审计修正：
+    # articles_count / sources_count 为早报窗口内统计（2026-09-09 审计修正：
     # 旧口径取事件全量成员，跨日事件会把历史文章计入"今日聚合 X 篇"），
     # 全生命周期数据放 lifecycle_* 字段单独呈现，两口径不混用
-    day_ids = [a.id for a in day_articles]
-    day_id_set = set(day_ids)
+    win_ids = [a.id for a in win_articles]
+    win_id_set = set(win_ids)
     events: list[HotEvent] = []
     member_ids_by_ev: dict[int, list[int]] = defaultdict(list)
     sources_by_ev: dict[int, set] = defaultdict(set)
-    day_member_ids_by_ev: dict[int, list[int]] = defaultdict(list)
-    day_sources_by_ev: dict[int, set] = defaultdict(set)
-    if day_ids:
+    win_member_ids_by_ev: dict[int, list[int]] = defaultdict(list)
+    win_sources_by_ev: dict[int, set] = defaultdict(set)
+    if win_ids:
         candidate_ids = [
             row[0]
             for row in db.query(EventArticle.event_id)
-            .filter(EventArticle.article_id.in_(day_ids))
+            .filter(EventArticle.article_id.in_(win_ids))
             .distinct()
             .all()
         ]
@@ -259,8 +268,8 @@ def build_report(db: Session, day: date_type) -> dict:
             )
             for eid, aid in links:
                 member_ids_by_ev[eid].append(aid)
-                if aid in day_id_set:
-                    day_member_ids_by_ev[eid].append(aid)
+                if aid in win_id_set:
+                    win_member_ids_by_ev[eid].append(aid)
             art_sources = dict(
                 db.query(Article.id, Article.source)
                 .filter(Article.id.in_({aid for _, aid in links}))
@@ -270,22 +279,22 @@ def build_report(db: Session, day: date_type) -> dict:
                 src = art_sources.get(aid)
                 if src:
                     sources_by_ev[eid].add(src)
-                    if aid in day_id_set:
-                        day_sources_by_ev[eid].add(src)
+                    if aid in win_id_set:
+                        win_sources_by_ev[eid].add(src)
             events = db.query(HotEvent).filter(HotEvent.id.in_(candidate_ids)).all()
 
     top_events = []
     max_ev_raw = max((e.hot_score for e in events), default=0)
     for ev in events:
-        day_member_ids = day_member_ids_by_ev.get(ev.id, [])
+        win_member_ids = win_member_ids_by_ev.get(ev.id, [])
         top_events.append({
             "id": ev.id,
             "title": ev.title,
             "summary": ev.summary,
             "status": ev.status,
             "hot_score": round((ev.hot_score / max_ev_raw) * 100, 1) if max_ev_raw > 0 else round(ev.hot_score, 1),
-            "articles_count": len(day_member_ids),
-            "sources_count": len(day_sources_by_ev.get(ev.id, set())),
+            "articles_count": len(win_member_ids),
+            "sources_count": len(win_sources_by_ev.get(ev.id, set())),
             "lifecycle_articles_count": len(member_ids_by_ev.get(ev.id, [])),
             "lifecycle_sources_count": len(sources_by_ev.get(ev.id, set())),
         })
@@ -307,10 +316,15 @@ def build_report(db: Session, day: date_type) -> dict:
             "tags": (a.summary.tags if a.summary else [])[:4],
         }
 
-    # 热点速览 = TOP5 之后的 8 篇：收录量上来后与「当日热榜 TOP 5」零重叠
-    # （旧口径 scored[:8] 时 TOP5 完全包含于速览，同页展示两遍）
-    quick_news = [art_brief(a, hs) for a, hs in scored[5:13]]
     top_articles = [art_brief(a, hs) for a, hs in scored[:5]]
+    # 热点速览 = 热榜 TOP5 之外、且未入 TOP 事件窗口成员的前 8 篇（2026-09-17
+    # 早报算法改版）：既不与「热榜 TOP 5」同页两遍（旧 scored[:8] 口径问题），
+    # 也不与头条/热点事件栏目重复同一事件——速览只呈现尚未被栏目覆盖的增量要闻
+    featured_members: set[int] = set()
+    for e in top_events:
+        featured_members.update(win_member_ids_by_ev.get(e["id"], []))
+    quick_pool = [(a, hs) for a, hs in scored[5:] if a.id not in featured_members]
+    quick_news = [art_brief(a, hs) for a, hs in quick_pool[:8]]
 
     # —— 行业变化：top 事件核心影响首条，剥导语壳 / 截首句 / 近似去重 ——
     ev_by_id = {ev.id: ev for ev in events}
@@ -331,7 +345,7 @@ def build_report(db: Session, day: date_type) -> dict:
     #     频道维度才有分布信息；source_stats 保留供旧快照/兼容 ——
     source_map: dict[str, int] = {}
     channel_map: dict[str, int] = {}
-    for a in day_articles:
+    for a in win_articles:
         source_map[a.source] = source_map.get(a.source, 0) + 1
         channel_map[a.channel] = channel_map.get(a.channel, 0) + 1
     source_stats = sorted(
@@ -343,7 +357,7 @@ def build_report(db: Session, day: date_type) -> dict:
         key=lambda x: x["count"], reverse=True,
     )
 
-    # —— 日报窗口 AI 成本（与文章统计同一北京时间自然日窗口，无数据为 0）——
+    # —— 早报窗口 AI 成本（与文章统计同一「昨夜今晨」窗口，无数据为 0）——
     ai_cost = usage_service.usage_window_summary(db, win_start, win_end)
 
     return {
@@ -352,14 +366,14 @@ def build_report(db: Session, day: date_type) -> dict:
         # 快照生成时刻：重新生成会覆盖，前端据此展示"生成于"
         "generated_at": datetime.now(timezone.utc).isoformat(),
         # 早报综述（确定性模板；接入 LLM 后替换为 AI 撰写并以此兜底）
-        "overview": _compose_overview(top_events, channel_stats, len(day_articles)),
+        "overview": _compose_overview(top_events, channel_stats, len(win_articles)),
         "top_events": top_events,
         "quick_news": quick_news,
         "industry_changes": industry_changes,
         "source_stats": source_stats,
         "channel_stats": channel_stats,
         "top_articles": top_articles,
-        "articles_total": len(day_articles),
+        "articles_total": len(win_articles),
         "max_hot_score": max_raw,
         "ai_cost": ai_cost,
     }
@@ -371,8 +385,8 @@ def generate_daily_report(
     """生成某日早报并落库，返回 (早报行, 推送状态串)。
 
     day 为发布日（北京时间口径），缺省取「今天」——每日 08:00（北京时间）
-    自动生成当日发布期刊，统计窗口为前一个北京时间自然日全天（build_report
-    内换算），08:00 触发时窗口已闭合 8 小时，数据完整。
+    自动生成当日发布期刊，统计窗口为昨夜今晨（昨日 00:00 → 发布日 08:00，
+    build_report 内换算），08:00 触发时窗口恰在生成时刻闭合。
 
     综述两级实现（与全站「LLM + 兜底」同款）：配置了 LLM 先试 AI 撰写
     （overview_source=llm），未配置或失败回退确定性模板（overview_source=template）。

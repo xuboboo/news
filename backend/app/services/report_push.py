@@ -122,7 +122,7 @@ def render_report_markdown(content: dict, provider: str = "wecom") -> str:
         lines += [f"{overview}{tag}", ""]
     total = content.get("articles_total")
     if total is not None:
-        lines += [f"> 共收录 **{total}** 篇报道", ""]
+        lines += [f"> 昨夜今晨共收录 **{total}** 篇报道", ""]
     events = content.get("top_events") or []
     if events:
         lead, rest = events[0], events[1:]

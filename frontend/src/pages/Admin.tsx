@@ -866,7 +866,7 @@ export default function Admin() {
               value={reportDate}
               onChange={(e) => setReportDate(e.target.value)}
               max={toDateKey(Date.now())}
-              title="留空 = 生成今天的发布期刊（统计北京时间昨日全天）；选择日期可补生成任意一天（未来日期会被拒绝）"
+              title="留空 = 生成今天的发布期刊（统计昨夜今晨：昨日 00:00 → 今晨 08:00）；选择日期可补生成任意一天（未来日期会被拒绝）"
               className="chip bg-radar-card border border-radar-border text-slate-400 [color-scheme:dark]"
             />
             <button onClick={() => trigger('crawl')} disabled={busy === 'trigger-crawl'} className="chip border border-radar-border bg-radar-card text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40">

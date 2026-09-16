@@ -100,7 +100,7 @@ def test_overview_lead_event_and_channels():
         {"channel": "软件之家", "count": 8},
     ]
     text = _compose_overview(events, channels, 42)
-    assert text.startswith("昨日最热「微软发布 Win11 大版本更新」，聚合 3 篇报道，2 家来源交叉报道。")
+    assert text.startswith("昨夜今晨最热「微软发布 Win11 大版本更新」，聚合 3 篇报道，2 家来源交叉报道。")
     assert "「DeepSeek 新模型内测」" in text
     assert "智能时代以 26 篇收录居首" in text
     assert "软件之家 8 篇次之" in text
@@ -109,7 +109,7 @@ def test_overview_lead_event_and_channels():
 def test_overview_single_event_no_rest():
     events = [{"title": "某事件", "articles_count": 1, "sources_count": 1}]
     text = _compose_overview(events, [], 5)
-    assert text == "昨日最热「某事件」。"
+    assert text == "昨夜今晨最热「某事件」。"
 
 
 def test_render_markdown_sections():
@@ -129,7 +129,7 @@ def test_render_markdown_sections():
     md = render_report_markdown(content)
     assert "## 华军软件园 · 今日早报 2026-09-08（周二） · 第 147 期" in md
     assert "今日最热「A」。" in md
-    assert "共收录 **42** 篇报道" in md
+    assert "昨夜今晨共收录 **42** 篇报道" in md
     assert "**【今日头条】**" in md
     assert "**A**（热度 100，3 篇/2 源）" in md
     assert "- 变化一" in md
@@ -319,7 +319,7 @@ def test_overview_single_rest_phrasing():
         {"title": "B 事件标题", "articles_count": 1, "sources_count": 1},
     ]
     text = _compose_overview(events, [], 3)
-    assert text.startswith("昨日最热「A 事件标题」。")
+    assert text.startswith("昨夜今晨最热「A 事件标题」。")
     assert "此外，「B 事件标题」亦在持续发酵。" in text
 
 

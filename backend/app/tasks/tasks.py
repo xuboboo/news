@@ -195,9 +195,9 @@ def event_task(trigger: str = "auto"):
 def report_task(date_str: str | None = None, trigger: str = "auto"):
     """早报任务：每日 08:00（北京时间）自动生成「今日早报」发布日期刊。
 
-    期刊标注生成当天（北京时间），统计窗口为前一个北京时间自然日全天
-    （build_report 内换算），08:00 触发时窗口已闭合 8 小时，数据完整；
-    指定 date_str 可补生成任意一天（date 亦为发布日，窗口取其前一天）。
+    期刊标注生成当天（北京时间），统计窗口为「昨夜今晨」——昨日 00:00 →
+    发布日 08:00（build_report 内换算），08:00 触发时窗口恰在生成时刻闭合；
+    指定 date_str 可补生成任意一天（date 亦为发布日，窗口取其昨夜今晨）。
     """
     with record_task_run("report", trigger=trigger) as run:
         db = new_session()

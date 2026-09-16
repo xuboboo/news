@@ -171,7 +171,7 @@ export default function DailyReport() {
       <div>
         <PageHeader
           title="今日早报"
-          description="系统每日 08:00 自动生成 · 昨日热点 / 事件摘要 / 行业变化 / 重点来源"
+          description="系统每日 08:00 自动生成 · 昨夜今晨热点 / 事件摘要 / 行业变化 / 重点来源"
         >
           {dateChips}
         </PageHeader>
@@ -202,14 +202,14 @@ export default function DailyReport() {
   // 收录总数：优先用快照里的当日窗口文章总数（历史快照缺省时回退收录条数）
   const collectedTotal = report.articlesTotal ?? report.quickNews.length;
 
-  // 统计窗口口径：早报日期为发布日，统计前一个北京时间自然日全天
+  // 统计窗口口径：早报日期为发布日，窗口为「昨夜今晨」——昨日 00:00 → 发布日 08:00（北京时间）
   const winLabel = (() => {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(report.date);
+    const m = report.date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (!m) return null;
     const start = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) - 1));
     const mm = String(start.getUTCMonth() + 1).padStart(2, '0');
     const dd = String(start.getUTCDate()).padStart(2, '0');
-    return `统计窗口（北京时间）${mm}/${dd} 00:00 – ${report.date.slice(5).replace('-', '/')} 00:00`;
+    return `统计窗口（昨夜今晨）${mm}/${dd} 00:00 – ${report.date.slice(5).replace('-', '/')} 08:00`;
   })();
 
   // 环比：与上一期对比（新进热点 / 收录篇数变化）；上一期已由上方补拉逻辑保证可用
@@ -249,7 +249,7 @@ export default function DailyReport() {
     const wd = weekdayOf(r.date);
     lines.push(`## 华军软件园 · 今日早报 ${r.date}${wd ? `（${wd}）` : ''} · 第 ${r.issueNo} 期`, '');
     if (r.overview) lines.push(r.overview, '');
-    if (r.articlesTotal != null) lines.push(`> 共收录 **${r.articlesTotal}** 篇报道`, '');
+    if (r.articlesTotal != null) lines.push(`> 昨夜今晨共收录 **${r.articlesTotal}** 篇报道`, '');
     if (r.topEvents.length) {
       const eventStats = (e: DailyReportView['topEvents'][number], rank: number) => {
         const stats: string[] = [`热度 ${formatScore(e.hotScore)}`];
@@ -282,7 +282,7 @@ export default function DailyReport() {
       lines.push('');
     }
     if (r.topArticles.length) {
-      lines.push('### 昨日热榜 TOP 5', '');
+      lines.push('### 昨夜今晨热榜 TOP 5', '');
       r.topArticles.forEach((a, i) =>
         lines.push(`${i + 1}. ${a.title}（热度 ${formatScore(a.hotScore)}）`)
       );
@@ -325,7 +325,7 @@ export default function DailyReport() {
     <div>
       <PageHeader
         title="今日早报"
-        description="系统每日 08:00 自动生成 · 昨日热点 / 事件摘要 / 行业变化 / 重点来源"
+        description="系统每日 08:00 自动生成 · 昨夜今晨热点 / 事件摘要 / 行业变化 / 重点来源"
       >
         {dateChips}
       </PageHeader>
@@ -365,8 +365,8 @@ export default function DailyReport() {
             <p className="text-sm text-slate-300 mt-2 leading-relaxed max-w-3xl">
               {report.overview ??
                 (report.topEvents.length > 0
-                  ? `昨日 ${report.topEvents.length} 个热点事件持续发酵，共聚合 ${collectedTotal} 篇报道。`
-                  : `昨日暂无聚合事件，共收录 ${collectedTotal} 篇重点报道。`)}
+                  ? `昨夜今晨 ${report.topEvents.length} 个热点事件持续发酵，共聚合 ${collectedTotal} 篇报道。`
+                  : `昨夜今晨暂无聚合事件，共收录 ${collectedTotal} 篇重点报道。`)}
             </p>
           </div>
           <div className="flex flex-col items-end gap-3">
@@ -411,11 +411,11 @@ export default function DailyReport() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* 左列 */}
         <div className="lg:col-span-2 space-y-4">
-          {/* 昨日热点事件 */}
+          {/* 昨夜今晨热点事件 */}
           <section className="card p-5">
             <div className="flex items-center gap-2 mb-4">
               <Flame className="h-4 w-4 text-orange-400" />
-              <h2 className="text-sm font-semibold text-slate-200">昨日热点事件</h2>
+              <h2 className="text-sm font-semibold text-slate-200">昨夜今晨热点事件</h2>
             </div>
             {report.topEvents.length === 0 ? (
               <p className="text-xs text-slate-500 py-4">该期暂无聚合热点事件，请查看下方「热点速览」。</p>
@@ -528,11 +528,11 @@ export default function DailyReport() {
 
         {/* 右列 */}
         <div className="space-y-4">
-          {/* 昨日热榜 TOP5 */}
+          {/* 昨夜今晨热榜 TOP5 */}
           <section className="card p-5">
             <div className="flex items-center gap-2 mb-4">
               <FileBarChart className="h-4 w-4 text-amber-400" />
-              <h2 className="text-sm font-semibold text-slate-200">昨日热榜 TOP 5</h2>
+              <h2 className="text-sm font-semibold text-slate-200">昨夜今晨热榜 TOP 5</h2>
             </div>
             <div className="space-y-3">
               {report.topArticles.map((a, i) => (
@@ -629,7 +629,7 @@ export default function DailyReport() {
               <h2 className="text-sm font-semibold text-slate-200">生成说明</h2>
             </div>
             <ul className="space-y-2 text-xs text-slate-500 leading-relaxed">
-              <li>· 本期早报由系统于每日 08:00 自动生成（早间速览昨日全天要闻）</li>
+              <li>· 本期早报由系统于每日 08:00 自动生成（窗口：昨日 00:00 – 今晨 08:00）</li>
               <li>
                 · 早报综述：
                 {report.overviewSource === 'llm' ? 'AI 撰写（失败时自动回退模板）' : '确定性模板生成（配置 LLM 后自动升级）'}
