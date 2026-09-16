@@ -48,11 +48,18 @@ celery_app.conf.update(
                 "task": "event_task",
                 "schedule": crontab(minute="*/10"),
             },
-            # 北京时间 08:00：生成「发布日」期刊——统计窗口为前一个北京时间自然日
-            # 全天，08:00 时已闭合 8 小时，数据完整；期刊日期与用户直觉一致
+            # 北京时间 08:00：生成「今日早报」发布日期刊——统计窗口为「昨夜今晨」
+            # （昨日 00:00 → 发布日 08:00），与生成时刻恰合，每篇报道归属唯一一期
             "daily-report-0800": {
                 "task": "report_task",
                 "schedule": crontab(hour=8, minute=0),
+            },
+            # 早报补偿（每小时 :45）：本地 PC 关机/休眠/引擎停摆错过 08:00 时，
+            # 自动补生成缺失期（历史回看 3 天 + 今天 08:00 后）；补算不推送，
+            # 与 08:00 主调度靠 advisory lock 幂等，见 report_catchup_task
+            "report-catchup-hourly": {
+                "task": "report_catchup_task",
+                "schedule": crontab(minute=45),
             },
             # 告警巡检：Redis/Worker/任务停摆/失败未恢复 → webhook 推送（面板可配 URL，留空关闭）
             "alert-watch-every-5min": {

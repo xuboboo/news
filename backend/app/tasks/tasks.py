@@ -215,6 +215,35 @@ def report_task(date_str: str | None = None, trigger: str = "auto"):
             db.close()
 
 
+@celery_app.task(name="report_catchup_task")
+def report_catchup_task(trigger: str = "auto"):
+    """早报补偿任务（beat 每小时 :45）：本地 PC 关机/休眠/引擎停摆错过 08:00
+    调度时自动补生成缺失期（2026-09-17 审计新增——9-16 第 155 期即因当日
+    08:00 未在线而缺失，crontab 不追赶错过的调度）。
+
+    缺口判定见 report_service.catchup_missing_reports：历史回看 3 天无行才补
+    （历史补算路径不推送）；今天 08:00 后仍无行才补。生成走 advisory lock
+    同日更新分支，与 daily-report-0800 并发安全。
+    """
+    from app.services.report_service import catchup_missing_reports
+
+    with record_task_run("report_catchup", trigger=trigger) as run:
+        db = new_session()
+        try:
+            missing = catchup_missing_reports(db)
+            done: list[str] = []
+            for day in missing:
+                row, push_status = generate_daily_report(db, day, trigger=trigger)
+                entry = f"{day.isoformat()}（第 {row.issue_no} 期）"
+                if push_status:
+                    entry += f" ｜ 推送：{push_status}"
+                done.append(entry)
+            run.detail = ("补生成 " + "；".join(done)) if done else "无缺失期"
+            return {"backfilled": [d.isoformat() for d in missing]}
+        finally:
+            db.close()
+
+
 @celery_app.task(name="alert_watch_task")
 def alert_watch_task():
     """告警巡检（beat 每 5 分钟）：Redis/Worker/任务停摆/失败未恢复 → webhook 推送。

@@ -483,6 +483,34 @@ def test_generate_daily_report_push_policy(pg, monkeypatch):
         db.close()
 
 
+# ———— catchup_missing_reports：错过 08:00 调度的补偿口径（2026-09-17 审计） ————
+
+def test_catchup_missing_reports(pg):
+    """回看 3 天无行才补（含占位空刊也算有行）、epoch 前跳过；
+    今天仅过了 08:00 截稿才纳入——早于 08:00 补生成会以不完整窗口顶出当期。"""
+    from app.services.report_service import catchup_missing_reports
+
+    db = pg()
+    try:
+        today = (NOW + timedelta(hours=8)).date()  # 北京时间今天
+        # 第 1 期基准日 2026-04-15 之后的日期才会进回看窗
+        db.add(DailyReport(date=today - timedelta(days=1), issue_no=999,
+                           content={"top_events": [], "quick_news": []}))  # 占位空刊也算有行
+        db.commit()
+
+        def _at(hour: int):
+            return catchup_missing_reports(
+                db, now=datetime(today.year, today.month, today.day, hour, 45, tzinfo=TZ_BJ)
+            )
+
+        # 07:45（08:00 前）：只补历史缺口 today-3 / today-2（today-1 已有行）
+        assert _at(7) == [today - timedelta(days=3), today - timedelta(days=2)]
+        # 08:45（截稿后）：今天仍无行，一并补
+        assert _at(9) == [today - timedelta(days=3), today - timedelta(days=2), today]
+    finally:
+        db.close()
+
+
 # ———— /report/daily latest：全空占位报告不顶掉有效报告 ————
 
 def test_report_daily_latest_skips_empty_placeholder(pg):

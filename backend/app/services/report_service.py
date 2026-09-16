@@ -429,3 +429,30 @@ def generate_daily_report(
         else:
             push_status = "历史日期补算，未推送"
     return row, push_status
+
+
+def catchup_missing_reports(db: Session, now: datetime | None = None) -> list[date_type]:
+    """找出应补生成的早报日期（本地 PC 部署错过 08:00 调度的补偿，2026-09-17 审计新增）。
+
+    背景：本系统跑在用户本地 PC（docker compose），08:00 整点若关机/休眠/引擎停摆，
+    report_task 不会补投（celery crontab 不追赶错过的调度），当天早报永久缺失且
+    期号跳号（2026-09-16 第 155 期即因此缺失，告警 webhook 未配故无人知晓）。
+
+    规则：
+    - 历史日期回看 3 天（today-3/2/1，早于第 1 期基准日跳过）：无行即补；
+    - 今天：仅过了今晨截稿时刻（08:00）仍无行才补——08:00 前生成会以不完整
+      窗口顶出当期，且 day==today 的补算路径允许推送，不宜早于窗口闭合；
+    - 已有行（含占位空刊）不重复生成：历史空刊说明窗口内本就无内容。
+    返回待补日期（旧→新，期号随之升序）。
+    """
+    now = now or bj_now()
+    today = now.date()
+    epoch = datetime.fromisoformat(get_settings().report_issue_epoch).date()
+    targets: list[date_type] = []
+    for offset in (3, 2, 1):
+        day = today - timedelta(days=offset)
+        if day >= epoch:
+            targets.append(day)
+    if now.hour >= REPORT_WINDOW_END_HOUR:
+        targets.append(today)
+    return [d for d in targets if not db.query(DailyReport).filter_by(date=d).first()]
