@@ -421,11 +421,33 @@ export default function Admin() {
     }
   };
 
-  // 早报推送自检：立即推最新一期到已配置通道，配置对不对当场见分晓（不必等次日 08:00）
+  // 早报推送自检：立即推最新一期到已配置通道，配置对不对当场见分晓（不必等次日 08:00）。
+  // 测试接口读的是已保存配置——本组有未保存修改时先保存再测，否则界面明明显示
+  // 已开启/已填写，后端却按旧配置报「未启用」，排查方向直接被带偏
   const runPushTest = async () => {
     setBusy('test-push');
     setPushTestResult(null);
     try {
+      const pushKeys = GROUPS.find((g) => g.title.startsWith('早报推送'))?.keys ?? [];
+      const dirtyPush = dirtyKeys.filter((k) => pushKeys.includes(k));
+      if (dirtyPush.length > 0) {
+        try {
+          const data: Record<string, string> = {};
+          dirtyPush.forEach((k) => (data[k] = edits[k]));
+          const next = await putConfig(data);
+          setConfig(next);
+          setEdits((m) => {
+            const copy = { ...m };
+            dirtyPush.forEach((k) => delete copy[k]);
+            return copy;
+          });
+        } catch (e: any) {
+          // 保存失败（如 URL 没过公网校验）就中止测试：拿旧配置测出来的是误导性结果
+          setPushTestResult({ ok: false, text: `修改未保存，已取消测试：${e?.message ?? e}` });
+          flash(false, `早报测试推送：修改未保存（${e?.message ?? e}）`);
+          return;
+        }
+      }
       const { results } = await testReportPush();
       const allOk = results.split('；').every((r) => r.endsWith(':ok'));
       setPushTestResult({ ok: allOk, text: allOk ? `推送成功：${results}` : `部分失败：${results}` });
@@ -832,7 +854,7 @@ export default function Admin() {
                   <button
                     onClick={() => void runPushTest()}
                     disabled={busy === 'test-push'}
-                    title="立即推送最新一期早报到已配置通道，验证 webhook 配置"
+                    title="先保存本组未保存的修改，再立即推送最新一期早报到已配置通道，验证 webhook 配置"
                     className="chip border border-radar-border bg-radar-panel text-slate-300 hover:text-accent hover:border-accent/40 disabled:opacity-40"
                   >
                     {busy === 'test-push' ? (
@@ -840,7 +862,7 @@ export default function Admin() {
                     ) : (
                       <Send className="h-3.5 w-3.5" />
                     )}
-                    测试推送（发送最新一期）
+                    测试推送（先保存本组修改，再发送最新一期）
                   </button>
                   {pushTestResult && (
                     <span className={`text-xs ${pushTestResult.ok ? 'text-emerald-300' : 'text-red-400'}`}>
