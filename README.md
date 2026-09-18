@@ -251,14 +251,16 @@ cd frontend && npm test                                # 前端 vitest
 
 ## ✅ 质量与验收
 
-- 后端 pytest **331 个用例**（含 14 个 pgvector 集成用例，需 `TEST_DATABASE_URL` 指向运行中 PG，未设置自动跳过）+ 前端 vitest **13 个用例**，全部通过。测试不在生产镜像内（L-2），用本地 venv 跑。
+- 后端 pytest **337 个用例**（另含 15 个依赖运行中 PG 的集成用例，本机经 override 的 127.0.0.1:5433 指 `TEST_DATABASE_URL` 后执行，未设置自动跳过）+ 前端 vitest **13 个用例**，全部通过。测试不在生产镜像内（L-2），用本地 venv 跑。
 - 验收脚本（需后端已在 18000 运行）：
 
 ```bash
 # 常规 API 回归（数据端点需先登录）
-AUDIT_EMAIL=... AUDIT_PASSWORD=... ADMIN_TOKEN=... python backend/scripts/audit_api.py
+AUDIT_EMAIL=... AUDIT_PASSWORD=... python backend/scripts/audit_api.py
 # 登录/权限/审计专项（权限矩阵、锁定、会话吊销、CSRF）
-AUDIT_EMAIL=... AUDIT_PASSWORD=... ADMIN_TOKEN=... python backend/scripts/audit_auth.py
+AUDIT_EMAIL=... AUDIT_PASSWORD=... python backend/scripts/audit_auth.py
+# 应急通道默认未配置（ADMIN_TOKEN 留空，M-3），脚本会自动跳过 token 用例；
+# 如需回归该通道，临时导出 ADMIN_TOKEN=... 并同步 system_setting 或重启生效
 ```
 
 ## 🗺️ Roadmap
