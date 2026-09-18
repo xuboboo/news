@@ -144,7 +144,7 @@ def _validate_str(key: str, value: str) -> None:
     ):
         # 与 LLM/Embedding 地址同口径的 SSRF 防线：这些 URL 会被后端定时 POST
         # （告警每 5 分钟 / 日报每日），放行内网地址等于开放内网信标通道；
-        # 全内网部署（自建网关）走既有 ALLOW_PRIVATE_AI_URLS 豁免
+        # 内网自建网关（自建告警/推送代理）走 AI_URL_ALLOWLIST 主机名精确豁免（M-2）
         try:
             assert_public_http_url(value)
         except UrlNotAllowed as exc:

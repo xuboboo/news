@@ -10,7 +10,7 @@
 走 conftest 的 client/seeded 夹具（FastAPI 依赖覆写 + 超管登录），
 与 test_usage_api 同款。
 """
-from conftest import login
+from conftest import login, set_config
 
 H = {"X-Requested-With": "XMLHttpRequest"}  # admin API 变更请求必带的 CSRF 头
 
@@ -74,8 +74,11 @@ def test_reset_rejects_empty_keys(client, seeded):
         assert r.status_code == 400
 
 
-def test_reset_requires_super_admin(client, seeded):
+def test_reset_requires_super_admin(client, seeded, db):
     """member 与未登录一律拒绝（越权 403 由 main.py 审计处理器留痕）。"""
+    # 显式配 token：否则开发者本地 .env 的 ADMIN_TOKEN 是否为空会左右
+    # 未登录分支的期望状态码（空配置 = 503「面板不可用」，有配置无头 = 401）
+    set_config(db, "admin_token", "test-token-401")
     login(client, seeded.emails["member"])
     r = client.post("/api/v2/admin/config/reset", json={"keys": LLM_KEYS}, headers=H)
     assert r.status_code == 403

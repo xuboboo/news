@@ -11,7 +11,7 @@
     EMBEDDING_BASE_URL=http://embedding:80/v1
     EMBEDDING_API_KEY=local-embedding   # 占位即可，服务不鉴权
     EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
-    ALLOW_PRIVATE_AI_URLS=true          # 内网服务名，需豁免 SSRF 校验
+    ALLOW_PRIVATE_AI_URLS=true          # 已弃用（M-2）：改用 AI_URL_ALLOWLIST=embedding
 """
 import os
 import time

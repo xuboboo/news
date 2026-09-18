@@ -113,7 +113,7 @@ docker compose up -d --build           # 一键上线全套 9 个服务（含 ov
 | `EMBEDDING_BASE_URL` ★ / `EMBEDDING_API_KEY` ★ / `EMBEDDING_MODEL` ★ | 接入 embedding-server 时为 `http://embedding:80/v1` / `local-embedding` / `BAAI/bge-small-zh-v1.5` |
 | `EMBED_DIM` | 向量维度（内置哈希向量默认 256；用 embedding-server 须为 384，与模型实际输出一致，严格模式下不符即硬失败） |
 | `EMBEDDING_STRICT` | Embedding 失败/维度不符时是否硬失败（false 会静默降级本地哈希向量、污染聚类）；仅 .env，不进面板 |
-| `ALLOW_PRIVATE_AI_URLS` | 是否允许 LLM/Embedding 地址指向私网/环回（内网服务名部署需开启）；仅 .env，不进面板 |
+| `AI_URL_ALLOWLIST` | 内网服务主机名精确白名单（逗号分隔，如 `embedding`）：仅这些主机豁免 SSRF 私网校验；`ALLOW_PRIVATE_AI_URLS` 已弃用（全局豁免，production 禁用）。均仅 .env，不进面板 |
 
 **事件聚合与采集**
 
@@ -245,7 +245,7 @@ cd frontend && npm test                                # 前端 vitest
 - 管理接口（`/api/v2/admin/*`）：super_admin 登录会话，或 `X-Admin-Token` 应急后门（仅等效 admin 前缀，虚拟主体留痕可追溯）；`ADMIN_NO_AUTH=true` 仅限本机/内网调试，公网部署必须关闭。
 - **生产 fail-fast 自检**：`ENVIRONMENT=production` 时启动即校验 Cookie Secure / 关闭 API 文档 / 关闭免鉴权 / 非默认 DB 口令，任一不合规拒绝启动。
 - `backend` 端口仅绑定 `127.0.0.1`，公网入口统一走 nginx(80)；nginx 覆写 `X-Real-IP`/`X-Forwarded-For` 防审计 IP 伪造，并带 CSP（Report-Only 观察模式）、nosniff、X-Frame-Options 等安全头；上 HTTPS 时必须 `COOKIE_SECURE=true`。
-- **SSRF 守卫**：LLM/Embedding 服务地址仅放行公网 http(s)（私网/环回/保留段拒绝，内网部署用 `ALLOW_PRIVATE_AI_URLS` 豁免）。
+- **SSRF 守卫**：LLM/Embedding/Webhook 服务地址仅放行公网 http(s)（私网/环回/保留段拒绝）；内网服务用 `AI_URL_ALLOWLIST` 按主机名精确豁免（旧 `ALLOW_PRIVATE_AI_URLS` 全局豁免已弃用，production 启动自检拒绝开启）。
 - 敏感键（`api_key` / `admin_token`）接口侧只做脱敏展示、不回传明文；配置修改审计只记「已变更」不记新旧明文；留空即表示不修改。
 - 生产部署请遵循 `.env.example` 末尾的检查单：项目根目录 `.env` 配置强随机 `POSTGRES_PASSWORD`（无默认回退，缺失时 compose 直接报错拒起）、同步 `DATABASE_URL`、更换强随机 `ADMIN_TOKEN`、配置 `BOOTSTRAP_ADMIN_*` 完成引导。
 

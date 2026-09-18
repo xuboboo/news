@@ -472,10 +472,13 @@ def test_clear_usage_logs_writes_audit(super_client, usage_in_testdb, db):
         s.close()
 
 
-def test_clear_usage_logs_requires_admin(client, seeded):
+def test_clear_usage_logs_requires_admin(client, seeded, db):
     """member 与未登录一律拒绝（越权 403 由 main.py 审计处理器留痕）。"""
-    from conftest import login
+    from conftest import login, set_config
 
+    # 显式配 token：本地 .env 的 ADMIN_TOKEN 为空时未登录分支会回 503
+    # （面板不可用）而非 401，测试不应依赖开发者本地配置
+    set_config(db, "admin_token", "test-token-401")
     login(client, seeded.emails["member"])
     r = client.delete("/api/v2/admin/usage/logs", headers=H)
     assert r.status_code == 403

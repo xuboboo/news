@@ -196,7 +196,7 @@ def watch(db: Session) -> dict:
 
     # 发送前复核 SSRF（与 report_push 同口径）：面板写入时已校验，但 env 直配/
     # 旁路写表的值不经校验——告警每 5 分钟向该地址 POST，放行内网地址等于开放信标通道；
-    # 全内网部署走 ALLOW_PRIVATE_AI_URLS 豁免（url_guard 内部处理）
+    # 内网自建网关走 AI_URL_ALLOWLIST 主机名精确豁免（url_guard 内部处理，M-2）
     try:
         from app.utils.url_guard import UrlNotAllowed, assert_public_http_url
 

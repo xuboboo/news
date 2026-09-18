@@ -48,7 +48,7 @@ def push_targets(db: Session | None) -> list[tuple[str, str, str]]:
     """当前启用的推送目标：[(provider, url, feishu_secret)]。总开关关或无 URL = 空。
 
     URL 在 config 写入时已过 SSRF 校验，这里对 env 直配/历史遗留值再复核一道
-    （全内网部署沿用 ALLOW_PRIVATE_AI_URLS 豁免）；不合格目标跳过并告警日志。
+    （内网自建网关用 AI_URL_ALLOWLIST 按主机名豁免，M-2）；不合格目标跳过并告警日志。
     """
     enabled = _cfg(db, "report_push_enabled", "REPORT_PUSH_ENABLED").lower() in _TRUE
     if not enabled:

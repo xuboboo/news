@@ -60,7 +60,12 @@ class Settings(BaseSettings):
 
     # —— 安全 ——
     cors_origins: str = "http://localhost,http://127.0.0.1"  # 允许跨域的前端来源（逗号分隔）
-    allow_private_ai_urls: bool = False  # 允许 LLM/Embedding 地址指向私网（仅内网部署）
+    # 主机名精确白名单（逗号分隔，如 "embedding"）：仅这些主机的 AI/Webhook 地址豁免
+    # SSRF 私网校验，其余目标仍强制公网校验（2026-09-18 审计整改 M-2）
+    ai_url_allowlist: str = ""
+    # 已弃用（M-2）：true 时全局豁免 SSRF 校验，攻击面过大；保留一个版本周期兼容
+    # 旧部署，新配置一律用 ai_url_allowlist 精确放行；production 自检直接拒绝开启
+    allow_private_ai_urls: bool = False
 
     # —— Embedding ——
     embedding_strict: bool = True  # API 失败/维度不符时硬失败（false = 静默降级本地哈希，会污染聚类）
@@ -120,6 +125,13 @@ def _assert_production_safe(s: "Settings") -> None:
         problems.append("admin_token 仍是 .env.example 的占位值，必须更换")
     if s.bootstrap_admin_password == "please-change-me-too":
         problems.append("bootstrap_admin_password 仍是 .env.example 的占位值，必须更换")
+    # M-2：全局豁免把面板可配的所有 URL（LLM/Embedding/Webhook）都变成内网跳板，
+    # production 不允许；内网服务用 AI_URL_ALLOWLIST 精确放行主机名
+    if s.allow_private_ai_urls:
+        problems.append(
+            "allow_private_ai_urls 已弃用（全局豁免 SSRF 校验），production 禁用；"
+            "改用 AI_URL_ALLOWLIST=<主机名,逗号分隔> 精确放行"
+        )
     if problems:
         raise RuntimeError(
             "ENVIRONMENT=production 安全自检未通过（禁止弱默认值上线）：\n  - "

@@ -5,7 +5,7 @@
 #   EMBEDDING_BASE_URL=http://embedding:80/v1
 #   EMBEDDING_API_KEY=local-embedding
 #   EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
-#   ALLOW_PRIVATE_AI_URLS=true
+#   AI_URL_ALLOWLIST=embedding（M-2：主机名精确豁免；旧 ALLOW_PRIVATE_AI_URLS 已弃用）
 services:
   postgres:
     ports:
