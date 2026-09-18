@@ -1,4 +1,6 @@
-FROM python:3.12-slim
+# 基础镜像锁 digest（L-7，2026-09-18 审计整改：供应链不可复现）；
+# 升级方法：docker buildx imagetools inspect python:3.12-slim 取 Digest 后替换
+FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \

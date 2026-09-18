@@ -29,7 +29,8 @@ def crawler_task(trigger: str = "auto"):
     from app.crawler.multi import format_detail, has_source_error, ingest_all_sources
     from app.utils.lock import LOCK_CRAWLER, LOCK_CRAWLER_TTL_MS, acquire_lock, release_lock
 
-    if not acquire_lock(LOCK_CRAWLER, LOCK_CRAWLER_TTL_MS):
+    lock_token = acquire_lock(LOCK_CRAWLER, LOCK_CRAWLER_TTL_MS)
+    if not lock_token:
         with record_task_run("crawler", trigger=trigger) as run:
             run.detail = "skipped: another crawl is running"
         return {"skipped": True}
@@ -67,7 +68,7 @@ def crawler_task(trigger: str = "auto"):
             finally:
                 db.close()
     finally:
-        release_lock(LOCK_CRAWLER)
+        release_lock(LOCK_CRAWLER, lock_token)
 
 
 @celery_app.task(name="stats_task")
@@ -90,7 +91,8 @@ def stats_task(trigger: str = "auto"):
         logger.info("stats_task skipped: disabled by config")
         return {"skipped": True, "reason": "disabled"}
 
-    if not acquire_lock(LOCK_STATS, LOCK_STATS_TTL_MS):
+    lock_token = acquire_lock(LOCK_STATS, LOCK_STATS_TTL_MS)
+    if not lock_token:
         with record_task_run("stats", trigger=trigger) as run:
             run.detail = "skipped: another stats poll is running"
         return {"skipped": True}
@@ -112,7 +114,7 @@ def stats_task(trigger: str = "auto"):
             finally:
                 db.close()
     finally:
-        release_lock(LOCK_STATS)
+        release_lock(LOCK_STATS, lock_token)
 
 
 @celery_app.task(name="summary_task")
@@ -166,7 +168,8 @@ def event_task(trigger: str = "auto"):
     """
     from app.utils.lock import LOCK_EVENT, LOCK_EVENT_TTL_MS, acquire_lock, release_lock
 
-    if not acquire_lock(LOCK_EVENT, LOCK_EVENT_TTL_MS):
+    lock_token = acquire_lock(LOCK_EVENT, LOCK_EVENT_TTL_MS)
+    if not lock_token:
         with record_task_run("event", trigger=trigger) as run:
             run.detail = "skipped: another event clustering is running"
         return {"skipped": True}
@@ -188,7 +191,7 @@ def event_task(trigger: str = "auto"):
             finally:
                 db.close()
     finally:
-        release_lock(LOCK_EVENT)
+        release_lock(LOCK_EVENT, lock_token)
 
 
 @celery_app.task(name="report_task")

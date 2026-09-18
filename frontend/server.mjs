@@ -10,8 +10,9 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), 'dist');
 const PORT = Number(process.argv[2] ?? 8080);
-// 监听地址：默认 0.0.0.0 保持历史行为（局域网可访问）；仅本机预览时可用 HOST=127.0.0.1 收敛暴露面
-const HOST = process.env.HOST ?? '0.0.0.0';
+// 监听地址：默认仅绑回环（L-6，2026-09-18 审计整改），预览服务器不默认向局域网暴露；
+// 确需局域网访问时显式 HOST=0.0.0.0 启动
+const HOST = process.env.HOST ?? '127.0.0.1';
 // /api 反向代理目标（本机 compose 后端直连口）；预览站借此展示真实数据，
 // 避免 SPA fallback 把 HTML 当 API 应答（200 + text/html）静默落入演示模式
 const API_TARGET = process.env.API_TARGET ?? 'http://127.0.0.1:18000';

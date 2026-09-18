@@ -46,7 +46,8 @@ def main():
             # 与手动触发的 crawler_task 双入口互斥：抢不到锁说明对方正在采集，本轮跳过
             from app.utils.lock import LOCK_CRAWLER, LOCK_CRAWLER_TTL_MS, acquire_lock, release_lock
 
-            if not acquire_lock(LOCK_CRAWLER, LOCK_CRAWLER_TTL_MS):
+            lock_token = acquire_lock(LOCK_CRAWLER, LOCK_CRAWLER_TTL_MS)
+            if not lock_token:
                 logger.info("another crawl is running, skip this round")
             else:
                 try:
@@ -87,7 +88,7 @@ def main():
                         finally:
                             db.close()
                 finally:
-                    release_lock(LOCK_CRAWLER)
+                    release_lock(LOCK_CRAWLER, lock_token)
         except Exception:
             logger.exception("crawl round failed")
         _write_heartbeat(max(1, interval_min))

@@ -11,7 +11,7 @@ npm run build      # 构建生产包
 npm start          # 上线（默认 http://localhost:8080）
 ```
 
-也可以自定义端口：`node server.mjs 9000`
+也可以自定义端口：`node server.mjs 9000`。默认仅监听 `127.0.0.1`（本机预览）；确需局域网访问时显式 `HOST=0.0.0.0 node server.mjs`。
 
 ## 功能模块（与 PRD 对应）
 

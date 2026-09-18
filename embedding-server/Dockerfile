@@ -1,4 +1,5 @@
-FROM python:3.12-slim
+# 基础镜像锁 digest（L-7，2026-09-18 审计整改），升级方法同 backend/Dockerfile
+FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
 WORKDIR /srv
 # 国内网络：pip 走清华镜像，模型下载经 HF_ENDPOINT 指向 hf-mirror（在 compose 里设）
 ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
