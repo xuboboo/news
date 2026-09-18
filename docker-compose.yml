@@ -161,7 +161,10 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "80:80"
+      # 仅绑回环（2026-09-18 审计整改 M-1）：单机部署收紧局域网暴露面；
+      # 需要局域网共享（手机/其他设备访问）时在 docker-compose.override.yml 里
+      # 给 nginx 加 ports: ["80:80"] 覆盖，用完移除（见 README 安全须知）
+      - "127.0.0.1:80:80"
     restart: unless-stopped
     # 探活走本机反代链路：nginx → backend → /health，代理断了也能暴露
     healthcheck:
