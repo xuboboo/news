@@ -6,7 +6,16 @@ compose 栈。仅注册用户/租户域所需表；涉及 pgvector/JSONB 专有�
 （audit_log.detail 已用 JSON variant 兼容；审计哈希链的 pg advisory lock 在
 非 PG 方言下自动跳过，见 audit_service.record）。
 """
+import os
 import types
+
+# 测试行为与开发者本地 backend/.env 解耦（2026-09-18 审计整改 M-1 配套）：
+# pydantic-settings 环境变量优先于 .env，这里钉死两项关键项——
+# COOKIE_SECURE：TestClient 是 http://testserver，Secure Cookie 不回传会
+#   成批打挂登录态用例；ENVIRONMENT：避免本地 production .env 的 fail-fast
+#   自检使测试随开发者本地配置漂移（CI 无 .env 时默认值与此一致）
+os.environ["COOKIE_SECURE"] = "false"
+os.environ["ENVIRONMENT"] = "test"
 
 import pytest
 from fastapi.testclient import TestClient
