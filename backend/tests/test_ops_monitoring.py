@@ -387,9 +387,11 @@ def test_budget_alert_triggers_and_clears(db, monkeypatch):
     monkeypatch.setattr(alert_service, "cadence_warnings", lambda db, interval, skip=None: [])
 
     s = db.factory()
+    # UTC naive：与模型默认 _utcnow 在 SQLite/Postgres 的实际存储语义一致，
+    # 避免 SQLite 适配器丢弃 tzinfo 导致日窗口比较错位（存量兼容缺陷修复）
     s.add(AiUsageLog(task_type="summary", trigger="auto", model="llm-a",
                      status="success", cost=5.0,
-                     created_at=bj_now()))
+                     created_at=bj_now().astimezone(timezone.utc).replace(tzinfo=None)))
     s.commit()
     s.close()
 

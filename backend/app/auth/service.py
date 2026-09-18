@@ -31,18 +31,28 @@ def _effective_int(db: Session, key: str, fallback: int) -> int:
         return fallback
 
 
+def _effective_bool(db: Session, key: str, fallback: bool) -> bool:
+    try:
+        return bool(config_service.get_effective(db, key))
+    except Exception:
+        return fallback
+
+
 def session_ttl_hours(db: Session) -> int:
     return _effective_int(db, "session_ttl_hours", get_settings().session_ttl_hours)
 
 
-def _set_cookie(response: Response, token: str, max_age_seconds: int) -> None:
+def _set_cookie(response: Response, token: str, max_age_seconds: int, db: Session) -> None:
     response.set_cookie(
         key=session_store.SESSION_COOKIE,
         value=token,
         max_age=max_age_seconds,
         httponly=True,
         samesite="lax",
-        secure=get_settings().cookie_secure,
+        # 只升不降（2026-09-18 审计整改 F-1）：cookie_secure 是面板热调项，签发时必须读
+        # DB 生效值而非 .env 静态值；但 .env 已开 Secure 时面板不得关闭——保住
+        # production fail-fast（_assert_production_safe 校验静态值）的安全不变量
+        secure=get_settings().cookie_secure or _effective_bool(db, "cookie_secure", False),
         path="/",
     )
 
@@ -126,7 +136,7 @@ def login(db: Session, request: Request, response: Response, email: str, passwor
         ip=audit_service.client_ip(request),
         user_agent=audit_service.user_agent(request),
     )
-    _set_cookie(response, token, ttl_hours * 3600)
+    _set_cookie(response, token, ttl_hours * 3600, db)
     audit_service.record(
         db, "auth.login", request=request, user=user, detail={"session_id": row.id}
     )

@@ -4,6 +4,9 @@
 余弦可达 0.86）。免 API key、免 GPU；模型经 HF_ENDPOINT 镜像站下载后缓存在
 挂载卷 /cache，重启不重下。
 
+安全边界（2026-09-18 审计整改 F-4 声明）：本服务无鉴权，仅限 compose 内网
+由后端调用、不向宿主机/公网发布端口；不得将其暴露到不可信网络。
+
 后端侧配置（backend/.env）：
     EMBEDDING_BASE_URL=http://embedding:80/v1
     EMBEDDING_API_KEY=local-embedding   # 占位即可，服务不鉴权

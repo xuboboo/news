@@ -13,8 +13,10 @@ services:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: hjradar
-      # 密码从 .env 注入（首次建库生效）；已有卷轮换口令见 .env.example 检查单
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hjradar}
+      # 口令从根目录 .env 强制注入（缺失直接报错拒起，2026-09-18 审计整改 F-5：
+      # 移除 :-hjradar 默认回退，杜绝忘配口令时静默用弱口令建库）；
+      # 已有卷换口令需 ALTER USER + 同步 backend/.env，检查单见 .env.example
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在项目根目录 .env 中设置 POSTGRES_PASSWORD}
       POSTGRES_DB: hjradar
       TZ: Asia/Shanghai
     volumes:
@@ -111,7 +113,8 @@ services:
   beat:          # 定时调度：事件聚类 10min / 告警巡检 5min / 日报每日 08:00
     build: ./backend
     env_file: ./backend/.env
-    command: celery -A app.tasks.celery_app beat --loglevel=INFO
+    # 非 root 运行（F-2）后 /srv 只读：调度文件显式落 world-writable 的 /tmp
+    command: celery -A app.tasks.celery_app beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
     depends_on:
       redis:
         condition: service_healthy

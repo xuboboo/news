@@ -79,6 +79,7 @@ flowchart LR
 git clone https://github.com/xuboboo/news.git
 cd news
 cp backend/.env.example backend/.env   # 按需修改 ADMIN_TOKEN 等配置
+echo "POSTGRES_PASSWORD=<强随机口令>" > .env   # 根 .env 为必需：compose 建库口令，缺失拒起
 docker compose up -d --build           # 一键上线全套 9 个服务（含 override 合并的语义向量服务）
 ```
 
@@ -101,7 +102,7 @@ docker compose up -d --build           # 一键上线全套 9 个服务（含 ov
 | --- | --- |
 | `ENVIRONMENT` | `production` 时启动执行安全自检（Cookie Secure / 关闭文档 / 关闭免鉴权 / 非默认 DB 口令任一不合规即拒绝启动） |
 | `DATABASE_URL` / `REDIS_URL` | PostgreSQL 连接串（业务库）/ Redis 连接串（缓存/队列） |
-| `POSTGRES_PASSWORD` | compose 建库口令（首次建库生效；轮换步骤见 `.env.example` 检查单） |
+| `POSTGRES_PASSWORD` | compose 建库口令（**项目根目录 `.env` 必填，无默认值、缺失拒起**；首次建库生效，轮换步骤见 `.env.example` 检查单） |
 | `ENABLE_DOCS` | OpenAPI 交互文档开关（默认 true；生产强制 false） |
 
 **AI 服务（可选，OpenAI 兼容协议）**
@@ -246,7 +247,7 @@ cd frontend && npm test                                # 前端 vitest
 - `backend` 端口仅绑定 `127.0.0.1`，公网入口统一走 nginx(80)；nginx 覆写 `X-Real-IP`/`X-Forwarded-For` 防审计 IP 伪造，并带 CSP（Report-Only 观察模式）、nosniff、X-Frame-Options 等安全头；上 HTTPS 时必须 `COOKIE_SECURE=true`。
 - **SSRF 守卫**：LLM/Embedding 服务地址仅放行公网 http(s)（私网/环回/保留段拒绝，内网部署用 `ALLOW_PRIVATE_AI_URLS` 豁免）。
 - 敏感键（`api_key` / `admin_token`）接口侧只做脱敏展示、不回传明文；配置修改审计只记「已变更」不记新旧明文；留空即表示不修改。
-- 生产部署请遵循 `.env.example` 末尾的检查单：更换 `POSTGRES_PASSWORD` 强口令、同步 `DATABASE_URL`、更换强随机 `ADMIN_TOKEN`、配置 `BOOTSTRAP_ADMIN_*` 完成引导。
+- 生产部署请遵循 `.env.example` 末尾的检查单：项目根目录 `.env` 配置强随机 `POSTGRES_PASSWORD`（无默认回退，缺失时 compose 直接报错拒起）、同步 `DATABASE_URL`、更换强随机 `ADMIN_TOKEN`、配置 `BOOTSTRAP_ADMIN_*` 完成引导。
 
 ## ✅ 质量与验收
 

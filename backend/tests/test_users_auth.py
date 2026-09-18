@@ -247,6 +247,40 @@ def test_idle_session_timeout(client, db, seeded):
     assert client.get("/api/v2/auth/me").status_code == 401
 
 
+# ———————————————————— Cookie Secure 标记（F-1：面板热调值参与签发，只升不降） ————————————————————
+
+def _env_cookie_secure(monkeypatch, value: bool) -> None:
+    """覆写 .env 静态层（get_settings 为缓存单例，与签发口读的是同一实例）。"""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "cookie_secure", value)
+
+
+def test_cookie_secure_db_override_turns_on(client, db, seeded, monkeypatch):
+    """env false + 面板 DB 覆盖 true → Set-Cookie 必须带 Secure（修复前是幽灵配置）。"""
+    _env_cookie_secure(monkeypatch, False)
+    set_config(db, "cookie_secure", "true")
+    r = login(client, seeded.emails["member"])
+    assert r.status_code == 200, r.text
+    assert "secure" in r.headers.get("set-cookie", "").lower()
+
+
+def test_cookie_secure_db_cannot_downgrade_env(client, db, seeded, monkeypatch):
+    """env true（production fail-fast 前提）+ 面板 false → 不得降级，Secure 仍在。"""
+    _env_cookie_secure(monkeypatch, True)
+    set_config(db, "cookie_secure", "false")
+    r = login(client, seeded.emails["member"])
+    assert r.status_code == 200, r.text
+    assert "secure" in r.headers.get("set-cookie", "").lower()
+
+
+def test_cookie_secure_both_off_no_secure_flag(client, db, seeded, monkeypatch):
+    _env_cookie_secure(monkeypatch, False)
+    r = login(client, seeded.emails["member"])
+    assert r.status_code == 200, r.text
+    assert "secure" not in r.headers.get("set-cookie", "").lower()
+
+
 # ———————————————————— 改密 / 重置 / 停用 ————————————————————
 
 def test_password_reset_revokes_and_forces_change(client, db, seeded):

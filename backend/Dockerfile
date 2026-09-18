@@ -15,5 +15,10 @@ COPY scripts ./scripts
 COPY conftest.py ./conftest.py
 COPY tests ./tests
 
+# 非特权运行（2026-09-18 审计整改 F-2）：运行期无 root 写盘需求（应用只写 DB/Redis，
+# crawler 心跳写 /tmp 世界可写目录，依赖在 root 阶段装完只读）
+RUN useradd -r -u 10001 appuser
+USER appuser
+
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
