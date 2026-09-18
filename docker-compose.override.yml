@@ -9,9 +9,10 @@
 services:
   postgres:
     ports:
-      # 仅供本地跑 pgvector 集成测试（TEST_DATABASE_URL 指向 127.0.0.1:5432）；
-      # 仅绑回环，不扩大局域网暴露面（2026-09-18 审计整改 L-2 配套）
-      - "127.0.0.1:5432:5432"
+      # 仅供本地跑 pgvector 集成测试（TEST_DATABASE_URL 指向 127.0.0.1:5433）；
+      # 仅绑回环，不扩大局域网暴露面（2026-09-18 审计整改 L-2 配套）。
+      # 宿主机侧用 5433：本机已有原生 postgres 服务占 5432，直接映射会绑不上
+      - "127.0.0.1:5433:5432"
 
   embedding:
     build: ./embedding-server

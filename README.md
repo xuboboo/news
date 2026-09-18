@@ -233,7 +233,7 @@ docker compose exec backend python scripts/audit_chain_verify.py                
 ### 测试
 
 ```bash
-cd backend && pip install -r requirements-dev.txt && python -m pytest tests/ -q   # 后端 pytest（离线 SQLite；pg 集成用例设 TEST_DATABASE_URL=postgresql+psycopg://hjradar:<根.env口令>@127.0.0.1:5432/hjradar，依赖 override 已回环映射的 5432）
+cd backend && pip install -r requirements-dev.txt && python -m pytest tests/ -q   # 后端 pytest（离线 SQLite；pg 集成用例设 TEST_DATABASE_URL=postgresql+psycopg://hjradar:<根.env口令>@127.0.0.1:5433/hjradar，依赖 override 已回环映射的 5433（本机原生 postgres 占了 5432，宿主机侧错开））
 cd frontend && npm test                                # 前端 vitest
 ```
 
