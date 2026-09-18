@@ -47,7 +47,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.crawler.ithome import _FETCH_BACKOFF, _decode_response, _fetch
+from app.crawler.ithome import FETCH_BACKOFF, decode_response, fetch
 from app.models.article import Article
 
 logger = logging.getLogger(__name__)
@@ -185,7 +185,7 @@ def _backed_off_sources() -> set[str]:
     return {
         source
         for source, hosts in _SOURCE_STATS_HOSTS.items()
-        if any(_FETCH_BACKOFF.get(h, 0) > now_ts for h in hosts)
+        if any(FETCH_BACKOFF.get(h, 0) > now_ts for h in hosts)
     }
 
 
@@ -193,12 +193,12 @@ def _get_parsed(url: str, parser) -> tuple[object | None, str]:
     """抓取并解析单个接口。返回 (数值|None, 失败时的响应片段)。
 
     互动端点是小响应，8s 超时足够；缩短它以压低最坏轮次时长（须 < 锁 TTL）。"""
-    resp = _fetch(url, timeout=8)
+    resp = fetch(url, timeout=8)
     if resp is None:
         return None, "fetch failed/backoff"
     if resp.status_code != 200:
         return None, "HTTP %s" % resp.status_code
-    text = _decode_response(resp)
+    text = decode_response(resp)
     val = parser(text)
     if val is None:
         return None, text[:200]

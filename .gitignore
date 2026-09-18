@@ -1,6 +1,7 @@
 # 密钥与本地配置（真实配置不上传，保留 .env.example）
 .env
 backend/.env
+*.env.bak
 
 # Python
 __pycache__/

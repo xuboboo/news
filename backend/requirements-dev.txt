@@ -1,0 +1,4 @@
+# 测试与开发依赖（2026-09-18 审计整改 L-2：从生产 requirements.txt 拆出）
+# 本地跑测试：pip install -r requirements-dev.txt && python -m pytest tests/ -q
+-r requirements.txt
+pytest==8.3.4

@@ -200,7 +200,7 @@ news/
 │   │   ├── core/          # 配置（含生产 fail-fast 自检）、数据库
 │   │   └── utils/         # 中文文本处理（jieba）、URL 安全守卫（SSRF）、Redis 锁
 │   ├── scripts/           # 运维脚本（初始化、重嵌入、数据修复、审计校验、用户管理、聚类标定等 17 个）
-│   ├── tests/             # pytest 测试（离线 SQLite + 容器内 pgvector 集成）
+│   ├── tests/             # pytest 测试（离线 SQLite + pgvector 集成，本地 venv 运行，不入镜像）
 │   └── .env.example       # 配置模板（含生产部署检查单）
 ├── frontend/              # React 18 + TypeScript + Vite + Tailwind（HashRouter）
 │   └── src/pages/         # 热榜 / 最新 / 事件 / 早报 / 成本看板 / 运维监控 / 用户与租户 / 审计 / 账号 / 登录
@@ -233,7 +233,7 @@ docker compose exec backend python scripts/audit_chain_verify.py                
 ### 测试
 
 ```bash
-docker compose exec backend pytest                     # 后端 pytest（pg 集成用例需 TEST_DATABASE_URL）
+cd backend && pip install -r requirements-dev.txt && python -m pytest tests/ -q   # 后端 pytest（离线 SQLite；pg 集成用例设 TEST_DATABASE_URL=postgresql+psycopg://hjradar:<根.env口令>@127.0.0.1:5432/hjradar，依赖 override 已回环映射的 5432）
 cd frontend && npm test                                # 前端 vitest
 ```
 
@@ -251,7 +251,7 @@ cd frontend && npm test                                # 前端 vitest
 
 ## ✅ 质量与验收
 
-- 后端 pytest **331 个用例**（含 14 个容器内 pgvector 集成用例，需 `TEST_DATABASE_URL`，未设置自动跳过）+ 前端 vitest **10 个用例**，全部通过。
+- 后端 pytest **331 个用例**（含 14 个 pgvector 集成用例，需 `TEST_DATABASE_URL` 指向运行中 PG，未设置自动跳过）+ 前端 vitest **13 个用例**，全部通过。测试不在生产镜像内（L-2），用本地 venv 跑。
 - 验收脚本（需后端已在 18000 运行）：
 
 ```bash

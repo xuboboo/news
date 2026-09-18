@@ -55,7 +55,8 @@ PAGE_SOURCES: dict[str, list[str]] = {
 }
 
 # ——— 源级限流退避：403/429 后暂停该域名一段时间，指数递增，避免硬抓被封 ———
-_FETCH_BACKOFF: dict[str, float] = {}   # host → 退避截止时间戳
+# 公开符号（stats.py / mydrivers.py 复用同一退避表，2026-09-18 审计整改 L-3 去私有化）
+FETCH_BACKOFF: dict[str, float] = {}    # host → 退避截止时间戳
 _BACKOFF_FAILS: dict[str, int] = {}     # host → 连续限流次数
 _BACKOFF_BASE_SECONDS = 30 * 60         # 首次 30 分钟
 _BACKOFF_MAX_SECONDS = 2 * 3600         # 上限 2 小时
@@ -126,7 +127,7 @@ def clean_content(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 
-def _insert_article(db: Session, article: Article, new_ids: list[int]) -> None:
+def insert_article(db: Session, article: Article, new_ids: list[int]) -> None:
     """SAVEPOINT 内插入单篇文章：URL 唯一约束冲突（并发爬虫已抢先入库）只跳过该篇，
     不让单条 IntegrityError 回滚整轮采集。"""
     try:
@@ -139,11 +140,11 @@ def _insert_article(db: Session, article: Article, new_ids: list[int]) -> None:
     new_ids.append(article.id)
 
 
-def _fetch(url: str, timeout: float = 15) -> httpx.Response | None:
+def fetch(url: str, timeout: float = 15) -> httpx.Response | None:
     """带源级退避的抓取：403/429 后自动暂停该域名（30min 起指数递增，上限 2h）。"""
     host = urlsplit(url).netloc
     now_ts = time.time()
-    until = _FETCH_BACKOFF.get(host, 0)
+    until = FETCH_BACKOFF.get(host, 0)
     if until > now_ts:
         logger.info("backoff skip %s（剩约 %d 分钟）", host, int((until - now_ts) / 60))
         return None
@@ -163,7 +164,7 @@ def _fetch(url: str, timeout: float = 15) -> httpx.Response | None:
         fails = _BACKOFF_FAILS.get(host, 0) + 1
         penalty = min(_BACKOFF_MAX_SECONDS, _BACKOFF_BASE_SECONDS * (2 ** (fails - 1)))
         _BACKOFF_FAILS[host] = fails
-        _FETCH_BACKOFF[host] = now_ts + penalty
+        FETCH_BACKOFF[host] = now_ts + penalty
         logger.warning(
             "rate-limited by %s (HTTP %s)，暂停 %d 分钟（连续第 %d 次）",
             host, resp.status_code, penalty // 60, fails,
@@ -171,11 +172,11 @@ def _fetch(url: str, timeout: float = 15) -> httpx.Response | None:
         return None
     # 成功即重置该域名的退避状态
     _BACKOFF_FAILS.pop(host, None)
-    _FETCH_BACKOFF.pop(host, None)
+    FETCH_BACKOFF.pop(host, None)
     return resp
 
 
-def _decode_response(resp: httpx.Response) -> str:
+def decode_response(resp: httpx.Response) -> str:
     """响应体解码：先按声明编码，失败时依次回退 utf-8 / gb18030。
 
     IT之家部分接口（如 dyn.ithome.com/grade）正文含中文，个别历史端点为 gb2312，
@@ -247,7 +248,7 @@ def _ingest_page_channel(
     assigned：本轮已归属频道的链接（link → channel）。同一文章出现在多个页面时
     先到先得（页面优先级见 PAGE_SOURCES），保证频道归属确定性。
     """
-    resp = _fetch(page_url)
+    resp = fetch(page_url)
     if resp is None or resp.status_code != 200:
         logger.warning("channel page unreachable: %s (%s)", page_url, channel)
         return {"scanned": 0, "skipped": 0, "rechanneled": 0}
@@ -283,11 +284,11 @@ def _ingest_page_channel(
 
         # 抓取与解析分离：网络失败（超时/限流退避）是瞬态，不写链接缓存，
         # 否则轮中一次 403 触发域名退避后，当轮剩余链接会被集体标记"已处理"拉黑 2 小时
-        resp = _fetch(link)
+        resp = fetch(link)
         if resp is None or resp.status_code != 200:
             continue
         time.sleep(_POLITENESS_SLEEP_SECONDS)
-        parsed = _parse_article_html(_decode_response(resp))
+        parsed = _parse_article_html(decode_response(resp))
         _LINK_CHECKED[link] = now_ts  # 页面已取到，解析结论是确定性的
         if parsed is None:
             continue
@@ -321,7 +322,7 @@ def _ingest_page_channel(
             ai_status="pending",
         )
         before = len(new_ids)
-        _insert_article(db, article, new_ids)
+        insert_article(db, article, new_ids)
         if len(new_ids) > before:
             scanned += 1
         else:

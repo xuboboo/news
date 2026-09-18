@@ -44,9 +44,9 @@ from bs4 import BeautifulSoup
 
 from app.crawler.ithome import (
     SH_TZ,
-    _decode_response,
-    _fetch,
-    _insert_article,
+    decode_response,
+    fetch,
+    insert_article,
 )
 from app.crawler.stats import next_poll_after
 from app.models.article import Article
@@ -83,7 +83,7 @@ _PAGE_MAX_AGE_HOURS = 24 * 14
 _ENTRY_LINK_CAP = 200
 
 # 轮内请求间隔：首轮回填约 120 篇文章页连发，留礼貌间隔降低 403 风险
-# （ithome 侧未加是历史现状；403/429 兜底走 _fetch 的域名退避）
+# （ithome 侧未加是历史现状；403/429 兜底走 fetch 的域名退避）
 _POLITENESS_SLEEP_SECONDS = 0.3
 
 # 页面链接近期检查缓存（进程内 TTL）：独立于 ithome 的一份，防每轮重复抓同一批旧文
@@ -271,11 +271,11 @@ def _ingest_links(
 
         # 抓取与解析分离：网络失败（超时/限流退避）是瞬态，不写链接缓存，
         # 否则轮中一次 403 触发域名退避后，当轮剩余链接会被集体标记"已处理"拉黑 2 小时
-        resp = _fetch(link)
+        resp = fetch(link)
         if resp is None or resp.status_code != 200:
             continue
         time.sleep(_POLITENESS_SLEEP_SECONDS)
-        parsed = _parse_article_html(_decode_response(resp))
+        parsed = _parse_article_html(decode_response(resp))
         _LINK_CHECKED[link] = now_ts  # 页面已取到，解析结论是确定性的
         if parsed is None:
             skipped += 1
@@ -315,7 +315,7 @@ def _ingest_links(
             ai_status="pending",
         )
         before = len(new_ids)
-        _insert_article(db, article, new_ids)
+        insert_article(db, article, new_ids)
         if len(new_ids) > before:
             scanned += 1
             per_channel[channel] = per_channel.get(channel, 0) + 1
@@ -336,12 +336,12 @@ def _ingest_entry_page(
     per_channel: dict[str, int],
 ) -> dict:
     """抓单个入口页（HTML 全站流）→ 解析出文章链接 → _ingest_links。"""
-    resp = _fetch(page_url)
+    resp = fetch(page_url)
     if resp is None or resp.status_code != 200:
         logger.warning("entry page unreachable: %s", page_url)
         return {"scanned": 0, "skipped": 0, "filtered": 0}
 
-    links = extract_article_links(_decode_response(resp))[:_ENTRY_LINK_CAP]
+    links = extract_article_links(decode_response(resp))[:_ENTRY_LINK_CAP]
     return _ingest_links(db, links, new_ids, per_channel)
 
 
@@ -356,12 +356,12 @@ def _ingest_feed(
     feed 分类是旧驱动之家口径，与面包屑不完全对齐，故仅作发现线索；
     feed 单条约 100 条、深度远超全站流，可捞回已滚出 technewsall 的近期文章。
     """
-    resp = _fetch(feed_url)
+    resp = fetch(feed_url)
     if resp is None or resp.status_code != 200:
         logger.warning("feed unreachable: %s", feed_url)
         return {"scanned": 0, "skipped": 0, "filtered": 0}
 
-    items = extract_feed_items(_decode_response(resp))
+    items = extract_feed_items(decode_response(resp))
     window_start = datetime.now(timezone.utc) - timedelta(hours=_PAGE_MAX_AGE_HOURS)
     links = [
         link
@@ -414,20 +414,20 @@ def _dry_run(limit: int = 40) -> None:
 
     candidates: list[str] = []
     for page_url in ENTRY_PAGES:
-        resp = _fetch(page_url)
+        resp = fetch(page_url)
         if resp is None or resp.status_code != 200:
             print(f"入口页不可达：{page_url}")
             return
-        page_links = extract_article_links(_decode_response(resp))
+        page_links = extract_article_links(decode_response(resp))
         print(f"入口页 {page_url}：链接 {len(page_links)} 条")
         candidates.extend(page_links)
     window_start = datetime.now(timezone.utc) - timedelta(hours=_PAGE_MAX_AGE_HOURS)
     for feed_url in FEED_ENTRIES:
-        resp = _fetch(feed_url)
+        resp = fetch(feed_url)
         if resp is None or resp.status_code != 200:
             print(f"Feed 不可达：{feed_url}")
             continue
-        items = extract_feed_items(_decode_response(resp))
+        items = extract_feed_items(decode_response(resp))
         in_window = [link for link, pub in items if pub is None or pub >= window_start]
         print(f"Feed {feed_url}：item {len(items)} 条，窗口内 {len(in_window)} 条")
         candidates.extend(in_window)
@@ -440,12 +440,12 @@ def _dry_run(limit: int = 40) -> None:
     stats = {"new": 0, "filtered": 0, "parse_fail": 0}
     channel_counter: Counter[str] = Counter()
     for link in links:
-        art = _fetch(link)
+        art = fetch(link)
         if art is None or art.status_code != 200:
             stats["parse_fail"] += 1
             print(f"  [抓取失败] {link}")
             continue
-        parsed = _parse_article_html(_decode_response(art))
+        parsed = _parse_article_html(decode_response(art))
         if parsed is None:
             stats["parse_fail"] += 1
             print(f"  [解析失败] {link}")

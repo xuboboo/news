@@ -14,4 +14,4 @@ jieba==0.42.1
 numpy==2.2.1
 python-dateutil==2.9.0
 bcrypt==4.2.1
-pytest==8.3.4
+# pytest 仅供测试（2026-09-18 审计整改 L-2）：拆至 requirements-dev.txt，不进生产镜像

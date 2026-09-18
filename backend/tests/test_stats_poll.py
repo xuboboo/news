@@ -222,7 +222,7 @@ def test_poll_source_backoff_excluded_from_batch(db, monkeypatch):
     """退避来源在 SQL 侧整体排除：不占批次名额，健康来源不被批间饿死。"""
     kj = _mk_article(db, "快科技", "2001")  # 排期参数已不影响结果（整源不进 due）
     it = _mk_article(db, "IT之家", "2002", hours_old=2)
-    stats_mod._FETCH_BACKOFF["count.mydrivers.com"] = datetime.now(timezone.utc).timestamp() + 600
+    stats_mod.FETCH_BACKOFF["count.mydrivers.com"] = datetime.now(timezone.utc).timestamp() + 600
 
     polled_urls: list[str] = []
 
@@ -237,7 +237,7 @@ def test_poll_source_backoff_excluded_from_batch(db, monkeypatch):
         _stub_no_network(monkeypatch, respond)
         result = poll_due_articles(db)
     finally:
-        stats_mod._FETCH_BACKOFF.pop("count.mydrivers.com", None)
+        stats_mod.FETCH_BACKOFF.pop("count.mydrivers.com", None)
 
     # 快科技被整源排除（due 里根本没有它），IT之家正常轮询
     assert result["due"] == 1 and result["ok"] == 1
@@ -358,7 +358,7 @@ def test_poll_midround_backoff_skip_counts_and_keeps_due(db, monkeypatch):
     def respond(url):
         if "action.ashx?tid=8001" in url:
             # 首篇轮询途中快科技域名进入退避（模拟轮中新增）
-            stats_mod._FETCH_BACKOFF["count.mydrivers.com"] = (
+            stats_mod.FETCH_BACKOFF["count.mydrivers.com"] = (
                 datetime.now(timezone.utc).timestamp() + 600
             )
             return ((5, 5), "")
@@ -368,7 +368,7 @@ def test_poll_midround_backoff_skip_counts_and_keeps_due(db, monkeypatch):
         _stub_no_network(monkeypatch, respond)
         result = poll_due_articles(db)
     finally:
-        stats_mod._FETCH_BACKOFF.pop("count.mydrivers.com", None)
+        stats_mod.FETCH_BACKOFF.pop("count.mydrivers.com", None)
 
     assert result["ok"] == 1
     assert result["skipped_backoff"] == 1 and result["aborted_backoff"] is True

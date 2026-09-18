@@ -11,9 +11,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY scripts ./scripts
-# 测试随镜像分发：容器内 python -m pytest tests/ -q（见 README AI 能力小节）
-COPY conftest.py ./conftest.py
-COPY tests ./tests
+# 测试不随镜像分发（2026-09-18 审计整改 L-2）：降低生产镜像攻击面与体积；
+# 跑测试用本地 venv：cd backend && python -m pytest tests/ -q（见根 README）
 
 # 非特权运行（2026-09-18 审计整改 F-2）：运行期无 root 写盘需求（应用只写 DB/Redis，
 # crawler 心跳写 /tmp 世界可写目录，依赖在 root 阶段装完只读）
