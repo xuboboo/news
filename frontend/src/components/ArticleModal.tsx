@@ -8,6 +8,7 @@ import {
   TagChip,
 } from './common';
 import { dateLabel, formatCount, fullTime, timeAgo } from '../utils/format';
+import { safeExternalUrl } from '../utils/url';
 import { ARTICLES_WITH_SCORE, eventsForArticle } from '../api/client';
 import { useModalA11y } from '../utils/hooks';
 
@@ -27,6 +28,8 @@ export default function ArticleModal({
   const s = article.summary;
   const hasSummary = s.summary_short.trim() !== '' || s.key_points.length > 0;
   const dialogRef = useModalA11y(onClose);
+  // 非 http(s) 的垃圾/恶意 scheme（javascript: 等）不渲染为可点链接（审计整改 F-6）
+  const safeUrl = safeExternalUrl(article.url);
   // 记录 mousedown 是否起始于遮罩自身：从弹窗内拖选文本到外部松开不应误关
   const downOnOverlay = useRef(false);
 
@@ -61,13 +64,13 @@ export default function ArticleModal({
             <h2 className="text-lg font-semibold text-slate-100 leading-snug">{article.title}</h2>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {article.url && (
+            {safeUrl && (
               <a
-                href={article.url}
+                href={safeUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hidden sm:inline-flex items-center gap-1.5 text-xs text-accent hover:text-slate-200 border border-accent/30 hover:border-accent/60 rounded-lg px-3 py-1.5 transition-colors"
-                title={article.url}
+                title={safeUrl}
               >
                 <ExternalLink className="h-3.5 w-3.5" /> 阅读原文
               </a>
@@ -179,15 +182,19 @@ export default function ArticleModal({
             <span className="text-[11px] text-slate-500">
               归档时间 {dateLabel(article.publishTime)} · {timeAgo(article.publishTime)}
             </span>
-            {article.url ? (
+            {safeUrl ? (
               <a
-                href={article.url}
+                href={safeUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 text-xs text-accent hover:text-slate-200 border border-accent/30 hover:border-accent/60 rounded-lg px-3 py-1.5 transition-colors"
               >
                 <ExternalLink className="h-3.5 w-3.5" /> 阅读原文
               </a>
+            ) : article.url ? (
+              <span className="inline-flex items-center gap-1.5 text-xs text-slate-500" title={article.url}>
+                <Link2 className="h-3.5 w-3.5" /> 原文链接无效
+              </span>
             ) : (
               <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
                 <Link2 className="h-3.5 w-3.5" /> 原文已归档至文章数据库
