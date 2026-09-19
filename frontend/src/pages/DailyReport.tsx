@@ -282,7 +282,7 @@ export default function DailyReport() {
       lines.push('');
     }
     if (r.topArticles.length) {
-      lines.push('### 昨夜今晨热榜 TOP 5', '');
+      lines.push('### 昨夜今晨热榜 TOP 10', '');
       r.topArticles.forEach((a, i) =>
         lines.push(`${i + 1}. ${a.title}（热度 ${formatScore(a.hotScore)}）`)
       );
@@ -528,11 +528,11 @@ export default function DailyReport() {
 
         {/* 右列 */}
         <div className="space-y-4">
-          {/* 昨夜今晨热榜 TOP5 */}
+          {/* 昨夜今晨热榜 TOP10 */}
           <section className="card p-5">
             <div className="flex items-center gap-2 mb-4">
               <FileBarChart className="h-4 w-4 text-amber-400" />
-              <h2 className="text-sm font-semibold text-slate-200">昨夜今晨热榜 TOP 5</h2>
+              <h2 className="text-sm font-semibold text-slate-200">昨夜今晨热榜 TOP 10</h2>
             </div>
             <div className="space-y-3">
               {report.topArticles.map((a, i) => (

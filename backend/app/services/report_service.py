@@ -22,7 +22,7 @@ from app.services import usage_service
 from app.services.config_service import effective_llm
 from app.services.report_push import push_enabled, push_report
 from app.services.usage_service import record_usage
-from app.utils.text import truncate, truncate_boundary
+from app.utils.text import strip_media_lede, truncate, truncate_boundary
 from app.utils.tz import bj_day_start, bj_now
 from app.utils.url_guard import UrlNotAllowed, assert_public_http_url
 from sqlalchemy import text as sql_text
@@ -44,14 +44,13 @@ def issue_no_for(day: date_type) -> int:
 # 窗口 [day-1 00:00, day 08:00) 内每篇报道恰好归属唯一一期，无缝无重叠
 REPORT_WINDOW_END_HOUR = 8
 
+# 早报「昨夜今晨热榜」条数（2026-09-19 由 TOP 5 扩为 TOP 10）：取窗口内
+# 热度归一化后前 N 篇文章；「热点速览」取池起点随之同步后移，两栏目同页不重复
+REPORT_TOP_ARTICLES = 10
 
-# 「IT之家 9 月 8 日消息，」「快科技 9 月 9 日讯，」等媒体导语壳（含「2026 年 9 月 8 日」带年份变体）
-_LEDE_PREFIX_RE = re.compile(
-    r'^\S{0,12}\s*(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日(?:消息|讯|快讯)\s*[，,]?\s*'
-)
-# 「据韩媒 sedaily 消息，」「据IT之家小伙伴反馈，」等无日期转述壳
-_LEDE_JU_RE = re.compile(r'^据[^，。]{1,14}(?:消息|反馈|爆料)[，,]\s*')
+
 # 转述句式「（科技媒体 X 发布博文，）报道称/指出/表示…」——变化本体在连接词之后
+# （导语壳正则已提取至 utils/text.strip_media_lede，供早报速览说明复用）
 _REPORTING_CONNECTOR_RE = re.compile(r'(?:报道称|博文称|视频称|报告中称|指出|表示|透露|分享了)')
 _SENTENCE_SPLIT_RE = re.compile(r'[。！？]')
 
@@ -63,8 +62,7 @@ def _clean_change_text(raw: object) -> str:
     科技媒体……发布博文，报道称……"），整条搬进「行业变化」栏目会整列同款开头；
     剥壳后真正承载"变化"的是转述连接词之后的本体。
     """
-    text = _LEDE_PREFIX_RE.sub('', str(raw or '').strip())
-    text = _LEDE_JU_RE.sub('', text)
+    text = strip_media_lede(str(raw or ""))
     if not text:
         return ''
     parts = _SENTENCE_SPLIT_RE.split(text, maxsplit=1)
@@ -300,8 +298,8 @@ def build_report(db: Session, day: date_type) -> dict:
         })
     top_events = sorted(top_events, key=lambda e: e["hot_score"], reverse=True)[:5]
 
-    # —— 热点速览 / TOP5：热度口径与全站对齐（榜单页均为 0-100 归一化），
-    #     基准取当日最大原始分 ——
+    # —— 热点速览 / 昨夜今晨热榜 TOP10：热度口径与全站对齐（榜单页均为 0-100
+    #     归一化），基准取当日最大原始分 ——
     def art_brief(a: Article, hs: float) -> dict:
         normalized = round((hs / max_raw) * 100, 1) if max_raw > 0 else round(hs, 1)
         return {
@@ -316,14 +314,17 @@ def build_report(db: Session, day: date_type) -> dict:
             "tags": (a.summary.tags if a.summary else [])[:4],
         }
 
-    top_articles = [art_brief(a, hs) for a, hs in scored[:5]]
-    # 热点速览 = 热榜 TOP5 之外、且未入 TOP 事件窗口成员的前 8 篇（2026-09-17
-    # 早报算法改版）：既不与「热榜 TOP 5」同页两遍（旧 scored[:8] 口径问题），
+    top_articles = [art_brief(a, hs) for a, hs in scored[:REPORT_TOP_ARTICLES]]
+    # 热点速览 = 热榜 TOP10 之外、且未入 TOP 事件窗口成员的前 8 篇（2026-09-17
+    # 早报算法改版；2026-09-19 热榜 TOP5 → TOP10，速览起点同步后移）：
+    # 既不与「昨夜今晨热榜 TOP 10」同页两遍（旧 scored[:8] 口径问题），
     # 也不与头条/热点事件栏目重复同一事件——速览只呈现尚未被栏目覆盖的增量要闻
     featured_members: set[int] = set()
     for e in top_events:
         featured_members.update(win_member_ids_by_ev.get(e["id"], []))
-    quick_pool = [(a, hs) for a, hs in scored[5:] if a.id not in featured_members]
+    quick_pool = [
+        (a, hs) for a, hs in scored[REPORT_TOP_ARTICLES:] if a.id not in featured_members
+    ]
     quick_news = [art_brief(a, hs) for a, hs in quick_pool[:8]]
 
     # —— 行业变化：top 事件核心影响首条，剥导语壳 / 截首句 / 近似去重 ——
@@ -373,6 +374,9 @@ def build_report(db: Session, day: date_type) -> dict:
         "source_stats": source_stats,
         "channel_stats": channel_stats,
         "top_articles": top_articles,
+        # TOP 事件的窗口成员文章 id（2026-09-19 飞书文本速览补位去重用：
+        # 热榜补位时剔除，防同一资讯以「事件标题+成员文章标题」出现两遍）
+        "featured_article_ids": sorted(featured_members),
         "articles_total": len(win_articles),
         "max_hot_score": max_raw,
         "ai_cost": ai_cost,

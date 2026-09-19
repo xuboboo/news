@@ -1,9 +1,10 @@
-"""文本工具单测：分句 / 套话过滤 / 截断 / 关键词。"""
+"""文本工具单测：分句 / 套话过滤 / 截断 / 关键词 / 媒体导语壳剥离。"""
 from app.utils.text import (
     extract_keywords,
     is_boilerplate,
     split_sentences,
     strip_html,
+    strip_media_lede,
     truncate,
 )
 
@@ -15,6 +16,18 @@ def test_split_sentences_filters_short_fragments():
 
 def test_split_sentences_empty():
     assert split_sentences("") == []
+
+
+def test_strip_media_lede():
+    """媒体导语壳剥离：日期导语 / 据X消息·报道转述壳 / 时间状语 / 无壳原样返回（含空值）。"""
+    assert strip_media_lede("IT之家 9 月 8 日消息，科技媒体 X 报道称微软调整。") == "科技媒体 X 报道称微软调整。"
+    assert strip_media_lede("快科技 2026 年 9 月 9 日讯，某厂发布新处理器。") == "某厂发布新处理器。"
+    assert strip_media_lede("据韩媒 sedaily 消息，三星加快研发。") == "三星加快研发。"
+    assert strip_media_lede("据《华尔街日报》今日报道，谷歌确认细节。") == "谷歌确认细节。"
+    assert strip_media_lede("在今天（18 日）的第 22 届论坛上，专家指出趋势。") == "第 22 届论坛上，专家指出趋势。"
+    assert strip_media_lede("昨天的发布会上推出了新品。") == "发布会上推出了新品。"
+    assert strip_media_lede("普通正文开头") == "普通正文开头"
+    assert strip_media_lede("") == ""
 
 
 def test_is_boilerplate():

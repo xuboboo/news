@@ -11,7 +11,7 @@ from app.services.report_push import (
     build_payload,
     clip_markdown_bytes,
     push_targets,
-    render_feishu_card,
+    render_feishu_text,
     render_report_markdown,
 )
 from app.services.report_service import _clean_change_text, _compose_overview, _dedupe_texts
@@ -186,10 +186,11 @@ def test_render_markdown_headline_summary_clipped():
     assert "**更多热点**" not in md  # 仅 1 条热点时不渲染空栏目
 
 
-def test_feishu_payload_card_with_sign():
-    p = build_payload("feishu", "# 标题", "s3cret")
-    assert p["msg_type"] == "interactive"
-    assert p["card"]["elements"][0] == {"tag": "markdown", "content": "# 标题"}
+def test_feishu_payload_text_with_sign():
+    """飞书通道为 text 消息（2026-09-19 简化改版）：问候语+速览 8 条的纯文本体。"""
+    p = build_payload("feishu", "早报时间，大家好……", "s3cret")
+    assert p["msg_type"] == "text"
+    assert p["content"] == {"text": "早报时间，大家好……"}
     # 飞书签名算法：key = "{timestamp}\n{secret}"（换行拼接），空消息 HMAC-SHA256 → base64
     key = p["timestamp"] + "\n" + "s3cret"
     expected = base64.b64encode(hmac_mod.new(key.encode(), digestmod=hashlib.sha256).digest()).decode()
@@ -211,75 +212,157 @@ def test_feishu_sign_known_vector():
     assert _feishu_sign("s", "123") != _feishu_sign("s2", "123")
 
 
-# ———— 飞书结构化卡片（2026-09-17 美化改版） ————
+# ———— 飞书文本早报（2026-09-19 简化改版：问候语 + 早报速览 8 条） ————
 
-def _card_content():
+def _text_content():
     return {
-        "date": "2026-09-10",
-        "issue_no": 149,
+        "date": "2026-09-19",
+        "issue_no": 157,
         "overview": "昨夜今晨最热「A」，聚合多篇报道。",
-        "overview_source": "llm",
         "articles_total": 42,
         "top_events": [
-            {"title": "头条事件", "hot_score": 100, "articles_count": 5, "sources_count": 3,
-             "summary": "头条摘要。"},
-            {"title": "次级热点", "hot_score": 80, "articles_count": 2, "sources_count": 2},
+            {"id": 1, "title": "头条事件标题", "hot_score": 100, "articles_count": 5,
+             "sources_count": 3, "summary": "多家来源交叉报道该事件。后续细节仍在发酵。"},
+            {"id": 2, "title": "次级热点标题", "hot_score": 80, "articles_count": 2,
+             "sources_count": 2, "summary": ""},
         ],
-        "industry_changes": ["变化一"],
-        "quick_news": [{"title": "某文", "source": "IT之家"}],
-        "channel_stats": [{"channel": "智能时代", "count": 26}],
-        "generated_at": "2026-09-10T00:30:00+00:00",
+        "quick_news": [
+            {"id": 11, "title": "速览文章甲", "source": "IT之家",
+             "summary_short": "一句话摘要甲。"},
+            {"id": 12, "title": "速览文章乙", "source": "快科技", "summary_short": ""},
+        ],
+        "featured_article_ids": [101, 102],
+        "top_articles": [
+            {"id": 101, "title": "热榜事件成员文（应被补位跳过）", "summary_short": "x"},
+            {"id": 103, "title": "热榜增量文", "summary_short": "热榜增量一句话摘要。"},
+        ],
+        "generated_at": "2026-09-19T00:30:00+00:00",
     }
 
 
-def test_feishu_card_header_and_stats():
-    """header 蓝色主题 + 副标题（日期·星期·期号）；三栏数据行齐全。"""
-    card = render_feishu_card(_card_content())
-    assert card["header"]["template"] == "blue"
-    assert card["header"]["title"]["content"] == "华军软件园 · 今日早报"
-    assert card["header"]["subtitle"]["content"] == "2026-09-10（周四） · 第 149 期"
-    tags = [e["tag"] for e in card["elements"]]
-    assert "column_set" in tags
-    cols = next(e for e in card["elements"] if e["tag"] == "column_set")["columns"]
-    assert len(cols) == 3
-    assert "42" in cols[0]["elements"][0]["content"]
-    assert "2" in cols[1]["elements"][0]["content"]  # 热点事件数
-    assert "1" in cols[2]["elements"][0]["content"]  # 来源栏目数
+def test_feishu_text_greeting_and_brief_lines():
+    """问候语（日期·星期）+「早报速览」+ 事件在前、速览文章接续的带圈序号条目。"""
+    text = render_feishu_text(_text_content())
+    lines = text.splitlines()
+    assert lines[0] == "早报时间，大家好，现在是 2026 年 9 月 19 日星期六，今天的重要科技资讯有："
+    assert lines[1] == "早报速览"
+    assert lines[2] == "❶ 头条事件标题：多家来源交叉报道该事件"
+    assert lines[3] == "❷ 次级热点标题"  # 无摘要 → 只有标题，不带冒号
+    assert lines[4] == "❸ 速览文章甲：一句话摘要甲"
+    assert lines[5] == "❹ 速览文章乙"
+    assert lines[6] == "❺ 热榜增量文：热榜增量一句话摘要"  # 热榜补位（非事件成员）
 
 
-def test_feishu_card_sections_and_note():
-    """分区内容齐全、无 HTML（飞书不支持 <font>）、脚注为 note 组件。"""
-    card = render_feishu_card(_card_content())
-    mds = [e.get("content", "") for e in card["elements"] if e["tag"] == "markdown"]
-    joined = "\n".join(mds)
-    assert "**🔥 今日头条**" in joined
-    assert "**头条事件**（热度 100，5 篇/3 源）" in joined
-    assert "2. **次级热点**" in joined
-    assert "**🧭 行业变化**" in joined and "- 变化一" in joined
-    assert "**⚡ 热点速览**" in joined and "- 某文（IT之家）" in joined
-    assert "**📡 重点来源**" in joined and "智能时代：26 篇" in joined
-    assert "<font" not in joined
-    overview_el = next(e for e in card["elements"] if e["tag"] == "div")
-    assert "（AI 撰写）" in overview_el["text"]["content"]
-    note = next(e for e in card["elements"] if e["tag"] == "note")
-    assert "生成于" in note["elements"][0]["content"] and "北京时间" in note["elements"][0]["content"]
+def test_feishu_text_fills_to_limit_and_skips_featured():
+    """条目不足 8 条时以热榜 TOP10 增量补位；TOP 事件成员文章（featured_article_ids）
+    被跳过——同一资讯不以「事件标题 + 成员文章标题」出现两遍。"""
+    content = _text_content()
+    # 池子只有 1 事件 + 0 速览，热榜 6 篇（前 2 篇是事件成员 101/102）→ 成员剔除后补 4 篇
+    content["top_events"] = content["top_events"][:1]
+    content["quick_news"] = []
+    content["top_articles"] = [
+        {"id": 100 + i, "title": f"热榜文章{i}号", "summary_short": f"摘要{i}。"} for i in range(1, 6)
+    ] + [{"id": 999, "title": "热榜文章6号", "summary_short": ""}]
+    text = render_feishu_text(content)
+    lines = text.splitlines()[2:]
+    assert len(lines) == 5  # 1 事件 + 4 篇热榜增量（101/102 成员文被剔除）
+    assert lines[0].startswith("❶ 头条事件标题")
+    assert "热榜文章6号" in lines[-1]
+    assert not any("热榜文章1号" in ln for ln in lines)  # id=101 的事件成员文被跳过
+    assert not any("热榜文章2号" in ln for ln in lines)  # id=102 同理
 
 
-def test_feishu_card_minimal_no_empty_sections():
-    """最小快照：无数据段全部跳过，副标题退化为仅期号。"""
-    card = render_feishu_card({"date": "", "issue_no": 1})
-    assert card["header"]["subtitle"]["content"] == "第 1 期"
-    assert all(e["tag"] != "column_set" for e in card["elements"])
-    assert all(e["tag"] != "hr" for e in card["elements"])
+def test_feishu_text_capped_at_8():
+    """速览上限 8 条：事件+速览超出时截断，序号恰到 ❽。"""
+    content = {
+        "date": "2026-09-19",
+        "top_events": [{"id": i, "title": f"事件{i}", "summary": ""} for i in range(3)],
+        "quick_news": [{"id": 100 + i, "title": f"速览{i}", "summary_short": ""} for i in range(9)],
+    }
+    lines = render_feishu_text(content).splitlines()[2:]
+    assert len(lines) == 8
+    assert lines[0].startswith("❶ 事件0")
+    assert lines[7].startswith("❽ 速览4")
 
 
-def test_feishu_payload_wraps_card_dict_with_sign():
-    """build_payload 收到 dict 卡片时整体作为 card；签名与 str 路径同款。"""
-    card = render_feishu_card(_card_content())
-    p = build_payload("feishu", card, "s3cret")
-    assert p["msg_type"] == "interactive"
-    assert p["card"] is card
-    assert p["timestamp"] and p["sign"] == _feishu_sign("s3cret", p["timestamp"])
+def test_feishu_text_note_first_sentence_and_clip():
+    """说明取首句去尾句号；无句读的超长说明在字界截断加省略号。"""
+    content = {
+        "date": "2026-09-19",
+        "quick_news": [
+            {"id": 1, "title": "T1", "summary_short": "首句说明。第二句不应出现。"},
+            {"id": 2, "title": "T2", "summary_short": "无句读超长说明" + "细节" * 30},
+        ],
+    }
+    lines = render_feishu_text(content).splitlines()[2:]
+    assert lines[0] == "❶ T1：首句说明"
+    assert lines[1].startswith("❷ T2：无句读超长说明")
+    assert lines[1].endswith("…")
+    assert "第二句" not in lines[0]
+
+
+def test_feishu_text_note_strips_media_lede():
+    """说明剥离媒体导语壳与转述壳：'IT之家 X 月 X 日消息，科技媒体……发布博文，报道称Y' → 'Y'。"""
+    content = {
+        "date": "2026-09-19",
+        "quick_news": [
+            {"id": 1, "title": "T1",
+             "summary_short": "IT之家 9 月 18 日消息，科技媒体 Windows Latest 今天发布博文，报道称微软将调整关机策略。"},
+            {"id": 2, "title": "T2", "summary_short": "快科技 9 月 19 日讯，某厂发布新款处理器。"},
+        ],
+    }
+    lines = render_feishu_text(content).splitlines()[2:]
+    assert lines[0] == "❶ T1：微软将调整关机策略"
+    assert lines[1] == "❷ T2：某厂发布新款处理器"
+
+
+def test_feishu_text_note_shell_exhausted_drops_note():
+    """壳占满 44 字摘要（本体被截没）：切断后剩余不足 8 字 → 放弃说明只留标题。"""
+    content = {
+        "date": "2026-09-19",
+        "quick_news": [
+            {"id": 1, "title": "T1",
+             "summary_short": "IT之家 9 月 18 日消息，科技媒体 Windows Latest 今天（9 月 18 日）发布博文，通过挖掘微软"},
+        ],
+    }
+    lines = render_feishu_text(content).splitlines()[2:]
+    assert lines[0] == "❶ T1"  # 说明放弃，不带冒号
+
+
+def test_feishu_text_note_keeps_normal_statement():
+    """正常谓语句「微软表示，将…」开头无来源词（非转述壳）：不得误切断主语。"""
+    content = {
+        "date": "2026-09-19",
+        "quick_news": [
+            {"id": 1, "title": "T1", "summary_short": "微软表示，将继续支持 Win10 到明年十月。"},
+        ],
+    }
+    lines = render_feishu_text(content).splitlines()[2:]
+    assert lines[0] == "❶ T1：微软表示，将继续支持 Win10 到明年十月"
+
+
+def test_feishu_text_event_template_summary_becomes_counts():
+    """事件 summary 为「围绕「标题」共有 N 篇…」模板句（标题复读无增量）：
+    说明退化为结构化计数「聚合 N 篇，M 家来源交叉报道」。"""
+    content = {
+        "date": "2026-09-19",
+        "top_events": [
+            {"id": 1, "title": "某热点事件", "articles_count": 3, "sources_count": 2,
+             "summary": "围绕「某热点事件」共有 3 篇来自不同报道的关联报道，热度持续上升。"},
+            {"id": 2, "title": "单来源事件", "articles_count": 1, "sources_count": 1,
+             "summary": "围绕「单来源事件」共有 1 篇报道。"},
+        ],
+    }
+    lines = render_feishu_text(content).splitlines()[2:]
+    assert lines[0] == "❶ 某热点事件：聚合 3 篇，2 家来源交叉报道"
+    assert lines[1] == "❷ 单来源事件：聚合 1 篇"  # 单来源不标交叉
+
+
+def test_feishu_text_bad_date_still_greets():
+    """坏日期：问候语退化为不带日期的版本，不阻断推送。"""
+    text = render_feishu_text({"date": "not-a-date", "quick_news": [{"id": 1, "title": "A", "summary_short": ""}]})
+    assert text.splitlines()[0] == "早报时间，大家好，今天的重要科技资讯有："
+    assert "❶ A" in text
 
 
 # ———— 企微 markdown 字节上限守卫（2026-09-10 审计） ————
@@ -409,18 +492,9 @@ def _render_content():
 
 def test_render_wecom_footer_keeps_font_tag():
     """企微 markdown 支持有限 HTML（font color=comment），保留。"""
-    md = render_report_markdown(_render_content(), provider="wecom")
+    md = render_report_markdown(_render_content())
     assert '<font color="comment">生成于' in md
     assert "（AI 撰写）" in md  # 综述来源随推送透出
-
-
-def test_render_feishu_footer_plain_text():
-    """飞书卡片 markdown 不支持 HTML 标签（官方文档核对），<font> 会按原文显示，
-    脚注须用纯文本 + 分割线。"""
-    md = render_report_markdown(_render_content(), provider="feishu")
-    assert "<font" not in md
-    assert "---" in md
-    assert "生成于" in md and "北京时间" in md
 
 
 def _llm_overview(**kwargs):

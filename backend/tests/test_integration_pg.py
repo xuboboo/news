@@ -404,6 +404,34 @@ def test_build_report_event_stats_window_scoped(pg):
         db.close()
 
 
+# ———— build_report：热榜 TOP10 与热点速览互斥（2026-09-19 热榜 TOP5 → TOP10） ————
+
+def test_build_report_top_articles_top10_disjoint_from_quick(pg):
+    """昨夜今晨热榜扩为 TOP10（2026-09-19）：top_articles 窗口内取满 10 条；
+    热点速览取池自 scored[10:] 起步——与热榜同页零重复（防回归为旧 TOP5 口径）。"""
+    from app.services.report_service import build_report
+
+    db = pg()
+    try:
+        day = (NOW - timedelta(days=1)).date()  # 发布日
+        win_start = datetime(day.year, day.month, day.day, tzinfo=TZ_BJ) - timedelta(days=1)
+        v = _vec([1.0, 0.1])
+        # 窗口内 14 篇零互动文章：热度由时间衰减主导，发布越晚分越高（排序确定）
+        for i in range(14):
+            _mk_article(db, title=f"热榜候选报道第{i}号", source="IT之家", vec=v,
+                        published=win_start + timedelta(hours=10 + i))
+        db.commit()
+
+        report = build_report(db, day)
+        assert len(report["top_articles"]) == 10  # 热榜取满 10 条（旧口径只有 5）
+        top_ids = {a["id"] for a in report["top_articles"]}
+        quick_ids = {a["id"] for a in report["quick_news"]}
+        assert quick_ids  # 池子够深（14 > 10），速览仍有增量条目
+        assert not (top_ids & quick_ids)  # 热榜 TOP10 与速览不得同页两遍
+    finally:
+        db.close()
+
+
 # ———— generate_daily_report：期号递增与同日幂等（审计：早报真实生成链路无集成测试） ————
 
 def test_generate_daily_report_issue_no_and_idempotency(pg):
