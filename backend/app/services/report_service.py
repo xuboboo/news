@@ -97,11 +97,12 @@ def _compose_overview(
     channel_stats: list[dict],
     articles_total: int,
 ) -> str:
-    """早报综述（无 LLM 的确定性模板）：头条事件 + 其余热点 + 频道亮点。
+    """早报综述（无 LLM 的确定性模板）：头条事件 + 其余热点。
 
     早报于 08:00 发布、统计昨夜今晨（昨日 00:00 → 发布日 08:00），
     故措辞取「昨夜今晨最热」口径（与 36氪早报「昨夜今晨」定位一致）。
     生成链路先试 _llm_overview（配了 LLM 才调），任何失败回退本实现。
+    （按需求不展示收录量与频道收录统计，channel_stats 参数保留仅为签名兼容。）
     """
     if articles_total <= 0:
         return ""
@@ -120,12 +121,6 @@ def _compose_overview(
         elif rest:
             names = "、".join(f"「{truncate_boundary(e['title'], 32)}」" for e in rest)
             parts.append(f"此外，{names}等 {len(top_events) - 1} 个热点持续发酵。")
-    if channel_stats:
-        c1 = channel_stats[0]
-        tail = f"{c1['channel']}以 {c1['count']} 篇收录居首"
-        if len(channel_stats) > 1 and channel_stats[1]['count'] > 0:
-            tail += f"，{channel_stats[1]['channel']} {channel_stats[1]['count']} 篇次之"
-        parts.append(tail + "。")
     return "".join(parts)
 
 
@@ -161,7 +156,6 @@ def _llm_overview(llm: tuple[str, str, str, str], content: dict, trigger: str = 
 
     events = content.get("top_events") or []
     quick = content.get("quick_news") or []
-    channels = content.get("channel_stats") or []
     ev_lines = "\n".join(
         f"- {e.get('title', '')}（{e.get('articles_count', 0)}篇/"
         f"{e.get('sources_count', 0)}源，{e.get('status', '')}）\n"
@@ -171,17 +165,15 @@ def _llm_overview(llm: tuple[str, str, str, str], content: dict, trigger: str = 
     quick_lines = "；".join(
         f"{a.get('title', '')}（{a.get('source', '')}）" for a in quick[:8]
     )
-    ch_lines = "、".join(f"{c.get('channel', '')} {c.get('count', 0)}篇" for c in channels[:4])
     prompt = (
         "这是科技资讯「今日早报」的素材（早间 8 点发布，统计昨夜今晨："
         "昨日 00:00 → 今晨 08:00）。请写一段80~140字的中文早报综述："
-        "概括昨夜今晨最热事件及其交叉报道情况、其他值得注意的热点、收录量与频道分布。"
+        "概括昨夜今晨最热事件及其交叉报道情况、其他值得注意的热点。"
+        "综述中不要出现收录报道总数、频道收录统计等收录量信息。"
         "要求：客观陈述事实、不加观点、不使用任何 markdown 标记、不要称呼与客套。\n"
         '输出严格 JSON：{"overview":"综述文本"}\n\n'
-        f"共收录 {content.get('articles_total', 0)} 篇报道。\n"
         f"热点事件：\n{ev_lines or '（无聚合事件）'}\n"
-        f"其他热点：{quick_lines or '（无）'}\n"
-        f"频道分布：{ch_lines or '（无）'}"
+        f"其他热点：{quick_lines or '（无）'}"
     )
     data = None
     usage: dict = {}

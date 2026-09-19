@@ -104,8 +104,9 @@ def test_overview_lead_event_and_channels():
     text = _compose_overview(events, channels, 42)
     assert text.startswith("昨夜今晨最热「微软发布 Win11 大版本更新」，聚合 3 篇报道，2 家来源交叉报道。")
     assert "「DeepSeek 新模型内测」" in text
-    assert "智能时代以 26 篇收录居首" in text
-    assert "软件之家 8 篇次之" in text
+    # 按需求移除收录量展示：综述不再出现频道收录统计与收录总数
+    assert "收录居首" not in text
+    assert "共收录" not in text
 
 
 def test_overview_single_event_no_rest():
@@ -131,12 +132,14 @@ def test_render_markdown_sections():
     md = render_report_markdown(content)
     assert "## 华军软件园 · 今日早报 2026-09-08（周二） · 第 147 期" in md
     assert "今日最热「A」。" in md
-    assert "昨夜今晨共收录 **42** 篇报道" in md
+    assert "昨夜今晨共收录" not in md  # 收录数行已按要求移除（不展示收录量）
     assert "**【今日头条】**" in md
     assert "**A**（热度 100，3 篇/2 源）" in md
     assert "- 变化一" in md
     assert "- 某文（IT之家）" in md
-    assert "- 智能时代：26 篇" in md
+    # 2026-09-19 按需求移除「重点来源」频道收录统计栏目（不展示收录篇数）
+    assert "重点来源" not in md
+    assert "智能时代" not in md
     assert "生成于" in md
 
 
@@ -173,7 +176,7 @@ def test_render_markdown_headline_with_summary_and_rest():
 
 
 def test_render_markdown_headline_summary_clipped():
-    """头条摘要超 90 字截断加省略号。"""
+    """头条摘要超 120 字截断加省略号（2026-09-19 由 90 放宽，与飞书通道一致）。"""
     content = {
         "date": "2026-09-10",
         "issue_no": 149,
@@ -183,7 +186,7 @@ def test_render_markdown_headline_summary_clipped():
         ],
     }
     md = render_report_markdown(content)
-    assert "> " + "长" * 89 + "…" in md
+    assert "> " + "长" * 119 + "…" in md
     assert "**更多热点**" not in md  # 仅 1 条热点时不渲染空栏目
 
 
@@ -247,22 +250,28 @@ def _briefs(text: str) -> list[str]:
 
 
 def test_feishu_text_greeting_layout_and_brief_lines():
-    """排版（2026-09-19 二轮）：刊头三行（问候/日期星期·收录数/引导句）+ 空行
-    + ❶ 条目（事件在前、速览接续、热榜补位）+ 空行 + 分隔线与品牌·期号落款。"""
+    """排版：刊头三行（问候/日期星期/引导句，不带收录数——按需求移除）+ 空行
+    + ❶ 条目（事件在前、速览接续、热榜补位），条目之间空一行（2026-09-19
+    按用户要求）+ 空行 + 分隔线与品牌·期号落款。"""
     text = render_feishu_text(_text_content())
     lines = text.splitlines()
     assert lines[0] == "🌅 早报时间，大家好"
-    assert lines[1] == "现在是 2026 年 9 月 19 日 星期六 · 昨夜今晨共收录 42 篇报道"
+    assert lines[1] == "现在是 2026 年 9 月 19 日 星期六"
+    assert "收录" not in text  # 全文不出现收录数文案
     assert lines[2] == "今天的重要科技资讯："
     assert lines[3] == ""
     assert lines[4] == "❶ 头条事件标题：多家来源交叉报道该事件"
-    assert lines[5] == "❷ 次级热点标题"  # 无摘要 → 只有标题，不带冒号
-    assert lines[6] == "❸ 速览文章甲：一句话摘要甲"
-    assert lines[7] == "❹ 速览文章乙"
-    assert lines[8] == "❺ 热榜增量文：热榜增量一句话摘要"  # 热榜补位（非事件成员）
+    assert lines[5] == ""  # 每条之间空一行
+    assert lines[6] == "❷ 次级热点标题"  # 无摘要 → 只有标题，不带冒号
+    assert lines[7] == ""
+    assert lines[8] == "❸ 速览文章甲：一句话摘要甲"
     assert lines[9] == ""
-    assert lines[10] == "————————————"
-    assert lines[11] == "华军软件园 · 今日早报 第 157 期"
+    assert lines[10] == "❹ 速览文章乙"
+    assert lines[11] == ""
+    assert lines[12] == "❺ 热榜增量文：热榜增量一句话摘要"  # 热榜补位（非事件成员）
+    assert lines[13] == ""
+    assert lines[14] == "————————————"
+    assert lines[15] == "华军软件园 · 今日早报 第 157 期"
 
 
 def test_feishu_text_bad_date_still_greets():
@@ -307,18 +316,20 @@ def test_feishu_text_capped_at_10():
 
 
 def test_feishu_text_note_first_sentence_and_clip():
-    """说明取首句去尾句号；无句读的超长说明在字界截断加省略号。"""
+    """说明取首句去尾句号；无句读的超长说明在字界截断加省略号（上限 120 字，
+    2026-09-19 由 44 放宽——用户反馈摘要截得太短读不完整）。"""
     content = {
         "date": "2026-09-19",
         "quick_news": [
             {"id": 1, "title": "T1", "summary_short": "首句说明。第二句不应出现。"},
-            {"id": 2, "title": "T2", "summary_short": "无句读超长说明" + "细节" * 30},
+            {"id": 2, "title": "T2", "summary_short": "无句读超长说明" + "细节" * 60},
         ],
     }
     lines = _briefs(render_feishu_text(content))
     assert lines[0] == "❶ T1：首句说明"
     assert lines[1].startswith("❷ T2：无句读超长说明")
     assert lines[1].endswith("…")
+    assert len(lines[1]) <= 3 + len("❷ T2：") + 120
     assert "第二句" not in lines[0]
 
 
@@ -364,7 +375,8 @@ def test_feishu_text_note_keeps_normal_statement():
 
 def test_feishu_text_event_template_summary_becomes_counts():
     """事件 summary 为「围绕「标题」共有 N 篇…」模板句（标题复读无增量）：
-    说明退化为结构化计数「聚合 N 篇，M 家来源交叉报道」。"""
+    多来源时说明退化为结构化计数「聚合 N 篇，M 家来源交叉报道」；
+    单来源（聚合 1 篇）连计数也无信息量 → 只留标题（2026-09-19 按用户反馈）。"""
     content = {
         "date": "2026-09-19",
         "top_events": [
@@ -376,7 +388,7 @@ def test_feishu_text_event_template_summary_becomes_counts():
     }
     lines = _briefs(render_feishu_text(content))
     assert lines[0] == "❶ 某热点事件：聚合 3 篇，2 家来源交叉报道"
-    assert lines[1] == "❷ 单来源事件：聚合 1 篇"  # 单来源不标交叉
+    assert lines[1] == "❷ 单来源事件"  # 单来源不标计数，只留标题
 
 
 # ———— 企微 markdown 字节上限守卫（2026-09-10 审计） ————

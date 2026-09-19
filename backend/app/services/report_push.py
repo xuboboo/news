@@ -109,6 +109,8 @@ def render_report_markdown(content: dict) -> str:
     脚注用它弱化展示。
 
     结构（2026-09-17 早报改版）：刊头带星期 → 头条事件（含摘要）→ 其余热点。
+    2026-09-19 按需求移除「重点来源」频道收录统计（不展示收录篇数）；
+    头条摘要字数与飞书通道同步放宽 90 → 120（用户反馈截断读不完整）。
     """
     date = content.get("date", "")
     weekday = _weekday_cn(date)
@@ -122,9 +124,6 @@ def render_report_markdown(content: dict) -> str:
         source = content.get("overview_source")
         tag = "（AI 撰写）" if source == "llm" else ""
         lines += [f"{overview}{tag}", ""]
-    total = content.get("articles_total")
-    if total is not None:
-        lines += [f"> 昨夜今晨共收录 **{total}** 篇报道", ""]
     events = content.get("top_events") or []
     if events:
         lead, rest = events[0], events[1:]
@@ -133,7 +132,7 @@ def render_report_markdown(content: dict) -> str:
             f"**{lead.get('title', '')}**（热度 {_fmt_score(lead.get('hot_score'))}，"
             f"{lead.get('articles_count', 0)} 篇/{lead.get('sources_count', 0)} 源）"
         )
-        summary = _clip(lead.get("summary"), 90)
+        summary = _clip(lead.get("summary"), 120)
         if summary:
             lines += ["", f"> {summary}"]
         lines.append("")
@@ -155,13 +154,6 @@ def render_report_markdown(content: dict) -> str:
         lines += ["**热点速览**", ""]
         for a in quick:
             lines.append(f"- {a.get('title', '')}（{a.get('source', '')}）")
-        lines.append("")
-    channels = content.get("channel_stats") or content.get("source_stats") or []
-    if channels:
-        lines += ["**重点来源**", ""]
-        for c in channels:
-            name = c.get("channel") or c.get("source", "")
-            lines.append(f"- {name}：{c.get('count', 0)} 篇")
         lines.append("")
     gen = content.get("generated_at")
     if gen:
@@ -200,11 +192,13 @@ def _strip_lead(s: str) -> str:
     return rest if len(rest) >= 8 else ""
 
 
-def _brief_note(raw: object, limit: int = 44) -> str:
+def _brief_note(raw: object, limit: int = 120) -> str:
     """速览条目的一句说明：剥媒体导语壳/转述壳 → 取首句去尾句号 → 超限加省略号。
 
     快照里的 summary / summary_short 常以原文导语开头（"IT之家 9 月 18 日消息，
     科技媒体……发布博文，报道称……"），整句搬进速览会每条同款开头且挤占字数。
+    字数上限 2026-09-19 由 44 放宽到 120（用户反馈摘要截得太短、读起来不完整；
+    飞书 text 上限充裕，10 条 × 120 字仍远小于上限）。
     """
     s = strip_media_lede(re.sub(r"\s+", " ", str(raw or "")).strip())
     if not s:
@@ -220,8 +214,9 @@ def render_feishu_text(content: dict, limit: int = 10) -> str:
     """早报快照 → 飞书文本早报（纯函数供测试）。
 
     2026-09-19 两轮改版：简化为文本速览后，晚间再扩到 10 条（❶~❿ 与热榜
-    TOP10 对齐）并重排版——刊头（问候 + 日期星期·收录数 + 引导句）→ 空行 →
-    ❶~❿ 逐条「标题：一句说明」→ 空行 → 分隔线 + 品牌·期号落款。
+    TOP10 对齐）并重排版——刊头（问候 + 日期星期 + 引导句）→ 空行 →
+    ❶~❿ 逐条「标题：一句说明」，每条之间空一行（2026-09-19 按用户要求
+    加入，提升逐条可读性）→ 空行 → 分隔线 + 品牌·期号落款。
 
     条目取材：TOP 事件（标题 + 摘要首句）在前，热点速览文章补足；仍不足
     limit 条时以热榜 TOP10 增量补位（剔除 TOP 事件成员，防同一资讯两遍）。
@@ -240,9 +235,12 @@ def render_feishu_text(content: dict, limit: int = 10) -> str:
         note = _brief_note(e.get("summary"))
         if note.startswith("围绕「"):
             # 事件 summary 常为「围绕「标题」共有 N 篇…」的模板句（标题复读、
-            # 无事实增量）：说明退化为结构化计数
+            # 无事实增量）：说明退化为结构化计数；单来源连计数也无信息量 → 只留标题
             n, m = e.get("articles_count") or 0, e.get("sources_count") or 0
-            note = f"聚合 {n} 篇" + (f"，{m} 家来源交叉报道" if m and m > 1 else "")
+            note = (
+                f"聚合 {n} 篇" + (f"，{m} 家来源交叉报道" if m and m > 1 else "")
+                if n > 1 else ""
+            )
         _add(e.get("title"), note)
     for a in content.get("quick_news") or []:
         _add(a.get("title"), _brief_note(a.get("summary_short")))
@@ -258,20 +256,17 @@ def render_feishu_text(content: dict, limit: int = 10) -> str:
     lines: list[str] = ["🌅 早报时间，大家好"]
     date = str(content.get("date") or "")
     weekday = _weekday_cn(date)
-    total = content.get("articles_total")
     try:
         d = datetime.fromisoformat(date)
-        meta = f"现在是 {d.year} 年 {d.month} 月 {d.day} 日" + (f" 星期{weekday[1]}" if weekday else "")
-        if isinstance(total, int) and total > 0:
-            meta += f" · 昨夜今晨共收录 {total} 篇报道"
-        lines.append(meta)
+        lines.append(f"现在是 {d.year} 年 {d.month} 月 {d.day} 日" + (f" 星期{weekday[1]}" if weekday else ""))
     except ValueError:
-        if isinstance(total, int) and total > 0:
-            lines.append(f"昨夜今晨共收录 {total} 篇报道")
+        pass
     lines += ["今天的重要科技资讯：", ""]
+    briefs: list[str] = []
     for i, (title, note) in enumerate(items[:limit]):
         num = _CIRCLED_NUMS[i] if i < len(_CIRCLED_NUMS) else f"{i + 1}."
-        lines.append(f"{num} {title}：{note}" if note else f"{num} {title}")
+        briefs.append(f"{num} {title}：{note}" if note else f"{num} {title}")
+    lines.append("\n\n".join(briefs))  # 每条之间空一行
     issue = content.get("issue_no")
     lines += ["", "————————————", f"华军软件园 · 今日早报{f' 第 {issue} 期' if issue else ''}"]
     return "\n".join(lines)

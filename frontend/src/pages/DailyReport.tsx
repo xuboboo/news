@@ -22,7 +22,6 @@ import { EventStatusTag } from '../components/ArticleModal';
 import { ArticleWithScore } from '../types';
 import {
   AiBadge,
-  ChannelTag,
   Loading,
   PageHeader,
   RankBadge,
@@ -171,7 +170,7 @@ export default function DailyReport() {
       <div>
         <PageHeader
           title="今日早报"
-          description="系统每日 08:00 自动生成 · 昨夜今晨热点 / 事件摘要 / 行业变化 / 重点来源"
+          description="系统每日 08:00 自动生成 · 昨夜今晨热点 / 事件摘要 / 行业变化 / 热点速览"
         >
           {dateChips}
         </PageHeader>
@@ -199,9 +198,6 @@ export default function DailyReport() {
     );
   }
 
-  // 收录总数：优先用快照里的当日窗口文章总数（历史快照缺省时回退收录条数）
-  const collectedTotal = report.articlesTotal ?? report.quickNews.length;
-
   // 统计窗口口径：早报日期为发布日，窗口为「昨夜今晨」——昨日 00:00 → 发布日 08:00（北京时间）
   const winLabel = (() => {
     const m = report.date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -212,21 +208,16 @@ export default function DailyReport() {
     return `统计窗口（昨夜今晨）${mm}/${dd} 00:00 – ${report.date.slice(5).replace('-', '/')} 08:00`;
   })();
 
-  // 环比：与上一期对比（新进热点 / 收录篇数变化）；上一期已由上方补拉逻辑保证可用
+  // 环比：与上一期对比（仅「新进热点」个数）；上一期已由上方补拉逻辑保证可用
   const newEventCount = prevReport
     ? report.topEvents.filter((e) => !prevReport.topEvents.some((p) => p.id === e.id)).length
     : 0;
-  const articleDelta =
-    prevReport?.articlesTotal != null && report.articlesTotal != null
-      ? report.articlesTotal - prevReport.articlesTotal
-      : null;
+  // 按需求不展示收录量：较上期变化仅保留「新进热点」个数
   const deltaParts: string[] = [];
   if (prevReport && newEventCount > 0) deltaParts.push(`新进热点 ${newEventCount} 个`);
-  if (articleDelta !== null && articleDelta !== 0) {
-    deltaParts.push(`收录 ${articleDelta > 0 ? '+' : ''}${articleDelta} 篇`);
-  }
 
-  // 重点来源：新快照按频道统计（source 粒度只有 IT之家/快科技，四频道共用 source）；
+  // 频道/来源统计：仅用于页头「来源栏目」个数卡片（2026-09-19 起不再展示各频道收录篇数）；
+  // 新快照按频道统计（source 粒度只有 IT之家/快科技，四频道共用 source），
   // 历史快照无 channel_stats 时回退 source_stats
   const originStats: { key: string; count: number }[] = report.channelStats?.length
     ? report.channelStats.map((c) => ({ key: c.channel, count: c.count }))
@@ -249,7 +240,6 @@ export default function DailyReport() {
     const wd = weekdayOf(r.date);
     lines.push(`## 华军软件园 · 今日早报 ${r.date}${wd ? `（${wd}）` : ''} · 第 ${r.issueNo} 期`, '');
     if (r.overview) lines.push(r.overview, '');
-    if (r.articlesTotal != null) lines.push(`> 昨夜今晨共收录 **${r.articlesTotal}** 篇报道`, '');
     if (r.topEvents.length) {
       const eventStats = (e: DailyReportView['topEvents'][number], rank: number) => {
         const stats: string[] = [`热度 ${formatScore(e.hotScore)}`];
@@ -264,7 +254,7 @@ export default function DailyReport() {
           ? `，${lead.reportArticles} 篇${lead.reportSources ? `/${lead.reportSources} 源` : ''}`
           : ''
       }）`, '');
-      if (lead.summary) lines.push(`> ${clipHeadline(lead.summary, 90)}`, '');
+      if (lead.summary) lines.push(`> ${clipHeadline(lead.summary, 120)}`, '');
       if (rest.length) {
         lines.push('### 更多热点', '');
         rest.forEach((e, i) => lines.push(eventStats(e, i + 2)));
@@ -288,10 +278,7 @@ export default function DailyReport() {
       );
       lines.push('');
     }
-    const origins = r.channelStats?.length
-      ? r.channelStats.map((c) => `- ${c.channel}：${c.count} 篇`)
-      : r.sourceStats.map((s) => `- ${s.source}：${s.count} 篇`);
-    if (origins.length) lines.push('### 重点来源', '', ...origins, '');
+    // 2026-09-19 按需求移除「重点来源」频道收录统计段（不展示收录篇数）
     lines.push('> 由华军软件园资讯雷达系统自动生成');
     return lines.join('\n');
   };
@@ -365,16 +352,12 @@ export default function DailyReport() {
             <p className="text-sm text-slate-300 mt-2 leading-relaxed max-w-3xl">
               {report.overview ??
                 (report.topEvents.length > 0
-                  ? `昨夜今晨 ${report.topEvents.length} 个热点事件持续发酵，共聚合 ${collectedTotal} 篇报道。`
-                  : `昨夜今晨暂无聚合事件，共收录 ${collectedTotal} 篇重点报道。`)}
+                  ? `昨夜今晨 ${report.topEvents.length} 个热点事件持续发酵。`
+                  : '昨夜今晨暂无聚合事件。')}
             </p>
           </div>
           <div className="flex flex-col items-end gap-3">
             <div className="flex gap-6 text-right">
-              <div>
-                <div className="text-2xl font-bold text-slate-100 tabular-nums">{collectedTotal}</div>
-                <div className="text-[11px] text-slate-500 mt-0.5">收录报道</div>
-              </div>
               <div>
                 <div className="text-2xl font-bold text-amber-300 tabular-nums">{report.topEvents.length}</div>
                 <div className="text-[11px] text-slate-500 mt-0.5">热点事件</div>
@@ -565,33 +548,7 @@ export default function DailyReport() {
             </div>
           </section>
 
-          {/* 重点来源（按频道统计） */}
-          {originStats.length > 0 && (
-            <section className="card p-5">
-              <div className="flex items-center gap-2 mb-4">
-                <Newspaper className="h-4 w-4 text-violet-400" />
-                <h2 className="text-sm font-semibold text-slate-200">重点来源</h2>
-                <span className="text-[11px] text-slate-500">按频道统计</span>
-              </div>
-              <div className="space-y-3">
-                {originStats.map((s) => {
-                  const max = originStats[0].count || 1;
-                  return (
-                    <div key={s.key} className="flex items-center gap-3">
-                      <ChannelTag channel={s.key} />
-                      <div className="flex-1 h-1.5 rounded-full bg-radar-border overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-400"
-                          style={{ width: `${(s.count / max) * 100}%` }}
-                        />
-                      </div>
-                      <span className="text-xs text-slate-500 tabular-nums">{s.count} 篇</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          )}
+          {/* 2026-09-19 按需求移除「重点来源」频道收录统计区块（不展示收录篇数） */}
 
           {/* 早报窗口 AI 成本（日报 content.ai_cost，有则显示；历史早报无此字段自动隐藏） */}
           {report.aiCost && (
