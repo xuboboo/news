@@ -7,26 +7,10 @@
     <meta name="theme-color" content="#070B14" />
     <meta name="description" content="华军软件园资讯雷达系统 V2.0 — 多源科技资讯聚合与热点分析：热榜中心、最新资讯、AI 摘要、热点事件聚合与今日早报" />
     <title>华军软件园资讯雷达系统 V2.0</title>
-    <script>
-      // pre-paint 主题解析：首帧渲染前落定 data-theme，避免浅色用户看到深色闪烁（FOUC）。
-      // 逻辑须与 src/theme.ts 保持一致（STORAGE_KEY / system 解析 / theme-color 值）。
-      (function () {
-        try {
-          var m = localStorage.getItem('radar-theme');
-          // 与 src/theme.ts 对齐：仅显式 'light' 判浅色，'dark' 判深色，
-          // 其余（null/'system'/无效值）跟随系统偏好
-          var dark =
-            m === 'dark' ||
-            (m !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-          var theme = dark ? 'dark' : 'light';
-          document.documentElement.dataset.theme = theme;
-          var meta = document.querySelector('meta[name="theme-color"]');
-          if (meta) meta.setAttribute('content', dark ? '#070B14' : '#F5F5F7');
-        } catch (e) {
-          /* localStorage 不可用时保持默认深色 */
-        }
-      })();
-    </script>
+    <!-- 主题预解析外置 public/theme-init.js（阻塞式外部脚本，同样首帧前执行，行为不变）：
+         换取 CSP script-src 'self' 可强制执行——内联脚本会被强制 CSP 拦截，
+         而 'unsafe-inline' 会掏空整条 XSS 防线。逻辑须与 src/theme.ts 保持一致 -->
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>

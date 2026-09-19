@@ -45,3 +45,6 @@ jobs:
         run: npm run lint
       - name: Vitest
         run: npm test
+      # 2026-09-19 补：tsc 覆盖不了构建期错误（资源导入路径拼写等），CI 加生产构建
+      - name: Build
+        run: npm run build

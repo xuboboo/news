@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     report_push_feishu_webhook_url: str = ""
     report_push_feishu_secret: str = ""  # 飞书机器人开启「签名校验」时必填，未开启留空
 
+    # —— 告警 Webhook（面板可热调；.env 仅作默认值，留空 = 告警只记日志不推送） ——
+    # 2026-09-19 修复：.env.example 提供 ALERT_WEBHOOK_URL/ALERT_WEBHOOK_STYLE，但本类
+    # 缺这两个字段，config_service.get_effective 的 .env 回落（getattr(Settings, key)）
+    # 取不到 → 按 .env 配置告警永远静默失效；pydantic-settings 自动映射同名环境变量
+    alert_webhook_url: str = ""
+    alert_webhook_style: str = "wecom"  # wecom / dingtalk / feishu / raw
+
     # —— AI 成本治理（面板可热调） ——
     ai_daily_cost_budget: float = 0.0    # 单日（北京时间日界）AI 成本预算（元）；0 = 不告警
     ai_usage_retention_days: int = 365   # ai_usage_log 流水保留天数；0 = 永久保留

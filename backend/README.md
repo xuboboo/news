@@ -3,6 +3,10 @@
 严格依据《华军科技资讯雷达 V2.0 产品 PRD》与《技术开发 PRD》实现的完整后端，
 已在生产环境（Docker）运行并通过全链路测试。
 
+> ⚠️ **部署、配置与运维以仓库根目录 `README.md` 为准**：本文件为模块视角的历史说明，
+> 部分章节未随 2026-09 的多轮迭代（登录多租户、快科技来源、互动数据轮询、embedding 服务等）
+> 同步更新，仅作模块结构参考（2026-09-19 校订）。
+
 ## 技术栈（PRD 第 2/3/13 节）
 
 | 层 | 组件 |
@@ -11,14 +15,14 @@
 | 数据库 | PostgreSQL 16 + **pgvector**（向量检索） |
 | 缓存/队列 | Redis 7 |
 | 异步任务 | Celery（default 队列 + ai 队列 + beat 定时） |
-| 采集 | 常驻爬虫服务（IT之家体系四频道页面） |
+| 采集 | 常驻爬虫服务（多来源页面采集：IT之家 + 快科技，见 crawler/multi.py） |
 | AI | LLM 摘要服务（OpenAI 兼容协议）+ Embedding 服务 + 事件聚类 |
-| 部署 | Docker Compose：postgres / redis / backend / worker / ai-worker / beat / crawler / nginx(frontend) |
+| 部署 | Docker Compose 9 服务：postgres / redis / backend / worker / ai-worker / beat / crawler / embedding / nginx(frontend)，清单见根 README |
 
 ## 快速启动
 
 ```bash
-cd d:\桌面迁移\code\news
+cd <项目根目录>                    # 部署步骤与前置要求详见根 README（快速开始一节）
 docker compose up -d --build     # 一键上线全套服务
 ```
 
@@ -33,7 +37,7 @@ docker compose up -d --build     # 一键上线全套服务
 频道页面（页面即频道真相）→ crawler(每30分钟) → article 表
     → summary_task（AI 摘要 → article_summary 表）
     → embedding_task（向量 → article.embedding, pgvector）
-    → event_task（每15分钟：相似度>0.85 + 标题关键词 + 48h 时间窗 → event/event_article 表）
+    → event_task（每10分钟：相似度>0.85 + 标题关键词 + 48h 时间窗 → event/event_article 表）
     → report_task（每日 08:00：daily_report 表）
 ```
 
@@ -88,7 +92,9 @@ backend/app/
 | GET | /api/v2/admin/task-runs | 任务执行记录（crawler / event / report 的成败、耗时、错误信息） |
 | POST | /api/v2/admin/crawl · /events · /report | 手动触发任务（原有接口，现需 Token） |
 
-**鉴权**：所有上述接口要求请求头 `X-Admin-Token` 与生效的 `admin_token` 一致。
+**鉴权**：正式访问走 super_admin 登录会话（`/admin` 页面登录，根 README 安全须知）；
+请求头 `X-Admin-Token` 与生效的 `admin_token` 一致时作为应急通道等效放行
+（token 比较为时序安全实现）。
 Token 来源优先级同样是 DB 覆盖 > `.env` 的 `ADMIN_TOKEN`；**未配置时管理面板不可用**（接口返回 503 并给出设置提示）。
 注意：修改 admin_token 会立即使旧 Token 失效。
 
@@ -140,9 +146,9 @@ repair_data.py 才能拆散（增量聚类只合并不拆分）。前台抽查�
 
 - 文章、标题、正文、时间均**真实采集**自 IT之家体系频道页面（见上表四频道映射；
   2026-09 起废弃主站 RSS 全量抓取 + 关键词归类，频道归属以页面为准）。
-- IT之家公开的阅读/评论数接口已下线（实测 404），`views/comments/shares` 字段保留为 0，
-  热度算法自动降级为时间衰减主导；未来接入任何互动数据源后，HotScore 公式自动恢复
-  `Engagement × TimeDecay` 全量形态，无需改代码。
+- 互动数据：评论/点赞数已于 2026-09-10 接入轮询通道回填（`crawler/stats.py`，总开关与批次可
+  在管理面板热调；阅读/分享数暂无公开数据源、保留为 0）。HotScore 公式
+  `Engagement × TimeDecay` 按已有互动字段自动生效，接入新数据源无需改代码。
 - 运维触发接口（/admin/*）与 Celery beat 定时任务均已在容器中验证可用。
 
 ## 常用运维命令

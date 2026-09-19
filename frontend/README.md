@@ -8,10 +8,13 @@
 cd frontend
 npm install        # 首次
 npm run build      # 构建生产包
-npm start          # 上线（默认 http://localhost:8080）
+npm start          # 本机预览（默认 http://localhost:8080）
 ```
 
 也可以自定义端口：`node server.mjs 9000`。默认仅监听 `127.0.0.1`（本机预览）；确需局域网访问时显式 `HOST=0.0.0.0 node server.mjs`。
+
+> 生产部署不走 server.mjs：正式入口是根目录 Docker Compose 的 nginx 容器
+> （`frontend/Dockerfile` 多阶段构建，dist 内置于镜像，含 API 反代与安全头）。
 
 ## 功能模块（与 PRD 对应）
 
@@ -31,8 +34,9 @@ npm start          # 上线（默认 http://localhost:8080）
 frontend/
 ├── src/
 │   ├── api/
-│   │   ├── data.ts      # 文章库（38 篇）+ 事件库（8 个聚合事件）
-│   │   └── client.ts    # API 层：热度算法 / 事件聚合 / 早报生成
+│   │   ├── client.ts    # 后端 /api/v2 接口封装（fetch，带超时与不可达降级）
+│   │   ├── auth.ts      # 登录/会话接口
+│   │   └── admin.ts     # 管理面板接口
 │   ├── components/      # 布局、通用组件、文章弹窗
 │   ├── pages/           # 五个页面
 │   ├── types.ts
@@ -43,9 +47,9 @@ frontend/
 
 ## 与后端对接
 
-`src/api/client.ts` 的每个函数与后端 `/api/v2` 接口一一对应（文件头有注释映射表）。
-当前由本地数据引擎按后端契约返回数据；后端（FastAPI + pgvector + Celery）就绪后，
-只需将函数实现替换为 fetch 调用，页面代码零改动。
+`src/api/client.ts` 的每个函数与后端 `/api/v2` 接口一一对应（文件头有注释映射表），
+已全部为 fetch 直连实现（带超时、错误处理；后端不可达时空态降级并自动重连）。
+全站强制登录（HttpOnly 会话 Cookie），401 自动跳转登录页。
 
 - `GET /api/v2/hot/board?channel=`      → 热榜
 - `GET /api/v2/articles/latest`          → 最新资讯
@@ -55,5 +59,5 @@ frontend/
 
 ## 说明
 
-- 演示数据的时间戳基于当前时间动态生成（分钟级偏移），页面始终呈现"实时"效果。
-- 部署：将 `dist/` 放到任意静态服务器（Nginx / server.mjs）即可；路由使用 hash 模式，无需服务端重写规则。
+- 页面数据均为后端真实采集，无内置演示数据；后端不可达时显示空态并按间隔自动重连。
+- 生产部署：根目录 Docker Compose 的 nginx 容器（`frontend/Dockerfile` 多阶段构建产物）；`server.mjs` 仅本机预览/应急使用。路由使用 hash 模式，无需服务端重写规则。

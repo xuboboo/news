@@ -1,4 +1,9 @@
-fastapi==0.115.6
+fastapi==0.141.1
+# ↑ 2026-09-19 从 0.115.6 升级：其传递依赖 starlette 0.41.3 有 7 项已知漏洞
+#   （PYSEC-2026-161「BadHost」Host 头注入可绕过路径型鉴权、PYSEC-2026-249
+#   urlencoded 表单限额失效致未认证 DoS 等，pip-audit 共报 14 条），
+#   0.115.6 的版本约束内无修复版。0.141.1 配套 starlette 1.6.0，pydantic 等
+#   其余依赖不变，全量 337 用例回归通过；embedding-server 已先行实测同版本。
 uvicorn[standard]==0.34.0
 sqlalchemy==2.0.36
 psycopg[binary]==3.2.3

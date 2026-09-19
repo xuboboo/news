@@ -1,6 +1,8 @@
 /**
- * 华军科技资讯雷达 V2.0 — 生产静态服务器
- * 用法：node server.mjs [端口，默认 8080]
+ * 华军科技资讯雷达 V2.0 — 本机预览/应急静态服务器
+ * ⚠️ 仅限本机预览与应急：无鉴权、无限流，不得作为生产入口；
+ *    生产部署走根目录 Docker Compose 的 nginx 容器（frontend/Dockerfile）。
+ * 用法：node server.mjs [端口，默认 8080]（默认仅绑 127.0.0.1）
  */
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';

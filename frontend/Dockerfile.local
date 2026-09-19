@@ -1,4 +1,4 @@
-# 临时离线构建：docker.io 不可达时，以本地旧镜像为底（nginx.conf 未变）只替换前端产物。
+# ⚠️ 仅应急离线构建（非标准入口）：docker.io 不可达时，以本地旧镜像为底只替换前端产物。
 # 用法：npm run build && docker build -f Dockerfile.local -t hj-tech-radar-nginx:latest .
 # 网络恢复后应重新走标准 docker compose build nginx
 FROM hj-tech-radar-nginx:latest

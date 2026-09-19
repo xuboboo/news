@@ -1,0 +1,14 @@
+# 构建上下文瘦身 + 防泄密（对齐 frontend/.dockerignore 的定位）：
+# 真实 .env（Token/口令）绝不进入 Docker daemon 传输与镜像层
+.env
+.env.*
+!.env.example
+tests/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage

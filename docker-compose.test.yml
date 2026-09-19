@@ -1,0 +1,11 @@
+# pgvector 集成测试专用（显式 -f 组合使用，不会被 docker compose up 自动合并）：
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.test.yml up -d postgres
+# 后端侧设 TEST_DATABASE_URL=postgresql+psycopg://hjradar:<根.env口令>@127.0.0.1:5433/hjradar
+# 仅绑回环，不扩大局域网暴露面（2026-09-18 审计整改 L-2 配套）。
+# 2026-09-19 从 docker-compose.override.yml 拆出：override 会被生产部署自动合并，
+# 测试端口不应随生产生效（原 postgres.ports 块整体迁移至此）。
+services:
+  postgres:
+    ports:
+      # 宿主机侧用 5433：本机已有原生 postgres 服务占 5432，直接映射会绑不上
+      - "127.0.0.1:5433:5432"

@@ -76,7 +76,7 @@ flowchart LR
 **前置要求**：Docker 20+ 与 Docker Compose v2
 
 ```bash
-git clone https://github.com/xuboboo/news.git
+git clone https://github.com/xuboboo/news.git   # ⚠️ 该仓库 2026-09-19 实测可匿名 clone（公开可见），与文末「内部私有项目」声明冲突，上线前请在 GitHub 仓库设置改为 Private
 cd news
 cp backend/.env.example backend/.env   # 按需修改 ADMIN_TOKEN 等配置
 echo "POSTGRES_PASSWORD=<强随机口令>" > .env   # 根 .env 为必需：compose 建库口令，缺失拒起
@@ -233,7 +233,7 @@ docker compose exec backend python scripts/audit_chain_verify.py                
 ### 测试
 
 ```bash
-cd backend && pip install -r requirements-dev.txt && python -m pytest tests/ -q   # 后端 pytest（离线 SQLite；pg 集成用例设 TEST_DATABASE_URL=postgresql+psycopg://hjradar:<根.env口令>@127.0.0.1:5433/hjradar，依赖 override 已回环映射的 5433（本机原生 postgres 占了 5432，宿主机侧错开））
+cd backend && pip install -r requirements-dev.txt && python -m pytest tests/ -q   # 后端 pytest（离线 SQLite；pg 集成用例设 TEST_DATABASE_URL=postgresql+psycopg://hjradar:<根.env口令>@127.0.0.1:5433/hjradar，需先 docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.test.yml up -d postgres 回环映射 5433——2026-09-19 起测试端口拆至 test.yml 不再随 override 自动合并（本机原生 postgres 占了 5432，宿主机侧错开））
 cd frontend && npm test                                # 前端 vitest
 ```
 
@@ -244,14 +244,14 @@ cd frontend && npm test                                # 前端 vitest
 - **审计防篡改**：审计行间 SHA-256 哈希链（写路径 advisory lock 串行化），`scripts/audit_chain_verify.py` 可离线校验删改。
 - 管理接口（`/api/v2/admin/*`）：super_admin 登录会话，或 `X-Admin-Token` 应急后门（仅等效 admin 前缀，虚拟主体留痕可追溯）；`ADMIN_NO_AUTH=true` 仅限本机/内网调试，公网部署必须关闭。
 - **生产 fail-fast 自检**：`ENVIRONMENT=production` 时启动即校验 Cookie Secure / 关闭 API 文档 / 关闭免鉴权 / 非默认 DB 口令，任一不合规拒绝启动。
-- `backend` 与 `nginx` 端口均仅绑定 `127.0.0.1`（M-1，2026-09-18）：单机部署默认不向局域网暴露；临时共享（手机等）在 `docker-compose.override.yml` 给 nginx 加 `ports: ["80:80"]` 覆盖并记得用完移除（共享时 `COOKIE_SECURE=true` 需改回 false，否则纯 http 经 IP 访问无法登录）。nginx 覆写 `X-Real-IP`/`X-Forwarded-For` 防审计 IP 伪造，并带 CSP（Report-Only 观察模式）、nosniff、X-Frame-Options 等安全头；上 HTTPS 时必须 `COOKIE_SECURE=true`。
+- `backend` 与 `nginx` 端口均仅绑定 `127.0.0.1`（M-1，2026-09-18）：单机部署默认不向局域网暴露；临时共享（手机等）在 `docker-compose.override.yml` 给 nginx 加 `ports: ["80:80"]` 覆盖并记得用完移除（共享时 `COOKIE_SECURE=true` 需改回 false，否则纯 http 经 IP 访问无法登录）。nginx 覆写 `X-Real-IP`/`X-Forwarded-For` 防审计 IP 伪造，并带强制 CSP（`script-src 'self'`，前端零外部脚本依赖）、nosniff、X-Frame-Options 等安全头；上 HTTPS 时必须 `COOKIE_SECURE=true`。
 - **SSRF 守卫**：LLM/Embedding/Webhook 服务地址仅放行公网 http(s)（私网/环回/保留段拒绝）；内网服务用 `AI_URL_ALLOWLIST` 按主机名精确豁免（旧 `ALLOW_PRIVATE_AI_URLS` 全局豁免已弃用，production 启动自检拒绝开启）。
 - 敏感键（`api_key` / `admin_token`）接口侧只做脱敏展示、不回传明文；配置修改审计只记「已变更」不记新旧明文；留空即表示不修改。
 - 生产部署请遵循 `.env.example` 末尾的检查单：项目根目录 `.env` 配置强随机 `POSTGRES_PASSWORD`（无默认回退，缺失时 compose 直接报错拒起）、同步 `DATABASE_URL`、更换强随机 `ADMIN_TOKEN`、配置 `BOOTSTRAP_ADMIN_*` 完成引导。
 
 ## ✅ 质量与验收
 
-- 后端 pytest **337 个用例**（另含 15 个依赖运行中 PG 的集成用例，本机经 override 的 127.0.0.1:5433 指 `TEST_DATABASE_URL` 后执行，未设置自动跳过）+ 前端 vitest **13 个用例**，全部通过。测试不在生产镜像内（L-2），用本地 venv 跑。
+- 后端 pytest **337 个用例**（另含 15 个依赖运行中 PG 的集成用例，本机经 docker-compose.test.yml 映射的 127.0.0.1:5433 指 `TEST_DATABASE_URL` 后执行，未设置自动跳过）+ 前端 vitest **13 个用例**，全部通过。测试不在生产镜像内（L-2），用本地 venv 跑。
 - 验收脚本（需后端已在 18000 运行）：
 
 ```bash
