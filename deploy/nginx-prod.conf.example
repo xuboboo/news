@@ -1,0 +1,121 @@
+# ============================================================================
+# 生产 TLS 配置（docker-compose.prod.yml.example 挂载到容器 /etc/nginx/conf.d/default.conf）
+# 使用方法：复制本文件为 deploy/nginx-prod.conf（保留 .example 原件作参照）
+#
+# 由 frontend/nginx.conf 派生（2026-09-19）。设计要点：
+# 1. 单层 TLS 终结——容器 nginx 直接对外 443，不经宿主机二次反代。
+#    若在宿主机再加一层 Nginx/Caddy 终结 TLS，本配置的 X-Forwarded-For 覆写
+#    （防伪造，2026-09-09 审计修复）会把所有请求的审计 IP 记成 127.0.0.1，禁用。
+# 2. 80 端口只做三件事：ACME HTTP-01 验证、容器健康探活、301 跳转 HTTPS。
+# 3. ⚠️ frontend/nginx.conf 后续任何变更（限流参数/CSP/安全头/缓存策略）
+#    必须同步本文件对应段落，两处长期分叉会造成环境行为不一致。
+# 证书由 docker-compose.prod.yml 挂载至 /etc/nginx/certs/（Let's Encrypt 或企业证书均可）。
+# ============================================================================
+
+# API 按 IP 限流（与 frontend/nginx.conf 同参数）
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+
+# 动态解析 upstream（http 级共享给两个 server 块）：backend 容器重建换 IP 后
+# 不重启 nginx 即可自愈，避免旧 IP 缓存导致 502（2026-09-09 运维实录）
+resolver 127.0.0.11 valid=30s ipv6=off;
+
+# ------------------------------- HTTPS : 443 正式入口 -------------------------------
+server {
+    listen 443 ssl;
+    server_name _;
+
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # 安全响应头（nginx 继承规则：location 内出现任何 add_header 后本级不再下发，
+    # 故下方声明了自有 add_header 的 location 均已重复这几条）
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    # CSP 强制模式（2026-09-19 上线切换；前端零外部依赖：theme-init.js 外置、无外链图片）
+    add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+
+    set $backend_upstream http://backend:8000;
+
+    # JS/CSS/JSON/SVG 压缩传输
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_comp_level 6;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    # 静态资源长缓存（文件名带 hash）
+    location /assets/ {
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+    }
+
+    # 后端 API 反向代理
+    location /api/ {
+        limit_req zone=api_limit burst=20 nodelay;
+        limit_req_status 429;
+        proxy_pass $backend_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        # 覆写而非追加：单层入口下 $remote_addr 即真实客户端 IP，防伪造
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_read_timeout 120s;
+    }
+
+    # 入口页禁止缓存：部署窗口内保证拿到新 index.html
+    location = /index.html {
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+        add_header Cache-Control "no-cache";
+    }
+
+    # 前端 SPA（缺失路径回退 index.html，经内部重写命中上面的 no-cache 规则）
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+
+# ------------------------- HTTP : 80（ACME 验证 / 探活 / 跳转） -------------------------
+server {
+    listen 80;
+    server_name _;
+
+    # Let's Encrypt HTTP-01 webroot：宿主机 certbot renew --webroot -w <项目>/deploy/acme-www
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type text/plain;
+    }
+
+    # 容器健康探活专用（主 compose 的 healthcheck 探 http://127.0.0.1/api/v2/health，
+    # 走容器内部 80 口）：明文 80 上仅放行健康端点且不跳转，探活不破；
+    # 该端点只返回 {"status","db","time}，无敏感信息
+    location = /api/v2/health {
+        set $backend_upstream http://backend:8000;
+        proxy_pass $backend_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+
+    # 其余一律 301 到 HTTPS
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}

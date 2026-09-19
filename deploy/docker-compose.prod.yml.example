@@ -1,0 +1,31 @@
+# ============================================================================
+# 生产 TLS 编排（复制本文件为 deploy/docker-compose.prod.yml 后使用）
+#
+# 用法（显式三文件组合；注意：一旦显式 -f，docker-compose.override.yml 不再自动合并，
+# 而 embedding 服务定义在 override 里，必须显式带上）：
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml \
+#                  -f deploy/docker-compose.prod.yml up -d --build
+#
+# ⚠️ 依赖 Docker Compose >= 2.24：ports 使用 !override 标签整体替换主文件的
+#    127.0.0.1:80 回环绑定（compose 的 ports 默认是追加合并，不加 !override 会
+#    与公网 80 绑定冲突导致起不来）。2024 年后的 Docker 安装源均满足。
+#
+# 首次 up 前必须就位（缺一 nginx 起不来）：
+#   deploy/nginx-prod.conf            # 由 nginx-prod.conf.example 复制
+#   deploy/certs/fullchain.pem        # 证书链（Let's Encrypt 或企业证书）
+#   deploy/certs/privkey.pem          # 私钥
+#   deploy/acme-www/                  # mkdir -p，certbot webroot 续期写入用
+#
+# 安全边界：backend 的 127.0.0.1:18000 调试口保持仅回环（主文件定义，未改动），
+# 公网只暴露 80/443；宿主机安全组建议仅放行 22/80/443。
+# ============================================================================
+services:
+  nginx:
+    ports: !override
+      - "80:80"     # ACME HTTP-01 验证 + HTTP→HTTPS 301 跳转
+      - "443:443"   # 正式入口（TLS 终结于容器内 nginx，单层反代保住审计 IP 真实性）
+    volumes:
+      - ./deploy/nginx-prod.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/certs/fullchain.pem:/etc/nginx/certs/fullchain.pem:ro
+      - ./deploy/certs/privkey.pem:/etc/nginx/certs/privkey.pem:ro
+      - ./deploy/acme-www:/var/www/certbot
