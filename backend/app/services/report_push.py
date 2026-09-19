@@ -1,7 +1,7 @@
 """早报 Webhook 推送：企业微信 markdown 卡片 + 飞书文本早报，双通道机器人。
 
 （原「软件日报」，2026-09-17 改版为「今日早报」；2026-09-19 飞书通道简化：
-原结构化卡片信息密度过高，改为「问候语 + 早报速览 8 条」纯文本速览。）
+原结构化卡片信息密度过高，改为「问候语 + 早报速览 10 条」纯文本速览。）
 
 配置三层（与全站配置语义一致）：运维面板 DB 覆盖 > .env 默认 > 关闭。
 - report_push_enabled：总开关（面板开关 / env REPORT_PUSH_ENABLED）
@@ -174,7 +174,7 @@ def render_report_markdown(content: dict) -> str:
     return "\n".join(lines)
 
 
-# 飞书速览带圈序号（速览上限 8 条，恰用到 ❽；超出防御性退化为数字点）
+# 飞书速览带圈序号（速览上限 10 条，恰用到 ❿；超出防御性退化为数字点）
 _CIRCLED_NUMS = "❶❷❸❹❺❻❼❽❾❿"
 _SENTENCE_END_RE = re.compile(r"[。！？;；]")
 # 转述壳「科技媒体 X（今天）发布博文，/博主 X 指出，」：事实本体在连接词之后。
@@ -216,11 +216,12 @@ def _brief_note(raw: object, limit: int = 44) -> str:
     return _clip(s.rstrip("。！？;；"), limit)
 
 
-def render_feishu_text(content: dict, limit: int = 8) -> str:
+def render_feishu_text(content: dict, limit: int = 10) -> str:
     """早报快照 → 飞书文本早报（纯函数供测试）。
 
-    2026-09-19 按需求简化（原结构化卡片栏目过多、信息密度过高）：
-    问候语（日期·星期）→「早报速览」→ ❶~❽ 逐条「标题：一句说明」。
+    2026-09-19 两轮改版：简化为文本速览后，晚间再扩到 10 条（❶~❿ 与热榜
+    TOP10 对齐）并重排版——刊头（问候 + 日期星期·收录数 + 引导句）→ 空行 →
+    ❶~❿ 逐条「标题：一句说明」→ 空行 → 分隔线 + 品牌·期号落款。
 
     条目取材：TOP 事件（标题 + 摘要首句）在前，热点速览文章补足；仍不足
     limit 条时以热榜 TOP10 增量补位（剔除 TOP 事件成员，防同一资讯两遍）。
@@ -254,22 +255,25 @@ def render_feishu_text(content: dict, limit: int = 8) -> str:
                 continue
             _add(a.get("title"), _brief_note(a.get("summary_short")))
 
-    lines: list[str] = []
+    lines: list[str] = ["🌅 早报时间，大家好"]
     date = str(content.get("date") or "")
     weekday = _weekday_cn(date)
+    total = content.get("articles_total")
     try:
         d = datetime.fromisoformat(date)
-        lines.append(
-            f"早报时间，大家好，现在是 {d.year} 年 {d.month} 月 {d.day} 日"
-            + (f"星期{weekday[1]}" if weekday else "")
-            + "，今天的重要科技资讯有："
-        )
+        meta = f"现在是 {d.year} 年 {d.month} 月 {d.day} 日" + (f" 星期{weekday[1]}" if weekday else "")
+        if isinstance(total, int) and total > 0:
+            meta += f" · 昨夜今晨共收录 {total} 篇报道"
+        lines.append(meta)
     except ValueError:
-        lines.append("早报时间，大家好，今天的重要科技资讯有：")
-    lines.append("早报速览")
+        if isinstance(total, int) and total > 0:
+            lines.append(f"昨夜今晨共收录 {total} 篇报道")
+    lines += ["今天的重要科技资讯：", ""]
     for i, (title, note) in enumerate(items[:limit]):
         num = _CIRCLED_NUMS[i] if i < len(_CIRCLED_NUMS) else f"{i + 1}."
         lines.append(f"{num} {title}：{note}" if note else f"{num} {title}")
+    issue = content.get("issue_no")
+    lines += ["", "————————————", f"华军软件园 · 今日早报{f' 第 {issue} 期' if issue else ''}"]
     return "\n".join(lines)
 
 
@@ -302,7 +306,7 @@ def _feishu_sign(secret: str, timestamp: str) -> str:
 def build_payload(provider: str, body_text: str, feishu_secret: str = "") -> dict:
     """按通道包装消息体（纯函数，供测试）。
 
-    飞书通道（2026-09-19 简化改版）：text 消息承载「问候语 + 早报速览 8 条」
+    飞书通道（2026-09-19 简化改版）：text 消息承载「问候语 + 早报速览 10 条」
     文本；签名校验对 text 消息同样生效（timestamp/sign 是机器人级配置）。
     """
     if provider == "feishu":
@@ -341,7 +345,7 @@ def push_report(db: Session | None, content: dict) -> str:
     results: list[str] = []
     for provider, url, secret in targets:
         if provider == "feishu":
-            # 飞书走文本早报（问候语 + 速览 8 条）；远小于 20KB 上限，不裁剪
+            # 飞书走文本早报（问候语 + 速览 10 条）；远小于 20KB 上限，不裁剪
             body_text: str = render_feishu_text(content)
         else:
             body_text = clip_markdown_bytes(render_report_markdown(content))

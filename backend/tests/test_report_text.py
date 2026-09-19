@@ -6,6 +6,7 @@ import hmac as hmac_mod
 import pytest
 
 from app.services.report_push import (
+    _CIRCLED_NUMS,
     _feishu_sign,
     _weekday_cn,
     build_payload,
@@ -240,21 +241,41 @@ def _text_content():
     }
 
 
-def test_feishu_text_greeting_and_brief_lines():
-    """问候语（日期·星期）+「早报速览」+ 事件在前、速览文章接续的带圈序号条目。"""
+def _briefs(text: str) -> list[str]:
+    """提取速览条目行（以带圈序号开头的行），排版调整不影响断言。"""
+    return [ln for ln in text.splitlines() if ln[:1] and ln[:1] in _CIRCLED_NUMS]
+
+
+def test_feishu_text_greeting_layout_and_brief_lines():
+    """排版（2026-09-19 二轮）：刊头三行（问候/日期星期·收录数/引导句）+ 空行
+    + ❶ 条目（事件在前、速览接续、热榜补位）+ 空行 + 分隔线与品牌·期号落款。"""
     text = render_feishu_text(_text_content())
     lines = text.splitlines()
-    assert lines[0] == "早报时间，大家好，现在是 2026 年 9 月 19 日星期六，今天的重要科技资讯有："
-    assert lines[1] == "早报速览"
-    assert lines[2] == "❶ 头条事件标题：多家来源交叉报道该事件"
-    assert lines[3] == "❷ 次级热点标题"  # 无摘要 → 只有标题，不带冒号
-    assert lines[4] == "❸ 速览文章甲：一句话摘要甲"
-    assert lines[5] == "❹ 速览文章乙"
-    assert lines[6] == "❺ 热榜增量文：热榜增量一句话摘要"  # 热榜补位（非事件成员）
+    assert lines[0] == "🌅 早报时间，大家好"
+    assert lines[1] == "现在是 2026 年 9 月 19 日 星期六 · 昨夜今晨共收录 42 篇报道"
+    assert lines[2] == "今天的重要科技资讯："
+    assert lines[3] == ""
+    assert lines[4] == "❶ 头条事件标题：多家来源交叉报道该事件"
+    assert lines[5] == "❷ 次级热点标题"  # 无摘要 → 只有标题，不带冒号
+    assert lines[6] == "❸ 速览文章甲：一句话摘要甲"
+    assert lines[7] == "❹ 速览文章乙"
+    assert lines[8] == "❺ 热榜增量文：热榜增量一句话摘要"  # 热榜补位（非事件成员）
+    assert lines[9] == ""
+    assert lines[10] == "————————————"
+    assert lines[11] == "华军软件园 · 今日早报 第 157 期"
+
+
+def test_feishu_text_bad_date_still_greets():
+    """坏日期：跳过日期行保留问候与引导句，不阻断推送。"""
+    text = render_feishu_text({"date": "not-a-date", "quick_news": [{"id": 1, "title": "A", "summary_short": ""}]})
+    lines = text.splitlines()
+    assert lines[0] == "🌅 早报时间，大家好"
+    assert lines[1] == "今天的重要科技资讯："
+    assert "❶ A" in text
 
 
 def test_feishu_text_fills_to_limit_and_skips_featured():
-    """条目不足 8 条时以热榜 TOP10 增量补位；TOP 事件成员文章（featured_article_ids）
+    """条目不足 10 条时以热榜 TOP10 增量补位；TOP 事件成员文章（featured_article_ids）
     被跳过——同一资讯不以「事件标题 + 成员文章标题」出现两遍。"""
     content = _text_content()
     # 池子只有 1 事件 + 0 速览，热榜 6 篇（前 2 篇是事件成员 101/102）→ 成员剔除后补 4 篇
@@ -263,26 +284,26 @@ def test_feishu_text_fills_to_limit_and_skips_featured():
     content["top_articles"] = [
         {"id": 100 + i, "title": f"热榜文章{i}号", "summary_short": f"摘要{i}。"} for i in range(1, 6)
     ] + [{"id": 999, "title": "热榜文章6号", "summary_short": ""}]
-    text = render_feishu_text(content)
-    lines = text.splitlines()[2:]
-    assert len(lines) == 5  # 1 事件 + 4 篇热榜增量（101/102 成员文被剔除）
-    assert lines[0].startswith("❶ 头条事件标题")
-    assert "热榜文章6号" in lines[-1]
-    assert not any("热榜文章1号" in ln for ln in lines)  # id=101 的事件成员文被跳过
-    assert not any("热榜文章2号" in ln for ln in lines)  # id=102 同理
+    briefs = _briefs(render_feishu_text(content))
+    assert len(briefs) == 5  # 1 事件 + 4 篇热榜增量（101/102 成员文被剔除）
+    assert briefs[0].startswith("❶ 头条事件标题")
+    assert "热榜文章6号" in briefs[-1]
+    assert not any("热榜文章1号" in ln for ln in briefs)  # id=101 的事件成员文被跳过
+    assert not any("热榜文章2号" in ln for ln in briefs)  # id=102 同理
 
 
-def test_feishu_text_capped_at_8():
-    """速览上限 8 条：事件+速览超出时截断，序号恰到 ❽。"""
+def test_feishu_text_capped_at_10():
+    """速览上限 10 条（2026-09-19 由 8 扩为 10，与热榜 TOP10 对齐）：
+    事件+速览超出时截断，序号恰到 ❿。"""
     content = {
         "date": "2026-09-19",
         "top_events": [{"id": i, "title": f"事件{i}", "summary": ""} for i in range(3)],
         "quick_news": [{"id": 100 + i, "title": f"速览{i}", "summary_short": ""} for i in range(9)],
     }
-    lines = render_feishu_text(content).splitlines()[2:]
-    assert len(lines) == 8
-    assert lines[0].startswith("❶ 事件0")
-    assert lines[7].startswith("❽ 速览4")
+    briefs = _briefs(render_feishu_text(content))
+    assert len(briefs) == 10
+    assert briefs[0].startswith("❶ 事件0")
+    assert briefs[9].startswith("❿ 速览6")
 
 
 def test_feishu_text_note_first_sentence_and_clip():
@@ -294,7 +315,7 @@ def test_feishu_text_note_first_sentence_and_clip():
             {"id": 2, "title": "T2", "summary_short": "无句读超长说明" + "细节" * 30},
         ],
     }
-    lines = render_feishu_text(content).splitlines()[2:]
+    lines = _briefs(render_feishu_text(content))
     assert lines[0] == "❶ T1：首句说明"
     assert lines[1].startswith("❷ T2：无句读超长说明")
     assert lines[1].endswith("…")
@@ -311,7 +332,7 @@ def test_feishu_text_note_strips_media_lede():
             {"id": 2, "title": "T2", "summary_short": "快科技 9 月 19 日讯，某厂发布新款处理器。"},
         ],
     }
-    lines = render_feishu_text(content).splitlines()[2:]
+    lines = _briefs(render_feishu_text(content))
     assert lines[0] == "❶ T1：微软将调整关机策略"
     assert lines[1] == "❷ T2：某厂发布新款处理器"
 
@@ -325,7 +346,7 @@ def test_feishu_text_note_shell_exhausted_drops_note():
              "summary_short": "IT之家 9 月 18 日消息，科技媒体 Windows Latest 今天（9 月 18 日）发布博文，通过挖掘微软"},
         ],
     }
-    lines = render_feishu_text(content).splitlines()[2:]
+    lines = _briefs(render_feishu_text(content))
     assert lines[0] == "❶ T1"  # 说明放弃，不带冒号
 
 
@@ -337,7 +358,7 @@ def test_feishu_text_note_keeps_normal_statement():
             {"id": 1, "title": "T1", "summary_short": "微软表示，将继续支持 Win10 到明年十月。"},
         ],
     }
-    lines = render_feishu_text(content).splitlines()[2:]
+    lines = _briefs(render_feishu_text(content))
     assert lines[0] == "❶ T1：微软表示，将继续支持 Win10 到明年十月"
 
 
@@ -353,16 +374,9 @@ def test_feishu_text_event_template_summary_becomes_counts():
              "summary": "围绕「单来源事件」共有 1 篇报道。"},
         ],
     }
-    lines = render_feishu_text(content).splitlines()[2:]
+    lines = _briefs(render_feishu_text(content))
     assert lines[0] == "❶ 某热点事件：聚合 3 篇，2 家来源交叉报道"
     assert lines[1] == "❷ 单来源事件：聚合 1 篇"  # 单来源不标交叉
-
-
-def test_feishu_text_bad_date_still_greets():
-    """坏日期：问候语退化为不带日期的版本，不阻断推送。"""
-    text = render_feishu_text({"date": "not-a-date", "quick_news": [{"id": 1, "title": "A", "summary_short": ""}]})
-    assert text.splitlines()[0] == "早报时间，大家好，今天的重要科技资讯有："
-    assert "❶ A" in text
 
 
 # ———— 企微 markdown 字节上限守卫（2026-09-10 审计） ————
