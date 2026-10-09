@@ -58,7 +58,8 @@ CSV_HEADERS = [
 
 # 明细流水允许的过滤值（API 层校验 pattern 由此拼装，勿在端点另写死一份）。
 # conn_test：运维页「测试连接」按钮的真实 API 调用——同样烧 token，必须落账。
-LOG_TASK_TYPES = ("summary", "event_summary", "embedding", "report", "conn_test")
+# article：文章草稿生成（article_gen_service）
+LOG_TASK_TYPES = ("summary", "event_summary", "embedding", "report", "conn_test", "article", "site_article")
 LOG_STATUSES = ("success", "parse_fail", "api_fail")
 
 # 单价防呆上限（元/百万 token）。最贵商用模型也在千元级；超过即几乎必是

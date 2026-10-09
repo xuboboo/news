@@ -81,6 +81,11 @@ const FIELD_LABELS: Record<string, string> = {
   report_push_feishu_secret: '飞书签名密钥（未开启校验留空）',
   ai_daily_cost_budget: 'AI 日成本预算（元，0 = 不告警）',
   ai_usage_retention_days: 'AI 流水保留（天，0 = 永久）',
+  article_gen_enabled: '公众号/网站文章生成总开关',
+  article_gen_model: '文章生成模型（两板块共用，留空跟随主 LLM）',
+  article_gen_hourly_limit: '两板块合计：单用户每小时生成上限（次，0 = 不限）',
+  article_gen_max_sources: '事件生文素材篇数上限',
+  article_gen_max_source_chars: '单篇素材正文截断（字符）',
 };
 
 const SENSITIVE = new Set([
@@ -112,6 +117,9 @@ const NUMERIC_RULES: Record<string, { min: number; max: number }> = {
   stats_heal_batch: { min: 0, max: 50 },
   ai_daily_cost_budget: { min: 0, max: 100000 },
   ai_usage_retention_days: { min: 0, max: 3650 },
+  article_gen_hourly_limit: { min: 0, max: 500 },
+  article_gen_max_sources: { min: 1, max: 10 },
+  article_gen_max_source_chars: { min: 1000, max: 8000 },
 };
 
 const WEBHOOK_STYLES: { value: string; label: string }[] = [
@@ -192,6 +200,17 @@ const GROUPS: { title: string; hint: string; keys: string[]; resettable?: boolea
     title: 'AI 成本治理',
     hint: '日预算超限经告警 webhook 推送（0 = 关闭，北京时间日界）；成本看板流水保留天数超期由周清理删除（0 = 永久保留，归档请先用看板导出 CSV）',
     keys: ['ai_daily_cost_budget', 'ai_usage_retention_days'],
+  },
+  {
+    title: '文章生成（草稿）',
+    hint: '「AI 生成文章」链路总开关与素材控制；每用户每小时派发上限防止 token 失控（0 = 不限），模型留空跟随主 LLM（建议上下文 ≥32k）',
+    keys: [
+      'article_gen_enabled',
+      'article_gen_model',
+      'article_gen_hourly_limit',
+      'article_gen_max_sources',
+      'article_gen_max_source_chars',
+    ],
   },
 ];
 

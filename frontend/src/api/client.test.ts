@@ -69,6 +69,7 @@ import {
   bootstrapFromApi,
   eventById,
   eventsForArticle,
+  fetchArticleById,
   loadMoreArticles,
   loadMoreEvents,
   ARTICLES_WITH_SCORE,
@@ -79,6 +80,22 @@ async function boot() {
   const ok = await bootstrapFromApi();
   expect(ok).toBe(true);
 }
+
+describe('fetchArticleById', () => {
+  it('loads an article by stable ID independently of the latest-list cache', async () => {
+    const old = { ...ARTICLE_1, id: 902, title: '旧文章' };
+    fetchMock.mockResolvedValueOnce(jsonResponse(old));
+    const article = await fetchArticleById(902);
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/v2/article/902'), expect.anything());
+    expect(article.id).toBe('902');
+    expect(article.title).toBe('旧文章');
+  });
+
+  it('preserves 404 status for cleaned source handling', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 404 } as Response);
+    await expect(fetchArticleById(902)).rejects.toMatchObject({ status: 404 });
+  });
+});
 
 describe('mapApiArticle（经 bootstrapFromApi 水合）', () => {
   it('保留后端 event_ids 与 ai_status', async () => {

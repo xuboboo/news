@@ -7,6 +7,10 @@ import Latest from './pages/Latest';
 import Events from './pages/Events';
 import EventDetail from './pages/EventDetail';
 import DailyReport from './pages/DailyReport';
+import Drafts from './pages/Drafts';
+import DraftDetail from './pages/DraftDetail';
+import SiteDrafts from './pages/SiteDrafts';
+import SiteDraftDetail from './pages/SiteDraftDetail';
 import Admin from './pages/Admin';
 import Usage from './pages/Usage';
 import Login from './pages/Login';
@@ -40,6 +44,10 @@ export default function App() {
           <Route path="/events" element={bound('热点事件', <Events />)} />
           <Route path="/events/:id" element={bound('事件详情', <EventDetail />)} />
           <Route path="/report" element={bound('今日早报', <DailyReport />)} />
+          <Route path="/drafts" element={bound('文章草稿', <Drafts />)} />
+          <Route path="/drafts/:id" element={bound('草稿详情', <DraftDetail />)} />
+          <Route path="/site-drafts" element={bound('网站资讯稿', <SiteDrafts />)} />
+          <Route path="/site-drafts/:id" element={bound('网站资讯稿详情', <SiteDraftDetail />)} />
           <Route path="/account" element={bound('账号设置', <Account />)} />
           <Route path="/users" element={bound('用户与租户', <Users />)} />
           <Route path="/audit" element={bound('审计日志', <Audit />)} />

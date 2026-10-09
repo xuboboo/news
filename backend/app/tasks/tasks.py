@@ -6,6 +6,9 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
+from billiard.exceptions import WorkerLostError
+from celery.signals import task_failure
+
 from app.ai.embedding import EmbeddingError
 from app.core.db import new_session
 from app.services.embedding_service import generate_embedding
@@ -245,6 +248,168 @@ def report_catchup_task(trigger: str = "auto"):
             return {"backfilled": [d.isoformat() for d in missing]}
         finally:
             db.close()
+
+
+@celery_app.task(name="article_gen_task", bind=True, max_retries=120)
+def article_gen_task(self, draft_id: int, trigger: str = "manual", generation: int | None = None):
+    """文章生成任务：AI 根据选题（事件/单篇资讯）撰写完整文章草稿。
+
+    不记 task_run（同 summary_task 的逐篇口径）：成败都落在 article_draft 行
+    （status/error），前端草稿页直接可见；用量走 task_type=article 成本流水。
+    服务层正常路径下所有失败都会落 failed；这里再兜一层「非预期异常」
+    （DB 故障/代码 bug 等）：显式代次任务通过同稿锁确认无正常生成者后
+    才标记失败，否则延迟确认；无法恢复时仍保留超时人工重试入口。
+    """
+    from app.services.article_gen_service import generate_article_for_draft
+
+    db = new_session()
+    try:
+        ok, err = generate_article_for_draft(db, draft_id, trigger=trigger, generation=generation)
+        if err == "another generation in flight":
+            # 旧任务仍在执行时不能丢弃新一代；待其释放锁后重新核对代数。
+            # 重试异常不可落入下方 crash-mark，否则会把新任务错误标记失败。
+            db.rollback()
+        else:
+            return {"draft_id": draft_id, "ok": ok, "error": err}
+    except Exception as exc:
+        logger.exception("article_gen_task crashed: draft_id=%s", draft_id)
+        try:
+            db.rollback()
+        except Exception:
+            logger.exception("article_gen_task rollback failed: draft_id=%s", draft_id)
+        # A duplicate may crash while the legitimate owner is still generating.
+        # Use the same advisory-lock and generation fences as retry exhaustion;
+        # never overwrite that owner's result from an unlocked crash handler.
+        if generation is not None:
+            from app.services.article_draft_recovery import recover_failed_generation
+
+            recover_failed_generation(draft_id, generation, f"生成任务异常：{exc}")
+        else:
+            logger.warning("article_gen_task crashed without explicit generation: draft_id=%s", draft_id)
+        raise
+    finally:
+        db.close()
+    # 释放数据库会话后再重投，避免事务锁在排队期间被持有。
+    # Exhaustion is not proof that the generation owner is dead. Recovery takes the
+    # same advisory lock as legitimate generation before changing this generation.
+    from celery.exceptions import MaxRetriesExceededError
+
+    try:
+        raise self.retry(countdown=30)
+    except MaxRetriesExceededError as exc:
+        error = "同稿生成锁等待重试次数已耗尽，请重新生成"
+        from app.services.article_draft_recovery import recover_failed_generation
+
+        if generation is not None:
+            recover_failed_generation(draft_id, generation, error)
+        raise exc
+
+
+@celery_app.task(name="site_article_gen_task", bind=True, max_retries=120)
+def site_article_gen_task(self, draft_id: int, trigger: str = "manual", generation: int | None = None):
+    """网站资讯文章生成任务；与公众号任务共享并发恢复边界但使用独立提示词。"""
+    from app.services.site_article_gen_service import generate_site_article_for_draft
+
+    db = new_session()
+    try:
+        ok, err = generate_site_article_for_draft(db, draft_id, trigger=trigger, generation=generation)
+        if err == "another generation in flight":
+            db.rollback()
+        else:
+            return {"draft_id": draft_id, "ok": ok, "error": err}
+    except Exception as exc:
+        logger.exception("site_article_gen_task crashed: draft_id=%s", draft_id)
+        try:
+            db.rollback()
+        except Exception:
+            logger.exception("site_article_gen_task rollback failed: draft_id=%s", draft_id)
+        if generation is not None:
+            from app.services.article_draft_recovery import recover_failed_generation
+            recover_failed_generation(draft_id, generation, f"网站文章生成任务异常：{exc}")
+        else:
+            logger.warning("site_article_gen_task crashed without explicit generation: draft_id=%s", draft_id)
+        raise
+    finally:
+        db.close()
+    from celery.exceptions import MaxRetriesExceededError
+    try:
+        raise self.retry(countdown=30)
+    except MaxRetriesExceededError as exc:
+        if generation is not None:
+            from app.services.article_draft_recovery import recover_failed_generation
+            recover_failed_generation(draft_id, generation, "网站文章生成锁等待重试次数已耗尽，请重新生成")
+        raise exc
+
+
+@celery_app.task(name="article_draft_queue_recovery_task")
+def article_draft_queue_recovery_task():
+    """重新派发超时仍在生成的草稿，修复提交与 Redis 入队之间的消息丢失窗口。"""
+    from app.models.article_draft import ArticleDraft
+    from app.tasks.tasks import article_gen_task, site_article_gen_task
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=20)
+    db = new_session()
+    recovered = 0
+    try:
+        rows = (db.query(ArticleDraft)
+                .filter(ArticleDraft.status == "generating", ArticleDraft.updated_at < cutoff)
+                .order_by(ArticleDraft.updated_at.asc()).limit(100).all())
+        for row in rows:
+            generation = row.gen_count or 1
+            task = site_article_gen_task if row.channel == "site" else article_gen_task
+            try:
+                task.delay(row.id, trigger="queue_recovery", generation=generation)
+            except Exception:
+                logger.exception("article draft queue recovery dispatch failed: draft_id=%s", row.id)
+                continue
+            # 延长下一次扫描间隔；正在运行的生成由 advisory lock 防止重复执行。
+            row.updated_at = datetime.now(timezone.utc)
+            recovered += 1
+        if recovered:
+            db.commit()
+        return {"requeued": recovered}
+    finally:
+        db.close()
+
+
+@celery_app.task(name="article_gen_failure_confirm_task")
+def article_gen_failure_confirm_task(draft_id: int, generation: int, error: str):
+    """One delayed, generation-fenced check after a competing task's hard limit."""
+    from app.services.article_draft_recovery import mark_failed_if_unowned
+
+    try:
+        changed = mark_failed_if_unowned(draft_id, generation, error)
+        return {"draft_id": draft_id, "generation": generation, "marked_failed": changed}
+    except Exception:
+        logger.exception(
+            "article generation failure confirmation failed: draft_id=%s generation=%s",
+            draft_id, generation,
+        )
+        return {"draft_id": draft_id, "generation": generation, "marked_failed": False}
+
+
+def _article_generation_worker_lost(sender=None, task_id=None, exception=None,
+                                    args=None, kwargs=None, **_extra):
+    """Recover only article-generation child losses in Celery's worker parent."""
+    if getattr(sender, "name", None) not in {"article_gen_task", "site_article_gen_task"} or not isinstance(exception, WorkerLostError):
+        return
+    kwargs = kwargs or {}
+    generation = kwargs.get("generation")
+    draft_id = kwargs.get("draft_id")
+    if draft_id is None and args:
+        draft_id = args[0]
+    if generation is None or draft_id is None:
+        logger.warning("article worker lost without explicit generation: task_id=%s", task_id)
+        return
+    from app.services.article_draft_recovery import recover_failed_generation
+
+    recover_failed_generation(
+        int(draft_id), int(generation),
+        f"文章生成子进程意外退出（Celery WorkerLostError，task_id={task_id or 'unknown'}）",
+    )
+
+
+task_failure.connect(_article_generation_worker_lost, weak=False)
 
 
 @celery_app.task(name="alert_watch_task")

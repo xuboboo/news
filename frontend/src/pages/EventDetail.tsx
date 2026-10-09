@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Clock3, Newspaper, TrendingUp, ArrowRight } from 'lucide-react';
+import { ArrowLeft, Clock3, Newspaper, TrendingUp, ArrowRight, PenSquare } from 'lucide-react';
 import { apiMode, eventById, fetchEventById, type EventWithScore } from '../api/client';
 import { activateOnKey, useBootstrapReady, useDataVersion, usePageTitle, useTick } from '../utils/hooks';
 import { ArticleWithScore } from '../types';
 import ArticleModal from '../components/ArticleModal';
 import { EventStatusTag } from '../components/ArticleModal';
+import { createDraft, type DraftTier } from '../api/drafts';
+import { createSiteDraft } from '../api/siteDrafts';
 import {
   AiBadge,
   ChannelTag,
@@ -25,9 +27,75 @@ export default function EventDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [selected, setSelected] = useState<ArticleWithScore | null>(null);
+  // AI 生成文章：tier 版本选择 + 提交状态
+  const [genTier, setGenTier] = useState<DraftTier>('brief');
+  const [pendingCreations, setPendingCreations] = useState<Record<string, 'wechat' | 'site'>>({});
+  const pendingCreationsRef = useRef(new Map<string, number>());
+  const mountedRef = useRef(true);
+  const [genError, setGenError] = useState<{ id: string; message: string } | null>(null);
+  const generationRequest = useRef(0);
   const bootReady = useBootstrapReady();
   const dataVer = useDataVersion();
   useTick(); // 时间线与“最近更新”相对时间自动跳动
+
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    generationRequest.current += 1;
+    return () => {
+      mountedRef.current = false;
+      generationRequest.current += 1;
+    };
+  }, [id]);
+
+  const beginCreation = (eventId: string, channel: 'wechat' | 'site') => {
+    if (pendingCreationsRef.current.has(eventId)) return null;
+    const requestId = ++generationRequest.current;
+    pendingCreationsRef.current.set(eventId, requestId);
+    setPendingCreations((previous) => ({ ...previous, [eventId]: channel }));
+    setGenError(null);
+    return requestId;
+  };
+  const finishCreation = (eventId: string, requestId: number) => {
+    if (pendingCreationsRef.current.get(eventId) !== requestId) return;
+    pendingCreationsRef.current.delete(eventId);
+    if (!mountedRef.current) return;
+    setPendingCreations((previous) => {
+      if (!(eventId in previous)) return previous;
+      const next = { ...previous };
+      delete next[eventId];
+      return next;
+    });
+  };
+
+  const generateArticle = async () => {
+    if (!event) return;
+    const requestedEventId = event.id;
+    const requestId = beginCreation(requestedEventId, 'wechat');
+    if (requestId === null) return;
+    try {
+      const d = await createDraft('event', requestedEventId, genTier);
+      if (generationRequest.current === requestId) navigate(`/drafts/${d.id}`);
+    } catch (e) {
+      if (generationRequest.current === requestId) setGenError({ id: requestedEventId, message: (e as Error).message || String(e) });
+    } finally {
+      finishCreation(requestedEventId, requestId);
+    }
+  };
+
+  const generateSiteArticle = async () => {
+    if (!event) return;
+    const requestedEventId = event.id;
+    const requestId = beginCreation(requestedEventId, 'site');
+    if (requestId === null) return;
+    try {
+      const d = await createSiteDraft('event', requestedEventId, genTier);
+      if (generationRequest.current === requestId) navigate(`/site-drafts/${d.id}`);
+    } catch (e) {
+      if (generationRequest.current === requestId) setGenError({ id: requestedEventId, message: (e as Error).message || String(e) });
+    } finally {
+      finishCreation(requestedEventId, requestId);
+    }
+  };
 
   // dataVer：后台同步拉到新数据后重新查询（含首次引导完成的那次通知）
   // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVer 变化触发重算
@@ -36,22 +104,31 @@ export default function EventDetail() {
   // 兜底状态携带所属路由 id 并派生生效范围——路由参数变化时组件实例被复用
   // （key 是常量页名），派生条件自动失效回退"未拉取"，不会把上一个事件的
   // 兜底数据渲染在当前 URL 下（shouldFetch 也会重新放行补拉）
-  const [fetched, setFetched] = useState<{ id: string; ev: EventWithScore | null } | null>(null);
-  const fetchedEvent = fetched && fetched.id === id ? fetched.ev : null;
+  const [fetchAttempt, setFetchAttempt] = useState(0);
+  const [fetched, setFetched] = useState<{
+    id: string; ev: EventWithScore | null; error: string; status?: number; attempt: number;
+  } | null>(null);
+  const fetchedForId = fetched && fetched.id === id ? fetched : null;
+  const fetchedEvent = fetchedForId?.ev ?? null;
   const event = cachedEvent ?? fetchedEvent ?? undefined;
-  const shouldFetch = bootReady && !!id && !cachedEvent && fetched?.id !== id;
+  const shouldFetch = bootReady && !!id && !cachedEvent &&
+    (!fetchedForId || fetchedForId.attempt !== fetchAttempt);
 
   useEffect(() => {
     if (!shouldFetch || !apiMode || !id) return;
     let cancelled = false;
-    // ev 为 null = 拉取失败（fetchFailed 由上方派生得出），不再重复请求
-    fetchEventById(id).then((ev) => {
-      if (!cancelled) setFetched({ id, ev });
-    });
+    const attempt = fetchAttempt;
+    fetchEventById(id)
+      .then((ev) => {
+        if (!cancelled) setFetched({ id, ev, error: '', attempt });
+      })
+      .catch((e: Error & { status?: number }) => {
+        if (!cancelled) setFetched({ id, ev: null, error: e.message || String(e), status: e.status, attempt });
+      });
     return () => {
       cancelled = true;
     };
-  }, [shouldFetch, id, fetched]);
+  }, [shouldFetch, id, fetched, fetchAttempt]);
 
   usePageTitle(event ? event.title : '事件详情');
 
@@ -61,6 +138,16 @@ export default function EventDetail() {
 
   if (!event) {
     if (shouldFetch && apiMode) return <Loading />;
+    if (fetchedForId?.error && fetchedForId.status !== 404) {
+      return (
+        <div className="card py-20 text-center">
+          <div className="text-sm text-red-300 mb-4">事件详情加载失败：{fetchedForId.error}</div>
+          <button onClick={() => setFetchAttempt((attempt) => attempt + 1)} className="chip bg-accent/15 text-accent border border-accent/40 px-4 py-2">
+            重试
+          </button>
+        </div>
+      );
+    }
     return (
       <div className="card py-20 text-center">
         <div className="text-sm text-slate-400 mb-4">未找到该热点事件</div>
@@ -125,10 +212,42 @@ export default function EventDetail() {
         <div className="lg:col-span-2 space-y-4">
           {/* AI 总结 */}
           <section className="rounded-xl border border-cyan-400/15 bg-cyan-400/[0.04] p-5">
-            <div className="flex items-center gap-2 mb-3">
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
               <AiBadge label="AI 事件总结" />
               <span className="text-[11px] text-slate-500">基于 {articleCount} 篇报道交叉聚合</span>
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                <select
+                  value={genTier}
+                  onChange={(e) => setGenTier(e.target.value as DraftTier)}
+                  className="rounded-lg border border-radar-border bg-radar-panel px-2 py-1.5 text-xs text-slate-300 outline-none focus:border-accent/60 cursor-pointer"
+                  aria-label="选择文章版本"
+                >
+                  <option value="brief">快讯版</option>
+                  <option value="depth">深度版</option>
+                </select>
+                <button
+                  onClick={() => void generateSiteArticle()}
+                  disabled={!!pendingCreations[event.id] || !apiMode}
+                  className="inline-flex items-center gap-1.5 text-xs text-emerald-300 border border-emerald-400/40 hover:bg-emerald-400/10 rounded-lg px-3 py-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                  title="生成独立的网站资讯稿，包含页面关键字、标签和内容简介"
+                >
+                  <PenSquare className="h-3.5 w-3.5" /> {pendingCreations[event.id] === 'site' ? '创建中…' : '生成网站稿'}
+                </button>
+                <button
+                  onClick={() => void generateArticle()}
+                  disabled={!!pendingCreations[event.id] || !apiMode}
+                  className="inline-flex items-center gap-1.5 text-xs text-accent border border-accent/40 hover:bg-accent/10 rounded-lg px-3 py-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                  title="基于该事件的多来源报道生成可编辑公众号草稿"
+                >
+                  <PenSquare className="h-3.5 w-3.5" /> {pendingCreations[event.id] === 'wechat' ? '创建中…' : '生成公众号稿'}
+                </button>
+              </div>
             </div>
+            {genError?.id === event.id && (
+              <div role="alert" className="mb-3 text-xs text-red-300 border border-red-400/25 bg-red-500/5 rounded-lg px-3 py-2">
+                {genError.message}
+              </div>
+            )}
             <p className="text-sm text-slate-200 leading-relaxed">{event.summary}</p>
             <div className="mt-4 pt-4 border-t border-radar-border">
               <div className="text-[11px] font-medium text-slate-400 mb-2">核心影响</div>
@@ -270,6 +389,14 @@ export default function EventDetail() {
           onOpenEvent={(eventId) => {
             setSelected(null);
             navigate(`/events/${eventId}`);
+          }}
+          onOpenDraft={(draftId) => {
+            setSelected(null);
+            navigate(`/drafts/${draftId}`);
+          }}
+          onOpenSiteDraft={(draftId) => {
+            setSelected(null);
+            navigate(`/site-drafts/${draftId}`);
           }}
         />
       )}

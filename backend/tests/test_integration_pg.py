@@ -35,6 +35,7 @@ pytestmark = pytest.mark.skipif(
 
 TABLES = (
     "article", "article_summary", "event", "event_article", "daily_report",
+    "article_draft",
     "ai_usage_log", "model_price", "system_setting", "task_run",
 )
 

@@ -65,6 +65,13 @@ class Settings(BaseSettings):
     ai_daily_cost_budget: float = 0.0    # 单日（北京时间日界）AI 成本预算（元）；0 = 不告警
     ai_usage_retention_days: int = 365   # ai_usage_log 流水保留天数；0 = 永久保留
 
+    # —— 文章生成（草稿域；面板可热调） ——
+    article_gen_enabled: bool = True     # 总开关：关闭后生成/重新生成接口一律 403
+    article_gen_model: str = ""          # 留空跟随主 LLM 模型；可指定便宜模型（文章 token 远大于摘要）
+    article_gen_hourly_limit: int = 30   # 单用户每小时生成派发上限（按审计派发计数，新旧草稿都算）；0 = 不限
+    article_gen_max_sources: int = 6     # 事件生文取成员报道上限（每篇都进 prompt，量大费 token）
+    article_gen_max_source_chars: int = 4000  # 每篇素材正文的截断长度
+
     # —— 安全 ——
     cors_origins: str = "http://localhost,http://127.0.0.1"  # 允许跨域的前端来源（逗号分隔）
     # 主机名精确白名单（逗号分隔，如 "embedding"）：仅这些主机的 AI/Webhook 地址豁免

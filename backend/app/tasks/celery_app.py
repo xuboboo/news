@@ -36,6 +36,10 @@ celery_app.conf.update(
     task_routes={
         "summary_task": {"queue": "ai"},
         "embedding_task": {"queue": "ai"},
+        "article_gen_task": {"queue": "ai"},
+        "site_article_gen_task": {"queue": "ai"},
+        "article_gen_failure_confirm_task": {"queue": "ai"},
+        "article_draft_queue_recovery_task": {"queue": "default"},
     },
     # 定时任务（文章采集由常驻 crawler 服务循环执行，此处不再重复调度）
     beat_schedule={
@@ -65,6 +69,10 @@ celery_app.conf.update(
         "alert-watch-every-5min": {
             "task": "alert_watch_task",
             "schedule": crontab(minute="*/5"),
+        },
+        "article-draft-queue-recovery-every-10min": {
+            "task": "article_draft_queue_recovery_task",
+            "schedule": crontab(minute="*/10"),
         },
         # 每周一 03:30（北京时间）：清理过期会话与超保留期审计日志
         "auth-cleanup-weekly": {

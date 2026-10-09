@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app.api.v2 import audit, public, users
+from app.api.v2 import audit, drafts, public, site_drafts, users
 from app.api.v2.admin import router as admin_router
 from app.api.v2.auth import router as auth_router
 from app.api.v2.routes import router
@@ -26,6 +26,7 @@ def init_db() -> None:
     """
     from app.models import (  # noqa: F401 确保模型注册
         article,
+        article_draft,
         event,
         report,
         setting,
@@ -59,6 +60,8 @@ def init_db() -> None:
         # 成本看板（2026-09-09）：价目缓存价（NULL=按输入价全价计）+ 明细按任务×时间复合索引
         conn.execute(text("ALTER TABLE model_price ADD COLUMN IF NOT EXISTS price_cache NUMERIC(12, 4) NULL"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_ai_usage_log_task_created ON ai_usage_log (task_type, created_at)"))
+        from app.services.article_draft_schema import upgrade_article_draft_columns
+        upgrade_article_draft_columns(conn)
 
 
 def bootstrap_admin() -> None:
@@ -167,6 +170,10 @@ async def _audit_access_denied(request: Request, exc: HTTPException):
 app.include_router(public.router)
 # 业务数据接口：全站强制登录（含 stats/热榜/最新/文章/事件/早报 + 运维触发）
 app.include_router(router, dependencies=[Depends(require_user)])
+# 文章草稿：选题 → AI 生成 → 编辑 → 复制发布（全员共享，require_user 即可）
+app.include_router(drafts.router, dependencies=[Depends(require_user)])
+# 网站资讯草稿：与公众号草稿独立，字段和提示词面向网站 CMS/SEO
+app.include_router(site_drafts.router, dependencies=[Depends(require_user)])
 # 认证：登录/登出/me/改密/我的会话
 app.include_router(auth_router)
 # 租户与用户管理（内部按角色鉴权）

@@ -1,5 +1,5 @@
-import { X, Eye, MessageSquare, Share2, ThumbsUp, ExternalLink, Link2, Zap } from 'lucide-react';
-import { useRef } from 'react';
+import { X, Eye, MessageSquare, Share2, ThumbsUp, ExternalLink, Link2, Zap, PenSquare, Globe2 } from 'lucide-react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { ArticleWithScore, EventStatus } from '../types';
 import {
   AiBadge,
@@ -10,16 +10,23 @@ import {
 import { dateLabel, formatCount, fullTime, timeAgo } from '../utils/format';
 import { safeExternalUrl } from '../utils/url';
 import { ARTICLES_WITH_SCORE, eventsForArticle } from '../api/client';
+import { createDraft } from '../api/drafts';
+import { createSiteDraft } from '../api/siteDrafts';
 import { useModalA11y } from '../utils/hooks';
 
 export default function ArticleModal({
   article: propArticle,
   onClose,
   onOpenEvent,
+  onOpenDraft,
+  onOpenSiteDraft,
 }: {
   article: ArticleWithScore;
   onClose: () => void;
   onOpenEvent: (eventId: string) => void;
+  /** 点击「生成文章」并成功建稿后回调（缺省 = 不展示入口，如早报页等无路由场景） */
+  onOpenDraft?: (draftId: number) => void;
+  onOpenSiteDraft?: (draftId: number) => void;
 }) {
   // 按.id 重查最新数据：后台 60s 刷新后父页面 state 里的对象快照会过期
   // （阅读数/摘要不更新甚至文章已滚出列表），以最新数据为准
@@ -32,6 +39,70 @@ export default function ArticleModal({
   const safeUrl = safeExternalUrl(article.url);
   // 记录 mousedown 是否起始于遮罩自身：从弹窗内拖选文本到外部松开不应误关
   const downOnOverlay = useRef(false);
+  // AI 生成文章（单篇选题，默认快讯版）：成功即跳转草稿详情
+  const [pendingCreations, setPendingCreations] = useState<Record<string, 'wechat' | 'site'>>({});
+  const pendingCreationsRef = useRef(new Map<string, number>());
+  const mountedRef = useRef(true);
+  const [genError, setGenError] = useState<{ id: string; message: string } | null>(null);
+  const generationRequest = useRef(0);
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    generationRequest.current += 1;
+    return () => {
+      mountedRef.current = false;
+      generationRequest.current += 1;
+    };
+  }, [article.id]);
+
+  const beginCreation = (sourceId: string, channel: 'wechat' | 'site') => {
+    if (pendingCreationsRef.current.has(sourceId)) return null;
+    const requestId = ++generationRequest.current;
+    pendingCreationsRef.current.set(sourceId, requestId);
+    setPendingCreations((previous) => ({ ...previous, [sourceId]: channel }));
+    setGenError(null);
+    return requestId;
+  };
+  const finishCreation = (sourceId: string, requestId: number) => {
+    if (pendingCreationsRef.current.get(sourceId) !== requestId) return;
+    pendingCreationsRef.current.delete(sourceId);
+    if (!mountedRef.current) return;
+    setPendingCreations((previous) => {
+      if (!(sourceId in previous)) return previous;
+      const next = { ...previous };
+      delete next[sourceId];
+      return next;
+    });
+  };
+
+  const generateArticle = async () => {
+    if (!onOpenDraft) return;
+    const requestedArticleId = article.id;
+    const requestId = beginCreation(requestedArticleId, 'wechat');
+    if (requestId === null) return;
+    try {
+      const d = await createDraft('article', Number(requestedArticleId), 'brief');
+      if (generationRequest.current === requestId) onOpenDraft(d.id);
+    } catch (e) {
+      if (generationRequest.current === requestId) setGenError({ id: requestedArticleId, message: (e as Error).message || String(e) });
+    } finally {
+      finishCreation(requestedArticleId, requestId);
+    }
+  };
+
+  const generateSiteArticle = async () => {
+    if (!onOpenSiteDraft) return;
+    const requestedArticleId = article.id;
+    const requestId = beginCreation(requestedArticleId, 'site');
+    if (requestId === null) return;
+    try {
+      const d = await createSiteDraft('article', Number(requestedArticleId), 'brief');
+      if (generationRequest.current === requestId) onOpenSiteDraft(d.id);
+    } catch (e) {
+      if (generationRequest.current === requestId) setGenError({ id: requestedArticleId, message: (e as Error).message || String(e) });
+    } finally {
+      finishCreation(requestedArticleId, requestId);
+    }
+  };
 
   return (
     <div
@@ -63,7 +134,27 @@ export default function ArticleModal({
             </div>
             <h2 className="text-lg font-semibold text-slate-100 leading-snug">{article.title}</h2>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 flex-wrap justify-end shrink-0">
+            {onOpenDraft && (
+              <button
+                onClick={() => void generateArticle()}
+                disabled={!!pendingCreations[article.id]}
+                className="inline-flex items-center gap-1.5 text-xs text-accent hover:text-slate-200 border border-accent/30 hover:border-accent/60 rounded-lg px-3 py-1.5 transition-colors"
+                title="基于该资讯生成公众号文章草稿"
+              >
+                <PenSquare className="h-3.5 w-3.5" /> {pendingCreations[article.id] === 'wechat' ? '创建中…' : '生成公众号稿'}
+              </button>
+            )}
+            {onOpenSiteDraft && (
+              <button
+                onClick={() => void generateSiteArticle()}
+                disabled={!!pendingCreations[article.id]}
+                className="inline-flex items-center gap-1.5 text-xs text-emerald-300 hover:text-slate-200 border border-emerald-400/30 hover:border-emerald-400/60 rounded-lg px-3 py-1.5 transition-colors"
+                title="生成独立的网站资讯稿，包含 SEO 字段"
+              >
+                <Globe2 className="h-3.5 w-3.5" /> {pendingCreations[article.id] === 'site' ? '创建中…' : '生成网站稿'}
+              </button>
+            )}
             {safeUrl && (
               <a
                 href={safeUrl}
@@ -87,6 +178,11 @@ export default function ArticleModal({
         </div>
 
         <div className="px-6 py-5 space-y-5">
+          {genError?.id === article.id && (
+            <div role="alert" className="text-xs text-red-300 border border-red-400/25 bg-red-500/5 rounded-lg px-3 py-2">
+              {genError.message}
+            </div>
+          )}
           {/* 元信息 */}
           {/* 元信息：互动芯片有值才显示（阅读/分享暂无公开数据源恒为 0） */}
           <div className="flex items-center gap-5 text-xs text-slate-500">

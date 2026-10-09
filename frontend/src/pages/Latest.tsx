@@ -52,13 +52,17 @@ export default function Latest() {
   // exhaustedAt 记录在哪一轮数据版本（dataVer）耗尽：新数据回流后自动视为可再加载
   const [loadingMore, setLoadingMore] = useState(false);
   const [exhaustedAt, setExhaustedAt] = useState<number | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState('');
   const exhausted = exhaustedAt === dataVer;
   const onLoadMore = async () => {
     if (loadingMore || exhausted) return;
     setLoadingMore(true);
     try {
       const added = await loadMoreArticles();
+      setLoadMoreError('');
       if (added === 0) setExhaustedAt(dataVer);
+    } catch (e) {
+      setLoadMoreError((e as Error).message || String(e));
     } finally {
       setLoadingMore(false);
     }
@@ -240,7 +244,8 @@ export default function Latest() {
       ))}
 
       {/* 加载更多（offset 分页；后端 total 未全部加载时展示） */}
-      {filtered.length > 0 && !exhausted && (
+      {loadMoreError && <div className="text-center text-xs text-red-300 mb-3">加载失败：{loadMoreError}</div>}
+      {!exhausted && (
         <div className="flex justify-center mb-6 print:hidden">
           <button
             onClick={() => void onLoadMore()}
@@ -276,6 +281,14 @@ export default function Latest() {
           onOpenEvent={(id) => {
             setSelected(null);
             navigate(`/events/${id}`);
+          }}
+          onOpenDraft={(draftId) => {
+            setSelected(null);
+            navigate(`/drafts/${draftId}`);
+          }}
+          onOpenSiteDraft={(draftId) => {
+            setSelected(null);
+            navigate(`/site-drafts/${draftId}`);
           }}
         />
       )}

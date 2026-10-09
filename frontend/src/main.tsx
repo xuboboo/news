@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { HashRouter } from 'react-router-dom';
+import { createHashRouter, RouterProvider } from 'react-router-dom';
 import App from './App';
 import { startBootstrap, apiMode, startAutoRefresh } from './api/client';
 import './theme'; // 渲染前应用主题（兜底 index.html pre-paint 脚本未生效的场景）
@@ -8,11 +8,10 @@ import './index.css';
 
 async function start() {
   // 立即渲染首屏（骨架态），数据在后台引导，避免白屏等待后端
+  const router = createHashRouter([{ path: '*', element: <App /> }]);
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-      <HashRouter>
-        <App />
-      </HashRouter>
+      <RouterProvider router={router} />
     </React.StrictMode>
   );
 

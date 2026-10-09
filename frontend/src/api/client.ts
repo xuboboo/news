@@ -548,22 +548,25 @@ export function eventsForArticle(
   return EVENTS_WITH_SCORE.filter((e) => e.articleIds.includes(article.id));
 }
 
+export async function fetchArticleById(id: string | number): Promise<ArticleWithScore> {
+  const numericId = Number(id);
+  if (!Number.isSafeInteger(numericId) || numericId <= 0) throw new Error('文章编号无效');
+  const raw = await fetchJSON(`/article/${numericId}`, 8000);
+  return mapApiArticle(raw);
+}
+
 /** 按需拉取单个事件（/events/{id}）：列表窗口（limit=100）外的事件详情兜底。
  *  成员文章用响应内嵌数据水合（_article_dict 自带 summary），不经全局文章缓存。 */
-export async function fetchEventById(id: string): Promise<EventWithScore | null> {
-  if (!apiMode) return null;
+export async function fetchEventById(id: string): Promise<EventWithScore> {
+  if (!apiMode) throw new Error('API 模式不可用');
   const rawId = id.startsWith('e') ? id.slice(1) : id;
-  try {
-    const raw = await fetchJSON(`/events/${rawId}`, 8000);
-    const articleMap = new Map<string, ArticleWithScore>(
-      (raw.articles ?? []).map(
-        (a: any) => [String(a.id), mapApiArticle(a)] as [string, ArticleWithScore]
-      )
-    );
-    return mapApiEvent(raw, articleMap);
-  } catch {
-    return null;
-  }
+  const raw = await fetchJSON(`/events/${rawId}`, 8000);
+  const articleMap = new Map<string, ArticleWithScore>(
+    (raw.articles ?? []).map(
+      (a: any) => [String(a.id), mapApiArticle(a)] as [string, ArticleWithScore]
+    )
+  );
+  return mapApiEvent(raw, articleMap);
 }
 
 // ———————————————————— 热榜（服务端榜单，单一数据源） ————————————————————

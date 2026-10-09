@@ -41,6 +41,8 @@ const TASK_LABELS: Record<string, string> = {
   event_summary: '事件总结',
   embedding: '向量化',
   report: '早报',
+  article: '公众号文章生成',
+  site_article: '网站文章生成',
   conn_test: '连通性测试',
 };
 

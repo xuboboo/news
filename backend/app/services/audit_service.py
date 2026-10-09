@@ -53,7 +53,17 @@ ACTIONS = {
     "admin.trigger_report",
     "admin.trigger_stats",
     "admin.test_report_push",
-}
+    # —— 文章草稿（生成/编辑/重生成/删除） ——
+    "draft.generated",
+    "draft.dispatch_failed",
+    "draft.updated",
+    "draft.regenerated",
+    "draft.deleted",
+    "site_draft.generated",
+    "site_draft.dispatch_failed",
+    "site_draft.updated",
+    "site_draft.regenerated",
+    "site_draft.deleted",}
 
 # 哈希链写路径的 pg advisory lock 键（任意常量，仅要求全库唯一）
 _CHAIN_LOCK_KEY = 0x61756469  # b"audi"

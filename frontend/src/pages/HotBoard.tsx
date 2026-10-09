@@ -62,30 +62,36 @@ export default function HotBoard() {
 
   // ———— 服务端榜单：窗口/频道/排序/归一化全部由 /hot/board 完成，页面只渲染 ————
   // 换窗/换频道时保留旧列表就地刷新（stale-while-revalidate），首拉为 loading
+  const [retryCount, setRetryCount] = useState(0);
+  const boardKey = `${winKey}:${channel}`;
   const [board, setBoard] = useState<{
+    key: string;
     status: 'loading' | 'ok' | 'error';
     items: ArticleWithScore[];
     total: number;
-  }>({ status: 'loading', items: [], total: 0 });
+  }>({ key: '', status: 'loading', items: [], total: 0 });
+  const currentBoard = board.key === boardKey ? board : { key: boardKey, status: 'loading' as const, items: [], total: 0 };
 
   useEffect(() => {
     let cancelled = false;
     fetchHotBoard(winKey, channel)
       .then((r) => {
-        if (!cancelled) setBoard({ status: 'ok', items: r.items, total: r.total });
+        if (!cancelled) setBoard({ key: boardKey, status: 'ok', items: r.items, total: r.total });
       })
       .catch(() => {
         if (!cancelled)
-          setBoard((prev) => (prev.items.length ? prev : { status: 'error', items: [], total: 0 }));
+          setBoard((prev) => prev.key === boardKey && prev.status === 'ok'
+            ? prev
+            : { key: boardKey, status: 'error', items: [], total: 0 });
       });
     return () => {
       cancelled = true;
     };
-  }, [channel, winKey, dataVer]);
+  }, [channel, winKey, dataVer, retryCount, boardKey]);
 
-  const boardLoading = board.status === 'loading';
+  const boardLoading = currentBoard.status === 'loading';
   const win = WINDOWS.find((w) => w.key === winKey) ?? WINDOWS[0];
-  const filtered = board.items;
+  const filtered = currentBoard.items;
 
   const summaryCoverage =
     filtered.length > 0
@@ -115,7 +121,7 @@ export default function HotBoard() {
         <StatCard
           icon={<Flame className="h-5 w-5" />}
           label="在榜文章"
-          value={`${board.total} 篇`}
+          value={`${currentBoard.total} 篇`}
           sub={`${win.label}窗口 · 展示 TOP ${filtered.length}`}
         />
         <StatCard
@@ -169,17 +175,17 @@ export default function HotBoard() {
             {w.label}
           </button>
         ))}
-        <span className="ml-auto text-xs text-slate-500">共 {board.total} 篇在榜</span>
+        <span className="ml-auto text-xs text-slate-500">共 {currentBoard.total} 篇在榜</span>
       </div>
 
       {/* 热榜列表（服务端数据） */}
       {boardLoading && filtered.length === 0 ? (
         <Loading />
-      ) : board.status === 'error' && filtered.length === 0 ? (
+      ) : currentBoard.status === 'error' && filtered.length === 0 ? (
         <div className="card py-16 text-center">
           <div className="text-sm text-amber-300/90 mb-4">热榜加载失败 · 正在自动重试</div>
           <button
-            onClick={() => setSearchParams(searchParams, { replace: true })}
+            onClick={() => setRetryCount((count) => count + 1)}
             className="chip bg-accent/15 text-accent border border-accent/40 px-4 py-2 cursor-pointer hover:bg-accent/25"
           >
             立即重试
@@ -309,6 +315,14 @@ export default function HotBoard() {
           onOpenEvent={(id) => {
             setSelected(null);
             navigate(`/events/${id}`);
+          }}
+          onOpenDraft={(draftId) => {
+            setSelected(null);
+            navigate(`/drafts/${draftId}`);
+          }}
+          onOpenSiteDraft={(draftId) => {
+            setSelected(null);
+            navigate(`/site-drafts/${draftId}`);
           }}
         />
       )}

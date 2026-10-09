@@ -54,6 +54,12 @@ ALLOWED_KEYS: dict[str, type] = {
     # —— AI 成本治理（成本看板域） ——
     "ai_daily_cost_budget": float,
     "ai_usage_retention_days": int,
+    # —— 文章生成（草稿域） ——
+    "article_gen_enabled": bool,
+    "article_gen_model": str,
+    "article_gen_hourly_limit": int,
+    "article_gen_max_sources": int,
+    "article_gen_max_source_chars": int,
 }
 
 # 数值键的合法区间（min, max）：与前端 NUMERIC_RULES 保持一致。
@@ -78,6 +84,10 @@ CONFIG_RANGES: dict[str, tuple[int | float, int | float]] = {
     # 预算 0 = 关闭告警；流水保留 0 = 永久保留（财务记录可全量归档不删）
     "ai_daily_cost_budget": (0, 100000),
     "ai_usage_retention_days": (0, 3650),
+    # 素材上限：源过少写不出综合叙事，过多则 prompt 超长费 token
+    "article_gen_hourly_limit": (0, 500),
+    "article_gen_max_sources": (1, 10),
+    "article_gen_max_source_chars": (1000, 8000),
 }
 
 # 脱敏展示的字段（alert_webhook_url 通常内嵌钉钉/企微机器人 token）
@@ -127,6 +137,8 @@ def _coerce(key: str, value: str):
 
 def _validate_str(key: str, value: str) -> None:
     """字符串键的额外约束（类型转换之外）。"""
+    if key in ("llm_model", "article_gen_model") and len(value) > 64:
+        raise ValueError(f"{key} 最多 64 个字符（与用量流水模型字段长度一致）")
     if key == "llm_protocol" and value not in LLM_PROTOCOLS:
         raise ValueError(f"llm_protocol 仅支持 {'/'.join(LLM_PROTOCOLS)}")
     if key == "alert_webhook_style" and value not in _WEBHOOK_STYLES:

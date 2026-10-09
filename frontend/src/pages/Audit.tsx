@@ -39,6 +39,16 @@ const ACTION_STYLES: Record<string, { label: string; cls: string }> = {
   'admin.trigger_events': { label: '手动聚合', cls: 'bg-sky-500/10 text-sky-300 border-sky-400/30' },
   'admin.trigger_report': { label: '手动早报', cls: 'bg-sky-500/10 text-sky-300 border-sky-400/30' },
   'admin.test_report_push': { label: '早报测试推送', cls: 'bg-sky-500/10 text-sky-300 border-sky-400/30' },
+  'draft.generated': { label: '生成公众号稿', cls: 'bg-sky-500/10 text-sky-300 border-sky-400/30' },
+  'draft.updated': { label: '编辑公众号稿', cls: 'bg-cyan-500/10 text-cyan-300 border-cyan-400/30' },
+  'draft.regenerated': { label: '重生成公众号稿', cls: 'bg-amber-500/10 text-amber-300 border-amber-400/30' },
+  'draft.dispatch_failed': { label: '公众号稿派发失败', cls: 'bg-red-500/10 text-red-300 border-red-400/30' },
+  'draft.deleted': { label: '删除公众号稿', cls: 'bg-red-500/10 text-red-300 border-red-400/30' },
+  'site_draft.dispatch_failed': { label: '网站稿派发失败', cls: 'bg-red-500/10 text-red-300 border-red-400/30' },
+  'site_draft.generated': { label: '生成网站稿', cls: 'bg-emerald-500/10 text-emerald-300 border-emerald-400/30' },
+  'site_draft.updated': { label: '编辑网站稿', cls: 'bg-cyan-500/10 text-cyan-300 border-cyan-400/30' },
+  'site_draft.regenerated': { label: '重生成网站稿', cls: 'bg-amber-500/10 text-amber-300 border-amber-400/30' },
+  'site_draft.deleted': { label: '删除网站稿', cls: 'bg-red-500/10 text-red-300 border-red-400/30' },
 };
 
 function actionLabel(action: string): { label: string; cls: string } {
@@ -57,6 +67,17 @@ function detailText(action: string, d: Record<string, unknown>): string {
   if (!d || Object.keys(d).length === 0) return '—';
   const list = (v: unknown) => (Array.isArray(v) ? v.join('、') : '');
   switch (action) {
+    case 'site_draft.generated':
+    case 'site_draft.updated':
+    case 'site_draft.regenerated':
+    case 'site_draft.deleted':
+    case 'site_draft.dispatch_failed':
+    case 'draft.generated':
+    case 'draft.updated':
+    case 'draft.regenerated':
+    case 'draft.deleted':
+    case 'draft.dispatch_failed':
+      return `草稿 #${d.draft_id ?? '—'}${d.title ? ` · ${String(d.title)}` : ''}`;
     case 'auth.login':
     case 'auth.logout':
       return `会话 #${d.session_id ?? '—'}`;
