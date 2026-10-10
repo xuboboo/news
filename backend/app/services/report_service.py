@@ -20,7 +20,8 @@ from app.models.event import EventArticle, HotEvent
 from app.models.report import DailyReport
 from app.services import usage_service
 from app.services.config_service import effective_llm
-from app.services.report_push import push_enabled, push_report
+from app.services.report_push import push_enabled
+from app.services.report_delivery_service import enqueue_report_deliveries
 from app.services.usage_service import record_usage
 from app.utils.text import strip_media_lede, truncate, truncate_boundary
 from app.utils.tz import bj_day_start, bj_now
@@ -412,8 +413,6 @@ def generate_daily_report(
     else:
         row = DailyReport(date=day, issue_no=content["issue_no"], content=content)
         db.add(row)
-    db.commit()
-    db.refresh(row)
     push_status = ""
     if push_enabled(db):
         if content["articles_total"] <= 0:
@@ -421,9 +420,13 @@ def generate_daily_report(
         elif not allow_push:
             push_status = "补算重建，未推送"
         elif day == bj_now().date():
-            push_status = push_report(db, content)
+            queued = enqueue_report_deliveries(db, day, content)
+            push_status = f"已加入推送队列 {queued} 个通道" if queued else "推送内容已存在，未重复入队"
         else:
             push_status = "历史日期补算，未推送"
+    # DailyReport and its pending deliveries commit atomically.
+    db.commit()
+    db.refresh(row)
     return row, push_status
 
 

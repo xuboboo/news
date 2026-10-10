@@ -9,6 +9,8 @@ token，只删自己持有的锁——否则 A 超 TTL 后被 B 接管、A 收�
 """
 import logging
 import secrets
+from dataclasses import dataclass
+from enum import Enum
 
 import redis as redis_lib
 
@@ -41,8 +43,24 @@ def _client() -> "redis_lib.Redis":
     )
 
 
-# Redis 不可用时的哨兵 token：truthy 不阻塞主链路，release 时跳过删除
+# Redis 不可用时的兼容哨兵 token。仅 crawler 可选择继续；非幂等任务必须使用 acquire_lock_result。
 _REDIS_BYPASS = "redis-bypass"
+
+
+class LockState(str, Enum):
+    ACQUIRED = "acquired"
+    BUSY = "busy"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class LockResult:
+    state: LockState
+    token: str | None = None
+
+    def __bool__(self) -> bool:
+        return self.state == LockState.ACQUIRED
+
 
 # 仅当持有者 token 匹配才删除（原子比较+删）
 _RELEASE_LUA = (
@@ -51,19 +69,25 @@ _RELEASE_LUA = (
 )
 
 
-def acquire_lock(name: str, ttl_ms: int) -> str | None:
-    """尝试抢锁：成功返回持有者 token（调用方须传给 release_lock），
-    已被其他进程持有返回 None。truthy/falsy 兼容既有 `if not acquire_lock(...)`
-    布尔用法。"""
+def acquire_lock_result(name: str, ttl_ms: int) -> LockResult:
     token = secrets.token_hex(16)
     try:
         if _client().set(f"lock:{name}", token, nx=True, px=ttl_ms):
-            return token
-        return None
+            return LockResult(LockState.ACQUIRED, token)
+        return LockResult(LockState.BUSY)
     except Exception:
-        # Redis 不可用时不阻塞采集主链路：放行并依赖 URL 唯一约束兜底
-        logger.warning("acquire lock %s failed (redis unavailable), proceeding", name, exc_info=True)
+        logger.warning("acquire lock %s failed (redis unavailable)", name, exc_info=True)
+        return LockResult(LockState.UNAVAILABLE)
+
+
+def acquire_lock(name: str, ttl_ms: int) -> str | None:
+    """兼容旧调用方：Redis 不可用时返回 bypass，仅 crawler 应继续使用。"""
+    result = acquire_lock_result(name, ttl_ms)
+    if result.state == LockState.ACQUIRED:
+        return result.token
+    if result.state == LockState.UNAVAILABLE:
         return _REDIS_BYPASS
+    return None
 
 
 def release_lock(name: str, token: str | None) -> None:

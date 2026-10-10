@@ -10,7 +10,7 @@ logger = logging.getLogger("init-db")
 
 def main():
     from app.models import (  # noqa: F401 确保模型注册（必须全量，漏 import 会静默缺表）
-        article, article_draft, event, report, setting, summary, task_run, usage,
+        article, article_draft, event, report, report_delivery, setting, summary, task_run, usage,
         tenant, user, user_session, audit_log,
     )
     from sqlalchemy import text

@@ -21,6 +21,8 @@ celery_app.conf.update(
     enable_utc=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    # Broker 断连时取消长任务，避免失联期间 worker 继续执行并写入过期结果。
+    worker_cancel_long_running_tasks_on_connection_loss=True,
     task_default_queue="default",
     # acks_late 下，任务执行超过 visibility_timeout 会被 broker 视为未消费而重复投递；
     # event_task 内逐事件串行调 LLM（每个最长 60s），放宽到 4h。
@@ -64,6 +66,11 @@ celery_app.conf.update(
         "report-catchup-hourly": {
             "task": "report_catchup_task",
             "schedule": crontab(minute=45),
+        },
+        # 投递表驱动 webhook 发送与退避重试；任务仅领取到期记录，避免阻塞日报生成。
+        "report-delivery-every-minute": {
+            "task": "report_delivery_task",
+            "schedule": crontab(minute="*"),
         },
         # 告警巡检：Redis/Worker/任务停摆/失败未恢复 → webhook 推送（面板可配 URL，留空关闭）
         "alert-watch-every-5min": {

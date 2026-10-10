@@ -14,6 +14,8 @@
 import os
 from datetime import datetime, timedelta, timezone
 
+from pg_safety import validate_test_database_url
+
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -22,6 +24,7 @@ from app.core.config import get_settings
 from app.models.article import Article  # noqa: F401  注册 metadata
 from app.models.event import EventArticle, HotEvent
 from app.models.report import DailyReport  # noqa: F401
+from app.models.report_delivery import ReportDelivery  # noqa: F401
 from app.models.setting import SystemSetting  # noqa: F401
 from app.models.summary import ArticleSummary  # noqa: F401
 from app.models.task_run import TaskRun  # noqa: F401
@@ -34,7 +37,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 TABLES = (
-    "article", "article_summary", "event", "event_article", "daily_report",
+    "article", "article_summary", "event", "event_article", "daily_report", "report_delivery",
     "article_draft",
     "ai_usage_log", "model_price", "system_setting", "task_run",
 )
@@ -64,7 +67,8 @@ def _tz(t: datetime) -> datetime:
 
 @pytest.fixture()
 def pg():
-    """独立测试库会话工厂：每用例前清空相关表，结束再清一次。"""
+    """独立测试库会话工厂：在建表、清理前再次执行 fail-closed 校验。"""
+    validate_test_database_url(os.environ.get("TEST_DATABASE_URL"))
     engine = create_engine(os.environ["TEST_DATABASE_URL"])
     with engine.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
@@ -74,6 +78,8 @@ def pg():
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
     def _clean():
+        # The guard is intentionally immediately before destructive SQL.
+        validate_test_database_url(os.environ.get("TEST_DATABASE_URL"))
         with engine.begin() as conn:
             for t in TABLES:
                 conn.execute(text(f"TRUNCATE {t} RESTART IDENTITY CASCADE"))
@@ -471,12 +477,14 @@ def test_generate_daily_report_push_policy(pg, monkeypatch):
     推送状态经返回值透出（task_run.detail 由此写入，面板可见）。"""
     from app.services import report_service
 
-    pushed: list[str] = []
+    queued_dates: list[str] = []
     monkeypatch.setattr(report_service, "push_enabled", lambda db: True)
-    monkeypatch.setattr(
-        report_service, "push_report",
-        lambda db, content: pushed.append(content["date"]) or "wecom:ok",
-    )
+
+    def fake_enqueue(db, day, content):
+        queued_dates.append(content["date"])
+        return 1
+
+    monkeypatch.setattr(report_service, "enqueue_report_deliveries", fake_enqueue)
 
     db = pg()
     try:
@@ -485,7 +493,7 @@ def test_generate_daily_report_push_policy(pg, monkeypatch):
         # 空报告：不推送（采集停摆时不向群里灌空刊，任务停摆另有告警通道）
         _, status = report_service.generate_daily_report(db, today)
         assert status == "内容为空，未推送"
-        assert pushed == []
+        assert queued_dates == []
 
         # 当期新刊（发布日=今天，窗口=北京昨夜今晨）且有内容：推送并透出状态；
         # 综述走模板兜底（测试环境无 LLM）
@@ -495,9 +503,9 @@ def test_generate_daily_report_push_policy(pg, monkeypatch):
                     published=win_start + timedelta(hours=9))
         db.commit()
         row_today, status = report_service.generate_daily_report(db, today)
-        assert status == "wecom:ok"
+        assert status == "已加入推送队列 1 个通道"
         assert row_today.content["overview_source"] == "template"
-        assert pushed == [today.isoformat()]
+        assert queued_dates == [today.isoformat()]
 
         # 历史日期补算：即使有内容也不推（不再向群通道灌旧闻）
         old_day = today - timedelta(days=5)
@@ -507,7 +515,7 @@ def test_generate_daily_report_push_policy(pg, monkeypatch):
         db.commit()
         _, status = report_service.generate_daily_report(db, old_day)
         assert status == "历史日期补算，未推送"
-        assert pushed == [today.isoformat()]
+        assert queued_dates == [today.isoformat()]
     finally:
         db.close()
 

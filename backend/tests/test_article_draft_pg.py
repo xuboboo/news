@@ -12,8 +12,8 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
+from pg_safety import validate_test_database_url
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DATABASE_URL, reason="requires isolated TEST_DATABASE_URL")
@@ -28,16 +28,7 @@ def _same_database(left, right):
 
 @pytest.fixture()
 def pg_env():
-    # Fail closed before opening any socket: never fall back to DATABASE_URL.
-    url = make_url(TEST_DATABASE_URL)
-    if not url.drivername.startswith("postgresql"):
-        pytest.fail("TEST_DATABASE_URL must use PostgreSQL")
-    database = (url.database or "").lower()
-    if not database or not any(token in database for token in ("_test", "-test", "test_", "test-")):
-        pytest.fail("refusing PG URL without a clear test database-name marker")
-    from app.core.config import get_settings
-    if _same_database(url, make_url(get_settings().database_url)):
-        pytest.fail("refusing TEST_DATABASE_URL that identifies the configured business database")
+    url = validate_test_database_url(TEST_DATABASE_URL)
 
     schema = "draft_test_" + uuid.uuid4().hex
     admin_engine = create_engine(url, pool_pre_ping=True, connect_args=_CONNECT_ARGS)
@@ -74,6 +65,7 @@ def pg_env():
         if engine is not None:
             engine.dispose()
         if created:
+            validate_test_database_url(TEST_DATABASE_URL)
             with admin_engine.begin() as conn:
                 conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         admin_engine.dispose()

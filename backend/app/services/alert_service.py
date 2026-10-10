@@ -21,6 +21,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.services.webhook_response import validate_business_response
 from app.services import config_service
 from app.services.infra_status import cadence_warnings, celery_workers_ping, redis_client, redis_ping
 from app.utils.tz import TZ_BJ, bj_now
@@ -152,6 +153,16 @@ def _push(url: str, style: str, text: str) -> None:
     resp = httpx.post(url, json=build_payload(style, text), timeout=10)
     if resp.status_code >= 300:
         raise RuntimeError(f"webhook 响应 HTTP {resp.status_code}：{resp.text[:200]}")
+    # raw 是自定义接收端：只按 HTTP 状态判定，允许 204/纯文本响应。
+    if style == "raw":
+        return
+    try:
+        body = resp.json()
+    except Exception as exc:
+        raise RuntimeError("webhook 响应不是 JSON") from exc
+    ok, detail = validate_business_response(style, body)
+    if not ok:
+        raise RuntimeError(f"webhook 业务失败：{detail}")
 
 
 def _load_state() -> dict | None:

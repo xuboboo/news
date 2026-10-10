@@ -1,6 +1,7 @@
 """全局配置：环境变量优先（.env），与 PRD 技术栈一一对应。"""
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,7 +51,10 @@ class Settings(BaseSettings):
 
     # —— 早报 Webhook 推送（面板可热调；.env 仅作默认值，留空 = 该通道关闭） ——
     report_push_enabled: bool = False
-    report_push_wecom_webhook_url: str = ""
+    report_push_wecom_webhook_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("REPORT_PUSH_WECOM_WEBHOOK_URL", "REPORT_PUSH_WEBHOOK_URL"),
+    )  # 新名称优先，兼容旧环境变量
     report_push_feishu_webhook_url: str = ""
     report_push_feishu_secret: str = ""  # 飞书机器人开启「签名校验」时必填，未开启留空
 

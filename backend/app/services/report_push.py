@@ -24,6 +24,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.services import config_service
+from app.services.webhook_response import validate_business_response
 from app.utils.text import strip_media_lede
 from app.utils.url_guard import UrlNotAllowed, assert_public_http_url
 
@@ -39,7 +40,7 @@ def _cfg(db: Session | None, key: str, env_key: str) -> str:
     if db is not None:
         try:
             v = config_service.get_effective(db, key)
-            if v:
+            if v is not None:
                 return str(v).strip()
         except Exception:
             pass
@@ -56,7 +57,10 @@ def push_targets(db: Session | None) -> list[tuple[str, str, str]]:
     if not enabled:
         return []
     out: list[tuple[str, str, str]] = []
-    wecom = _cfg(db, "report_push_wecom_webhook_url", "REPORT_PUSH_WEBHOOK_URL")
+    wecom = _cfg(db, "report_push_wecom_webhook_url", "REPORT_PUSH_WECOM_WEBHOOK_URL")
+    if not wecom:
+        # 安全兼容旧变量：新变量优先，旧变量只在新变量为空时生效。
+        wecom = os.getenv("REPORT_PUSH_WEBHOOK_URL", "").strip()
     if wecom.lower().startswith(("http://", "https://")) and _public_url(wecom):
         out.append(("wecom", wecom, ""))
     feishu = _cfg(db, "report_push_feishu_webhook_url", "REPORT_PUSH_FEISHU_WEBHOOK_URL")
@@ -315,46 +319,54 @@ def build_payload(provider: str, body_text: str, feishu_secret: str = "") -> dic
 
 
 def _provider_ok(provider: str, resp: httpx.Response) -> bool:
-    """HTTP 200 之外再校验机器人业务码：企微/飞书的签名错误、key 无效、内容超限、
-    限流等业务失败几乎都以 200 + 错误码 body 返回，只看状态码会把失败记成 ok。
-    另要求 body 呈机器人响应形状（有业务码键）——URL 误填到其他恰好返回 200 的
-    服务（自建网关/探活端点）时这里判失败，测试推送才能暴露配置错误。"""
+    """Compatibilité test/outils : délègue au même validateur du chemin d'envoi réel."""
     try:
         body = resp.json()
     except Exception:
         return False
-    if not isinstance(body, dict):
-        return False
-    if provider == "wecom":
-        # 企微机器人恒回 {"errcode": 0, "errmsg": "ok"}
-        return body.get("errcode") == 0
-    # 飞书：新版 {"code": 0}，旧版 {"StatusCode": 0}
-    return body.get("code") == 0 or body.get("StatusCode") == 0
+    return validate_business_response(provider, body)[0]
+
+
+def _report_body(provider: str, content: dict) -> str:
+    if provider == "feishu":
+        return render_feishu_text(content)
+    return clip_markdown_bytes(render_report_markdown(content))
+
+
+def send_report_target(provider: str, url: str, secret: str, content: dict) -> tuple[bool, str]:
+    """Send one already-validated target and confirm both HTTP and provider business status."""
+    try:
+        resp = httpx.post(
+            url,
+            json=build_payload(provider, _report_body(provider, content), secret),
+            timeout=_PUSH_TIMEOUT,
+        )
+    except Exception as exc:
+        return False, f"network failure ({exc.__class__.__name__})"
+    if resp.status_code != 200:
+        return False, f"HTTP {resp.status_code}"
+    try:
+        body = resp.json()
+    except Exception:
+        return False, "non-JSON response"
+    ok, detail = validate_business_response(provider, body)
+    return (True, "ok") if ok else (False, f"provider rejected message: {detail}")
+
+
+def push_report_channel(db: Session | None, content: dict, provider: str) -> tuple[bool, str]:
+    """Outbox entry point: send to one currently configured provider."""
+    target = next((item for item in push_targets(db) if item[0] == provider), None)
+    if target is None:
+        return False, "channel is not configured or did not pass URL validation"
+    return send_report_target(*target, content)
 
 
 def push_report(db: Session | None, content: dict) -> str:
-    """推送早报到所有已配置通道。返回状态描述；未启用返回空串。"""
-    targets = push_targets(db)
-    if not targets:
-        return ""
+    """Legacy synchronous helper retained for manual tests/tools; production report generation enqueues outbox rows."""
     results: list[str] = []
-    for provider, url, secret in targets:
-        if provider == "feishu":
-            # 飞书走文本早报（问候语 + 速览 10 条）；远小于 20KB 上限，不裁剪
-            body_text: str = render_feishu_text(content)
-        else:
-            body_text = clip_markdown_bytes(render_report_markdown(content))
-        try:
-            resp = httpx.post(url, json=build_payload(provider, body_text, secret), timeout=_PUSH_TIMEOUT)
-            if resp.status_code == 200 and _provider_ok(provider, resp):
-                results.append(f"{provider}:ok")
-            else:
-                results.append(f"{provider}:HTTP{resp.status_code}")
-                logger.warning(
-                    "早报 webhook 推送失败[%s]: HTTP %s %s",
-                    provider, resp.status_code, resp.text[:200],
-                )
-        except Exception as exc:  # 网络/超时等一切异常都不上抛
-            results.append(f"{provider}:fail:{exc.__class__.__name__}")
-            logger.warning("早报 webhook 推送失败[%s]: %s", provider, exc)
+    for provider, url, secret in push_targets(db):
+        ok, detail = send_report_target(provider, url, secret, content)
+        results.append(f"{provider}:ok" if ok else f"{provider}:fail:{detail}")
+        if not ok:
+            logger.warning("早报 webhook 推送失败[%s]: %s", provider, detail)
     return "；".join(results)

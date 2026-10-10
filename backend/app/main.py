@@ -25,18 +25,8 @@ def init_db() -> None:
     漏 import 会静默缺表（system_setting/task_run 曾因此仅靠间接 import 才建上）。
     """
     from app.models import (  # noqa: F401 确保模型注册
-        article,
-        article_draft,
-        event,
-        report,
-        setting,
-        summary,
-        task_run,
-        usage,
-        tenant,
-        user,
-        user_session,
-        audit_log,
+        article, article_draft, event, report, report_delivery, setting, summary, task_run, usage,
+        tenant, user, user_session, audit_log,
     )
 
     with engine.begin() as conn:

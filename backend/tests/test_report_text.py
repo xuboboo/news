@@ -433,6 +433,27 @@ def test_push_targets_public_wecom_and_feishu_env_secret(monkeypatch):
     assert ("feishu", "https://5.6.7.8/hook", "s3cret") in targets
 
 
+def test_legacy_wecom_environment_name_is_compatible_and_new_name_wins(monkeypatch):
+    from app.core.config import Settings
+
+    monkeypatch.delenv("REPORT_PUSH_WECOM_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv("REPORT_PUSH_WEBHOOK_URL", "https://1.2.3.4/legacy")
+    assert Settings(_env_file=None).report_push_wecom_webhook_url == "https://1.2.3.4/legacy"
+
+    monkeypatch.setenv("REPORT_PUSH_WECOM_WEBHOOK_URL", "https://1.2.3.4/new")
+    assert Settings(_env_file=None).report_push_wecom_webhook_url == "https://1.2.3.4/new"
+
+
+def test_push_targets_database_false_overrides_true_environment(monkeypatch):
+    """DB false 开关必须优先于 env true，避免运维关闭后仍同步群推送。"""
+    from app.services import config_service
+
+    monkeypatch.setenv("REPORT_PUSH_ENABLED", "true")
+    monkeypatch.setenv("REPORT_PUSH_WEBHOOK_URL", "https://1.2.3.4/webhook")
+    monkeypatch.setattr(config_service, "get_effective", lambda _db, key: False if key == "report_push_enabled" else "")
+    assert push_targets(object()) == []
+
+
 def test_push_targets_disabled_by_switch(monkeypatch):
     monkeypatch.setenv("REPORT_PUSH_ENABLED", "false")
     monkeypatch.setenv("REPORT_PUSH_WEBHOOK_URL", "https://1.2.3.4/webhook")

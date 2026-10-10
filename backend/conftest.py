@@ -16,6 +16,8 @@ import types
 #   自检使测试随开发者本地配置漂移（CI 无 .env 时默认值与此一致）
 os.environ["COOKIE_SECURE"] = "false"
 os.environ["ENVIRONMENT"] = "test"
+# Cache tests assume caching is enabled; avoid a developer's local TTL=0 override.
+os.environ["API_CACHE_TTL_SECONDS"] = "45"
 
 import pytest
 from fastapi.testclient import TestClient

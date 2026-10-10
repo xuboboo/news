@@ -135,7 +135,7 @@ docker compose up -d --build           # 一键上线全套 9 个服务（含 ov
 
 | 变量 | 说明 |
 | --- | --- |
-| `REPORT_PUSH_ENABLED` ★ + `REPORT_PUSH_WEBHOOK_URL` ★ | 企业微信机器人推送（早报生成后自动推） |
+| `REPORT_PUSH_ENABLED` ★ + `REPORT_PUSH_WECOM_WEBHOOK_URL` ★ | 企业微信机器人推送（日报生成后异步投递，失败自动退避重试；旧变量 `REPORT_PUSH_WEBHOOK_URL` 仍兼容） |
 | `REPORT_PUSH_FEISHU_WEBHOOK_URL` ★ / `REPORT_PUSH_FEISHU_SECRET` ★ | 飞书机器人推送 / 可选签名校验密钥 |
 | `ALERT_WEBHOOK_URL` ★ / `ALERT_WEBHOOK_STYLE` ★ | 运维告警 Webhook（每 5 分钟巡检 Redis/Worker/任务停摆，状态转坏/恢复才推送；格式 wecom/dingtalk/feishu/raw） |
 

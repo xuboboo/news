@@ -6,12 +6,14 @@ import pytest
 from sqlalchemy import text
 
 from test_article_draft_pg import TEST_DATABASE_URL, pg_env  # noqa: F401 - 复用现有测试库保护与随机 schema fixture
+from pg_safety import validate_test_database_url
 
 pytestmark = pytest.mark.skipif(not TEST_DATABASE_URL, reason="requires isolated TEST_DATABASE_URL")
 
 
 def test_upgrade_existing_drafts_preserves_legacy_rows(pg_env):
     engine, factory, _ = pg_env
+    validate_test_database_url(TEST_DATABASE_URL)
     from app.models.article_draft import ArticleDraft
     from app.services.article_draft_schema import upgrade_article_draft_columns
 

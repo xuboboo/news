@@ -83,7 +83,9 @@ def stats_task(trigger: str = "auto"):
     """
     from app.crawler.stats import poll_due_articles
     from app.services import config_service
-    from app.utils.lock import LOCK_STATS, LOCK_STATS_TTL_MS, acquire_lock, release_lock
+    from app.utils.lock import (
+        LOCK_STATS, LOCK_STATS_TTL_MS, LockState, acquire_lock_result, release_lock,
+    )
 
     db = new_session()
     try:
@@ -94,11 +96,14 @@ def stats_task(trigger: str = "auto"):
         logger.info("stats_task skipped: disabled by config")
         return {"skipped": True, "reason": "disabled"}
 
-    lock_token = acquire_lock(LOCK_STATS, LOCK_STATS_TTL_MS)
-    if not lock_token:
+    lock_result = acquire_lock_result(LOCK_STATS, LOCK_STATS_TTL_MS)
+    if lock_result.state != LockState.ACQUIRED:
+        reason = "busy" if lock_result.state == LockState.BUSY else "redis unavailable (fail-closed)"
         with record_task_run("stats", trigger=trigger) as run:
-            run.detail = "skipped: another stats poll is running"
-        return {"skipped": True}
+            run.status = "degraded" if lock_result.state == LockState.UNAVAILABLE else "success"
+            run.detail = f"skipped: {reason}"
+        return {"skipped": True, "reason": reason}
+    lock_token = lock_result.token
     try:
         with record_task_run("stats", trigger=trigger) as run:
             db = new_session()
@@ -169,13 +174,18 @@ def event_task(trigger: str = "auto"):
     lock:event 与手动触发互斥：聚类/合并非原子读改写，并发会产生重复事件；
     单 worker 串行下是双保险，扩多 worker 后是正确性前提。
     """
-    from app.utils.lock import LOCK_EVENT, LOCK_EVENT_TTL_MS, acquire_lock, release_lock
+    from app.utils.lock import (
+        LOCK_EVENT, LOCK_EVENT_TTL_MS, LockState, acquire_lock_result, release_lock,
+    )
 
-    lock_token = acquire_lock(LOCK_EVENT, LOCK_EVENT_TTL_MS)
-    if not lock_token:
+    lock_result = acquire_lock_result(LOCK_EVENT, LOCK_EVENT_TTL_MS)
+    if lock_result.state != LockState.ACQUIRED:
+        reason = "busy" if lock_result.state == LockState.BUSY else "redis unavailable (fail-closed)"
         with record_task_run("event", trigger=trigger) as run:
-            run.detail = "skipped: another event clustering is running"
-        return {"skipped": True}
+            run.status = "degraded" if lock_result.state == LockState.UNAVAILABLE else "success"
+            run.detail = f"skipped: {reason}"
+        return {"skipped": True, "reason": reason}
+    lock_token = lock_result.token
     try:
         with record_task_run("event", trigger=trigger) as run:
             db = new_session()
@@ -248,6 +258,23 @@ def report_catchup_task(trigger: str = "auto"):
             return {"backfilled": [d.isoformat() for d in missing]}
         finally:
             db.close()
+
+
+@celery_app.task(name="report_delivery_task")
+def report_delivery_task():
+    """发送到期早报投递并持久化每通道重试状态。"""
+    from app.services.report_delivery_service import process_due_deliveries
+
+    db = new_session()
+    try:
+        # Five sequential HTTP calls at the 10-second request timeout stay below
+        # the one-minute beat interval and bound time spent in this worker slot.
+        result = process_due_deliveries(db, limit=5)
+        if result["retry_wait"] or result["dead"]:
+            logger.warning("report_delivery: %s", result)
+        return result
+    finally:
+        db.close()
 
 
 @celery_app.task(name="article_gen_task", bind=True, max_retries=120)
