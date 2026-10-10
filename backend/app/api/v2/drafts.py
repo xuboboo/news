@@ -63,7 +63,8 @@ def _draft_dict(r: ArticleDraft, with_content: bool = False) -> dict:
         "updated_at": r.updated_at.isoformat() if r.updated_at else None,
     }
     if with_content:
-        out["content_md"] = r.content_md or ""
+        from app.services.article_gen_service import _strip_generated_footer_sections
+        out["content_md"] = _strip_generated_footer_sections(r.content_md or "", strip_sources=False)
     return out
 
 
@@ -277,8 +278,8 @@ def update_draft(
                 from app.services.article_gen_service import _collect_material
                 material, _ = _collect_material(db, row)
                 source_refs = source_refs_from_material(material)
-            from app.services.article_gen_service import _ensure_compliance_footer
-            value = _ensure_compliance_footer(value, source_refs)
+            from app.services.article_gen_service import _ensure_source_footer
+            value = _ensure_source_footer(value, source_refs)
             patch["source_refs"] = source_refs
         patch["content_md"] = value
 

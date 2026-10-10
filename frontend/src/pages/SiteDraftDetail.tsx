@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { Link, useBlocker, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ClipboardCopy, Copy, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { deleteSiteDraft, getSiteDraft, regenerateSiteDraft, updateSiteDraft, type SiteDraftItem } from '../api/siteDrafts';
-import { copyPlain, copyRich, ensureComplianceFooter, flashCopyState, renderPlain, renderRich, type CopyState } from '../utils/clipboard';
+import { copyPlain, copyRich, ensureSourceFooter, flashCopyState, renderPlain, renderRich, type CopyState } from '../utils/clipboard';
 import { Loading } from '../components/common';
 import { usePageTitle } from '../utils/hooks';
 
@@ -125,7 +125,7 @@ export default function SiteDraftDetail() {
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
 
-  const canonicalContent = useMemo(() => ensureComplianceFooter(form.content_md, draft?.source_refs ?? []), [form.content_md, draft?.source_refs]);
+  const canonicalContent = useMemo(() => ensureSourceFooter(form.content_md, draft?.source_refs ?? []), [form.content_md, draft?.source_refs]);
   // CMS有单独标题字段，新闻正文复制不再添加第二个 H1。
   const bodyHtml = useMemo(() => renderRich(canonicalContent), [canonicalContent]);
   const previewHtml = useMemo(() => renderRich(`# ${form.title.trim()}\n\n${canonicalContent}`), [form.title, canonicalContent]);
@@ -278,7 +278,7 @@ export default function SiteDraftDetail() {
           <textarea aria-labelledby="site-body-label" value={form.content_md} onChange={(e) => edit({ content_md: e.target.value })} disabled={formBusy} className={`${inputClass} min-h-[520px] font-mono text-[13px] leading-relaxed ${mobileTab === 'edit' ? '' : 'hidden lg:block'}`} />
           <div className={`min-h-[520px] rounded-lg border border-radar-border bg-white overflow-y-auto ${mobileTab === 'preview' ? '' : 'hidden lg:block'}`}><div className="px-5 py-4" dangerouslySetInnerHTML={{ __html: previewHtml }} /></div>
         </div>
-        <p role="status" aria-live="polite" className="text-xs text-slate-500 mt-3">{uncertainSave ? '上次保存结果尚未确认，请重试保存或刷新页面核对。' : dirty ? '有未保存的修改，请使用顶部保存按钮。' : '所有修改已保存。'}正文复制包含参考来源与AI声明，不重复复制主标题。</p>
+        <p role="status" aria-live="polite" className="text-xs text-slate-500 mt-3">{uncertainSave ? '上次保存结果尚未确认，请重试保存或刷新页面核对。' : dirty ? '有未保存的修改，请使用顶部保存按钮。' : '所有修改已保存。'}正文复制包含参考来源，不重复复制主标题。</p>
       </section>
       <section className="card p-5 text-xs text-slate-400 space-y-2" aria-label="发布前检查">
         <h2 className="text-sm font-semibold text-slate-200">发布前检查（不是排名评分）</h2>

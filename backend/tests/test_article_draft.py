@@ -140,7 +140,7 @@ def test_review_rejects_noninteger_source_ids_before_dispatch(client, db, seeded
 
 def test_review_strips_nested_source_sections():
     body = "正文\n\n## 参考来源\n### 来源补充\n- 假媒体丨《伪造报道》\n\n## 后续正文\n应保留内容"
-    result = gen_mod._ensure_compliance_footer(body, [{"source": "可信媒体", "title": "真实标题"}])
+    result = gen_mod._ensure_source_footer(body, [{"source": "可信媒体", "title": "真实标题"}])
     assert "假媒体" not in result
     assert "应保留内容" in result
     assert "真实标题" in result
@@ -149,7 +149,7 @@ def test_review_strips_nested_source_sections():
 @pytest.mark.parametrize("fence", ["```", "~~~~"])
 def test_review_preserves_fenced_heading_content(fence):
     body = f"正文\n\n{fence}text\n## 声明\n代码中的内容\n{fence}\n\n应保留的尾段"
-    result = gen_mod._ensure_compliance_footer(body, [])
+    result = gen_mod._ensure_source_footer(body, [])
     assert body in result
 
 
@@ -213,7 +213,7 @@ def test_generate_success(db, seeded_content, usage_calls):
     assert row.status == "ready"
     assert row.title.startswith("某厂发布")
     assert "参考来源" in row.content_md
-    assert "AI 基于公开报道辅助生成" in row.content_md
+    assert "AI 基于公开报道辅助生成" not in row.content_md and "## 声明" not in row.content_md
     assert row.prompt_tokens == 100 and row.completion_tokens == 50
     assert sorted(row.source_refs, key=lambda ref: ref["source"]) == [
         {"source": "IT之家", "title": "原标题A"},
@@ -341,8 +341,8 @@ def test_model_name_over_usage_log_limit_fails_before_spending(db, seeded_conten
     assert usage_calls == []
 
 
-def test_compliance_footer_forced(db, seeded_content, usage_calls):
-    """LLM 输出缺失参考来源/声明时（如素材内嵌 prompt 注入诱导），服务端强制补齐。"""
+def test_source_footer_rebuilt_without_ai_disclosure(db, seeded_content, usage_calls):
+    """即使模型输出声明，落库正文也只保留按真实素材重建的来源。"""
     _llm_config(db)
     draft_id = _make_draft(db, source_type="event", source_id=seeded_content.ev_id, status="generating")
     # 注意故意不含 参考来源 与 声明 两段
@@ -370,11 +370,11 @@ def test_compliance_footer_forced(db, seeded_content, usage_calls):
     s.close()
     assert "## 参考来源" in row.content_md
     assert "IT之家丨《原标题A》" in row.content_md
-    assert gen_mod.AI_DISCLAIMER in row.content_md
+    assert "AI 基于公开报道辅助生成" not in row.content_md and "## 声明" not in row.content_md
 
 
-def test_compliance_footer_kept_when_present(db, seeded_content, usage_calls):
-    """LLM 正常输出两段时不重复追加。"""
+def test_source_footer_kept_when_present(db, seeded_content, usage_calls):
+    """LLM 输出来源段时由服务端按来源快照重建，且不保留声明段。"""
     _llm_config(db)
     draft_id = _make_draft(db, status="generating")
 
@@ -394,7 +394,7 @@ def test_compliance_footer_kept_when_present(db, seeded_content, usage_calls):
     row = s.get(ArticleDraft, draft_id)
     s.close()
     assert row.content_md.count("## 参考来源") == 1
-    assert row.content_md.count(gen_mod.AI_DISCLAIMER) == 1
+    assert "AI 基于公开报道辅助生成" not in row.content_md and "## 声明" not in row.content_md
 
 
 def test_event_material_limit_applies_after_filtering_empty_sources(db, seeded_content, monkeypatch):
@@ -463,18 +463,18 @@ def test_generate_empty_material_fails_without_llm_call(db, seeded, usage_calls)
     assert usage_calls == []  # 未发生任何 LLM 计费
 
 
-def test_compliance_footer_replaces_model_spoofed_sources():
+def test_source_footer_replaces_model_spoofed_sources():
     content = (
         "正文内容。\n\n## 参考来源\n- 假来源丨《不存在的报道》\n\n"
         "## 声明\n伪造的 AI 声明。"
     )
-    result = gen_mod._ensure_compliance_footer(
+    result = gen_mod._ensure_source_footer(
         content, [{"source": "可信来源", "title": "真实标题"}]
     )
     assert "假来源" not in result
     assert "不存在的报道" not in result
     assert "- 可信来源丨《真实标题》" in result
-    assert result.count(gen_mod.AI_DISCLAIMER) == 1
+    assert "AI 基于公开报道辅助生成" not in result and "伪造的 AI 声明" not in result
 
 
 # ———————————————————— 编辑 / 重新生成 / 删除 ————————————————————
@@ -780,7 +780,7 @@ def test_empty_ready_body_rejected_and_nonstandard_footer_spoof_removed(client, 
     assert malicious.status_code == 200
     result = malicious.json()["content_md"]
     assert "假媒体" not in result and "假来源" not in result and "伪造声明" not in result
-    assert gen_mod.AI_DISCLAIMER in result
+    assert "AI 基于公开报道辅助生成" not in result and "## 声明" not in result
 
 
 def test_update_delete_roundtrip(client, db, seeded, seeded_content):
@@ -792,7 +792,7 @@ def test_update_delete_roundtrip(client, db, seeded, seeded_content):
     assert r.status_code == 200, r.text
     assert r.json()["title"] == "手工改的标题"
     assert r.json()["content_md"].startswith("## 1.")
-    assert gen_mod.AI_DISCLAIMER in r.json()["content_md"]
+    assert "AI 基于公开报道辅助生成" not in r.json()["content_md"] and "## 声明" not in r.json()["content_md"]
     assert "## 参考来源" in r.json()["content_md"]
     assert "原标题A" in r.json()["content_md"]
     from app.models.event import EventArticle

@@ -46,11 +46,27 @@ describe('website CMS fields', () => {
     await waitFor(() => expect(clipboard.copyRich).toHaveBeenCalled());
     const [html, plain] = clipboard.copyRich.mock.calls[0];
     expect(html).not.toContain('<h1'); expect(plain).not.toContain('网站稿标题');
-    expect(plain).toContain('事实报道'); expect(plain).toContain('AI 基于公开报道辅助生成');
+    expect(plain).toContain('事实报道'); expect(plain).not.toContain('AI 基于公开报道辅助生成');
     expect(plain).not.toMatch(/(^|\n)##|\*\*/);
     expect((await screen.findByLabelText('＊标题') as HTMLInputElement).required).toBe(true);
     expect(screen.getByLabelText('＊内容简介').getAttribute('aria-required')).toBe('true');
     expect(screen.getByText(/人工上传1:1方图/)).toBeTruthy();
+  });
+  it('removes legacy AI declarations from website preview and clipboard output', async () => {
+    api.getSiteDraft.mockResolvedValueOnce({
+      ...draft,
+      content_md: '事实正文\n\n## AI 声明\n本文由 AI 基于公开报道辅助生成，内容经编辑整理。',
+    });
+    mount();
+    await screen.findByLabelText('＊标题');
+    expect(document.querySelector('.bg-white')?.textContent).toContain('事实正文');
+    expect(document.querySelector('.bg-white')?.textContent).not.toContain('本文由 AI');
+    fireEvent.click(screen.getByRole('button', { name: '复制新闻正文' }));
+    await waitFor(() => expect(clipboard.copyRich).toHaveBeenCalled());
+    const [html, plain] = clipboard.copyRich.mock.calls[0];
+    expect(html).not.toContain('本文由 AI');
+    expect(plain).not.toContain('本文由 AI');
+    expect(plain).toContain('事实报道');
   });
   it('restores clean state after changing a field back', async () => {
     mount();

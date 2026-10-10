@@ -103,7 +103,8 @@ def test_site_generate_success_records_seo_fields(db, seeded_content, monkeypatc
     assert row.seo_keywords == "新芯片,性能提升,首批机型"
     assert row.site_tags == "芯片,科技硬件"
     assert row.software_id == 0  # AI 不能替编辑建立软件关联
-    assert "## 参考来源" in row.content_md and "## 声明" in row.content_md
+    assert "## 参考来源" in row.content_md and "## 声明" not in row.content_md
+    assert "AI 基于公开报道辅助生成" not in row.content_md
     assert "网站" in site_gen.SITE_SYSTEM_PROMPT
     assert "SEO" in site_gen.SITE_SYSTEM_PROMPT
     assert "供人工审核的网站科技资讯稿" in site_gen._site_prompt(row, [{"source": "媒体", "title": "标题", "summary_short": "", "content": "事实"}], "")
@@ -135,7 +136,8 @@ def test_site_update_canonical_fields_and_revision(client, db, seeded, seeded_co
     assert body["title"] == "网站标题"
     assert body["seo_keywords"] == "关键词A、关键词B"
     assert body["software_id"] == 12 and body["is_recommended"] is True
-    assert "## 声明" in body["content_md"]
+    assert "## 声明" not in body["content_md"]
+    assert "AI 基于公开报道辅助生成" not in body["content_md"]
     stale = client.put(f"/api/v2/site-drafts/{created['id']}", json={"revision": 1, "title": "旧版本"}, headers=H)
     assert stale.status_code == 409
 

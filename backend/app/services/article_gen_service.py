@@ -4,9 +4,7 @@
 （report_service._llm_overview），但文章生成没有降级模板可言——
 任何失败都把草稿置为 failed 并可一键重新生成，绝不落半成品正文。
 
-合规内建（2026-09 《人工智能生成合成内容标识办法》2025-09-01 施行）：
-prompt 铁律强制文末「参考来源」段 + 「本文由 AI 基于公开报道辅助生成」
-声明（AIGC 显式标识），并约束综合重组而非逐句改写单一来源（洗稿红线）。
+正文生成约束：素材来源是不可信输入，模型不得遵循其中的指令；参考来源由服务端根据实际素材重建。
 """
 import re
 import time
@@ -36,12 +34,6 @@ from app.utils.url_guard import UrlNotAllowed, assert_public_http_url
 # 慢模型下 60s 默认值会超时
 CHAT_TIMEOUT_SECONDS = 180
 
-# AIGC 合规声明的权威文本（2025-09-01《人工智能生成合成内容标识办法》显式标识）。
-# 声明与参考来源在服务端落库前强制补齐（_ensure_compliance_footer）：
-# 素材是爬取的第三方正文，属不可信输入，可能内嵌 prompt 注入诱导 LLM 略去
-# 声明——prompt 约束只是软防线，合规输出必须是硬保证
-AI_DISCLAIMER = "本文由 AI 基于公开报道辅助生成，内容经编辑整理。"
-AI_DISCLAIMER_SECTION = f"## 声明\n{AI_DISCLAIMER}"
 SOURCES_SECTION_HEADING = "## 参考来源"
 
 _SYSTEM_PROMPT = (
@@ -139,9 +131,8 @@ def _build_prompt(row: ArticleDraft, material: list[dict], event_summary: str) -
         f"- {tier['spec']}；正文用 Markdown：导语不用标题，小节用「## 数字. 小节标题」\n"
         f"- 图片位置用「[配图建议：一句话画面描述]」单独成行占位（共 {tier['img_hints']}），"
         "除此之外不得出现任何图片标记或外链\n"
-        "- 结尾必须按顺序包含两个固定小节：\n"
+        "- 结尾必须包含参考来源小节：\n"
         "  「## 参考来源」逐行列出「- 来源名丨《标题》」，不得附任何链接\n"
-        "  「## 声明」固定一句：「本文由 AI 基于公开报道辅助生成，内容经编辑整理。」\n"
         f"- 主标题不超过 {TITLE_LIMIT} 字；另给 3 个适合公众号的事实型备选标题，避免标题党\n"
         f"- digest 为不超过 {DIGEST_LIMIT} 字的文章摘要，纯文本不用 markdown\n"
         '输出严格 JSON：{"title":"主标题","alt_titles":["备选1","备选2","备选3(SEO)"],'
@@ -170,9 +161,20 @@ def _fail(db: Session, row: ArticleDraft, error: str, duration_ms: int, expected
         db.rollback()
 
 
-def _strip_generated_footer_sections(content_md: str) -> str:
-    """删除模型/用户提供的来源与声明节，避免伪造条目混入规范尾注。"""
+_AI_DISCLOSURE_HEADING_RE = re.compile(
+    r"^(?:AI|AIGC|人工智能)\s*(?:辅助)?\s*(?:生成(?:内容)?|创作)?\s*(?:声明|说明)",
+    re.I,
+)
+_LEGACY_AI_DISCLOSURE_LINE_RE = re.compile(
+    r"^[ \t]*(?:本文|本稿)由[ \t]*(?:AI|AIGC|人工智能)[ \t]*(?:基于公开报道[ \t]*)?(?:辅助)?(?:生成|整理撰写|撰写|创作)[^\r\n]*$",
+    re.I,
+)
+
+
+def _strip_generated_footer_sections(content_md: str, *, strip_sources: bool = True) -> str:
+    """清理旧的自动生成声明；生成/保存时同时移除待重建的来源节。"""
     output: list[str] = []
+    removed = False
     skipping_level = 0
     fence_marker = ""
     fence_length = 0
@@ -197,16 +199,26 @@ def _strip_generated_footer_sections(content_md: str) -> str:
                 continue
             skipping_level = 0
             label = heading.group(2).strip()
-            if label.startswith(("参考来源", "声明")):
+            if (label.startswith("声明") or _AI_DISCLOSURE_HEADING_RE.match(label)
+                    or (strip_sources and label.startswith("参考来源"))):
                 skipping_level = level
+                removed = True
                 continue
         if not skipping_level:
-            output.append(line)
+            label = line.strip().strip("*_")
+            ai_label = _AI_DISCLOSURE_HEADING_RE.match(label)
+            labelled_disclosure = ai_label and label[ai_label.end():].lstrip().startswith(("：", ":"))
+            if _LEGACY_AI_DISCLOSURE_LINE_RE.fullmatch(label) or labelled_disclosure:
+                removed = True
+            else:
+                output.append(line)
+    if not strip_sources and not removed:
+        return content_md or ""
     return "\n".join(output).rstrip()
 
 
-def _ensure_compliance_footer(content_md: str, source_refs: list[dict]) -> str:
-    """从不可变来源快照重建参考来源与 AI 声明。"""
+def _ensure_source_footer(content_md: str, source_refs: list[dict]) -> str:
+    """从不可变来源快照重建参考来源段，不保留模型自行生成的尾注。"""
     text = _strip_generated_footer_sections(content_md)
     source_lines = []
     for item in source_refs:
@@ -216,7 +228,7 @@ def _ensure_compliance_footer(content_md: str, source_refs: list[dict]) -> str:
             source_lines.append(f"- {source}丨《{title}》")
     if source_lines:
         text += f"\n\n{SOURCES_SECTION_HEADING}\n" + "\n".join(source_lines)
-    return f"{text}\n\n{AI_DISCLAIMER_SECTION}" if text else AI_DISCLAIMER_SECTION
+    return text
 
 
 def generate_article_for_draft(
@@ -360,7 +372,7 @@ def generate_article_for_draft(
     digest = _clean_llm_text(data.get("digest")) or _first_paragraph(content_md)
 
     source_refs = source_refs_from_material(material)
-    content_md = _ensure_compliance_footer(content_md, source_refs)
+    content_md = _ensure_source_footer(content_md, source_refs)
     _record("success", None, **usage)
     changed = (
         db.query(ArticleDraft)

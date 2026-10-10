@@ -165,7 +165,7 @@ describe('DraftDetail edit behavior', () => {
     expect(html).toContain('未保存的正文');
     expect(plain).toContain('标题');
     expect(plain).toContain('未保存的正文');
-    expect(plain).toContain('本文由 AI 基于公开报道辅助生成');
+    expect(plain).not.toContain('本文由 AI 基于公开报道辅助生成');
     expect(plain).not.toMatch(/(^|\n)#+|\*\*/);
   });
 
@@ -185,7 +185,7 @@ describe('DraftDetail edit behavior', () => {
     fireEvent.click(screen.getByRole('button', { name: /复制富文本/ }));
     await waitFor(() => expect(copyRich).toHaveBeenCalled());
     expect(vi.mocked(copyRich).mock.calls[0][0]).toContain('固定来源');
-    expect(vi.mocked(copyRich).mock.calls[0][0]).toContain('本文由 AI 基于公开报道辅助生成');
+    expect(vi.mocked(copyRich).mock.calls[0][0]).not.toContain('本文由 AI 基于公开报道辅助生成');
   });
 
   it('counts emoji as Python codepoints and blocks oversize form saves', async () => {

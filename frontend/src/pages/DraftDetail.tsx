@@ -24,7 +24,7 @@ import { fetchArticleById } from '../api/client';
 import { ArticleWithScore } from '../types';
 import ArticleModal from '../components/ArticleModal';
 import { Loading } from '../components/common';
-import { copyPlain, copyRich, ensureComplianceFooter, flashCopyState, renderPlain, renderRich, type CopyState } from '../utils/clipboard';
+import { copyPlain, copyRich, ensureSourceFooter, flashCopyState, renderPlain, renderRich, type CopyState } from '../utils/clipboard';
 import { usePageTitle } from '../utils/hooks';
 import { fullTime } from '../utils/format';
 import { TIER_LABELS } from './Drafts';
@@ -196,7 +196,7 @@ export default function DraftDetail() {
 
   const currentDraftStatus = draft?.status;
   const publishContentMd = useMemo(
-    () => ensureComplianceFooter(form.contentMd, draft?.source_refs ?? []),
+    () => ensureSourceFooter(form.contentMd, draft?.source_refs ?? []),
     [form.contentMd, draft?.source_refs],
   );
   const previewHtml = useMemo(

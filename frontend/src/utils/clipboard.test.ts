@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { copyPlain, copyRich, ensureComplianceFooter, renderPlain, renderRich } from './clipboard';
+import { copyPlain, copyRich, ensureSourceFooter, renderPlain, renderRich } from './clipboard';
 
 describe('rich text clipboard', () => {
   beforeEach(() => {
@@ -23,19 +23,40 @@ describe('rich text clipboard', () => {
     expect(blocked).not.toMatch(/onclick|<img|<iframe|<form|<input|<video|<audio/i);
   });
 
-  it('rebuilds canonical source and AI sections while removing alternate headings', () => {
-    const result = ensureComplianceFooter(
+  it('rebuilds canonical source sections and removes declaration sections', () => {
+    const result = ensureSourceFooter(
       '正文\n\n### 参考来源：假条目\n- 假媒体丨《伪造》\n\n## 声明 - 假声明\n假文本',
       [{ source: '可信媒体', title: '真实标题' }],
     );
     expect(result).toContain('- 可信媒体丨《真实标题》');
-    expect(result).toContain('本文由 AI 基于公开报道辅助生成');
+    expect(result).not.toContain('本文由 AI 基于公开报道辅助生成');
     expect(result).not.toContain('假媒体');
     expect(result).not.toContain('假文本');
   });
 
+  it.each(['## 声明', '## AI 声明', '## AI生成声明', '## AI 辅助生成声明', '## 人工智能生成声明'])('removes legacy disclosure sections headed %s and keeps sources', (heading) => {
+    const result = ensureSourceFooter(
+      `正文\n\n${heading}\n本文由 AI 基于公开报道辅助生成，内容经编辑整理。\n\n## 后续正文\n应保留的事实`,
+      [{ source: '可信媒体', title: '真实标题' }],
+    );
+    expect(result).not.toContain(heading);
+    expect(result).not.toContain('本文由 AI');
+    expect(result).toContain('应保留的事实');
+    expect(result).toContain('- 可信媒体丨《真实标题》');
+    expect(ensureSourceFooter(result, [{ source: '可信媒体', title: '真实标题' }])).toBe(result);
+  });
+
+  it.each([
+    '本文由 AI 基于公开报道辅助生成，内容经编辑整理。', '**本文由AI辅助生成。**', '本稿由人工智能生成。',
+    'AI 辅助生成声明：本文由 AI 辅助整理撰写，内容基于上述公开报道中的事实信息组织而成，须经人工审核后方可发布。',
+    '本文由 AI 辅助整理撰写，内容基于公开报道。',
+  ])('removes a standalone disclosure without rebuilding it: %s', (line) => {
+    expect(ensureSourceFooter(`正文\n\n${line}`, [])).toBe('正文');
+    expect(ensureSourceFooter('', [])).toBe('');
+  });
+
   it('removes nested spoofed source sections without removing later body sections', () => {
-    const result = ensureComplianceFooter(
+    const result = ensureSourceFooter(
       '正文\n\n## 参考来源\n### 来源补充\n- 假媒体丨《伪造报道》\n\n## 后续正文\n应保留内容',
       [{ source: '可信媒体', title: '真实标题' }],
     );
@@ -46,7 +67,7 @@ describe('rich text clipboard', () => {
 
   it.each(['```', '~~~~'])('preserves headings inside a %s fenced code block', (fence) => {
     const body = `正文\n\n${fence}text\n## 声明\n代码中的内容\n${fence}\n\n应保留的尾段`;
-    const result = ensureComplianceFooter(body, []);
+    const result = ensureSourceFooter(body, []);
     expect(result).toContain(body);
   });
 

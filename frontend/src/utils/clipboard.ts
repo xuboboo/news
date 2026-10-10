@@ -46,13 +46,16 @@ function applyInlineStyles(root: HTMLElement): void {
   });
 }
 
-export interface ComplianceSourceReference {
+export interface SourceReference {
   source: string;
   title: string;
 }
 
-/** 复制/预览时也用服务器保存的来源快照补齐不可伪造的尾注。 */
-export function ensureComplianceFooter(contentMd: string, sourceRefs: ComplianceSourceReference[]): string {
+const AI_DISCLOSURE_HEADING_RE = /^(?:AI|AIGC|人工智能)\s*(?:辅助)?\s*(?:生成(?:内容)?|创作)?\s*(?:声明|说明)/i;
+const LEGACY_AI_DISCLOSURE_LINE_RE = /^[ \t]*(?:本文|本稿)由[ \t]*(?:AI|AIGC|人工智能)[ \t]*(?:基于公开报道[ \t]*)?(?:辅助)?(?:生成|整理撰写|撰写|创作)[^\r\n]*$/i;
+
+/** 复制/预览时仅依据服务器保存的来源快照重建不可伪造的来源尾注。 */
+export function ensureSourceFooter(contentMd: string, sourceRefs: SourceReference[]): string {
   const lines: string[] = [];
   let skippingLevel = 0;
   let fenceMarker = '';
@@ -76,20 +79,24 @@ export function ensureComplianceFooter(contentMd: string, sourceRefs: Compliance
       if (skippingLevel && level > skippingLevel) continue;
       skippingLevel = 0;
       const label = heading[2].trim();
-      if (label.startsWith('参考来源') || label.startsWith('声明')) {
+      if (label.startsWith('参考来源') || label.startsWith('声明') || AI_DISCLOSURE_HEADING_RE.test(label)) {
         skippingLevel = level;
         continue;
       }
     }
-    if (!skippingLevel) lines.push(line);
+    if (!skippingLevel) {
+      const label = line.trim().replace(/^[*_]+|[*_]+$/g, '');
+      const aiLabel = label.match(AI_DISCLOSURE_HEADING_RE);
+      const labelledDisclosure = aiLabel && /^[：:]/.test(label.slice(aiLabel[0].length).trimStart());
+      if (!LEGACY_AI_DISCLOSURE_LINE_RE.test(label) && !labelledDisclosure) lines.push(line);
+    }
   }
   const body = lines.join('\n').trimEnd();
   const refs = sourceRefs
     .filter((ref) => ref.title.trim())
     .map((ref) => `- ${ref.source.replace(/[\r\n]+/g, ' ').trim()}丨《${ref.title.replace(/[\r\n]+/g, ' ').trim()}》`);
   const sources = refs.length ? `\n\n## 参考来源\n${refs.join('\n')}` : '';
-  const disclaimer = '## 声明\n本文由 AI 基于公开报道辅助生成，内容经编辑整理。';
-  return `${body}${sources}\n\n${disclaimer}`.trim();
+  return `${body}${sources}`.trim();
 }
 
 /** Markdown → 消毒后的内联样式 HTML（预览与富文本复制共用同一渲染）。 */
