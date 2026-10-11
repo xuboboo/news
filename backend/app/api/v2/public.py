@@ -1,6 +1,8 @@
 """公开探针端点：不需要登录会话（基础设施健康检查）。
 
-全站门禁的例外清单——新增公开端点必须放这里并同步 audit_auth.py 断言。
+全站门禁的例外域共两块——健康探针（本文件）与对外内容出口（exports.py，
+public_exports_enabled 开关总控）。新增公开端点必须归入其一，并同步
+audit_auth.py 断言。
 
 ?deep=1 供外部监控（Uptime Kuma / compose healthcheck / 告警巡检）做深度探测：
 追加 Redis / Celery worker / 采集新鲜度检查。只回布尔与总体状态，不暴露主机名、

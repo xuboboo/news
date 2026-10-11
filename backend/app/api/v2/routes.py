@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.algorithms.hot_score import hot_score, hot_score_expr
 from app.api.v2.admin import require_admin
 from app.auth.deps import require_json_mutation
+from app.core.config import get_settings
 from app.core.db import get_db
 from app.services.api_cache import cache_get_json, cache_set_json
 from app.utils.tz import bj_now
@@ -157,6 +158,13 @@ def _events_payload(db: Session, events: list[HotEvent], max_raw: float, with_ar
             "timeline": ev.timeline or [],
             "articles_count": count_by_event.get(ev.id, 0),
             "sources_count": len({m.source for m in members}),
+            # 上升（event_task 每轮重算的滚动脉冲）与新事件（first_time 窗口）
+            "is_rising": bool(getattr(ev, "is_rising", False)),
+            "is_new": bool(
+                ev.first_time
+                and (_tz(datetime.now(timezone.utc)) - _tz(ev.first_time)).total_seconds()
+                < get_settings().event_new_hours * 3600
+            ),
         }
         if with_articles:
             data["articles"] = [_article_dict(a, {}, max_raw) for a in members]

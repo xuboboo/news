@@ -136,14 +136,23 @@ def _collect_problems(db: Session) -> list[str]:
     except Exception:
         budget = 0.0
     if budget > 0:
-        from app.services.usage_service import usage_day_summary
+        from app.services.usage_service import today_spend_fast
 
         today = bj_now().date()
-        spent = usage_day_summary(db, today)["cost"]
+        spent = today_spend_fast(db)
         if spent > budget:
+            try:
+                hard = bool(config_service.get_effective(db, "ai_budget_hard_stop"))
+            except Exception:
+                hard = False
+            suffix = (
+                "；硬熔断已生效，付费 LLM 调用被拦截（摘要自动回退抽取式，跨日自动恢复）"
+                if hard
+                else ""
+            )
             problems.append(
                 f"AI 日成本超预算：今日已计 ¥{spent:.2f}，超过预算 ¥{budget:.2f}"
-                f"（{spent / budget * 100:.0f}%，北京时间日界，跨日自动解除）"
+                f"（{spent / budget * 100:.0f}%，北京时间日界，跨日自动解除）{suffix}"
             )
 
     return problems

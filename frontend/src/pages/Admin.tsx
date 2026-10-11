@@ -80,6 +80,7 @@ const FIELD_LABELS: Record<string, string> = {
   report_push_feishu_webhook_url: '飞书机器人 URL',
   report_push_feishu_secret: '飞书签名密钥（未开启校验留空）',
   ai_daily_cost_budget: 'AI 日成本预算（元，0 = 不告警）',
+  ai_budget_hard_stop: '硬熔断（超预算拦截付费 LLM 调用，摘要自动回退抽取式）',
   ai_usage_retention_days: 'AI 流水保留（天，0 = 永久）',
   article_gen_enabled: '公众号/网站文章生成总开关',
   article_gen_model: '文章生成模型（两板块共用，留空跟随主 LLM）',
@@ -199,7 +200,7 @@ const GROUPS: { title: string; hint: string; keys: string[]; resettable?: boolea
   {
     title: 'AI 成本治理',
     hint: '日预算超限经告警 webhook 推送（0 = 关闭，北京时间日界）；成本看板流水保留天数超期由周清理删除（0 = 永久保留，归档请先用看板导出 CSV）',
-    keys: ['ai_daily_cost_budget', 'ai_usage_retention_days'],
+    keys: ['ai_daily_cost_budget', 'ai_budget_hard_stop', 'ai_usage_retention_days'],
   },
   {
     title: '文章生成（草稿）',

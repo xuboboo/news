@@ -36,6 +36,7 @@ _TEST_TABLES = (
     "tenant", "app_user", "user_session", "audit_log", "system_setting", "task_run",
     "ai_usage_log", "model_price", "article", "article_summary", "event", "event_article",
     "article_draft",
+    "daily_report",  # exports 早报 feed（content 已改 JSON variant，SQLite 兼容）
 )
 
 # 统一测试密码（弱口令表会拒绝 12345678 等，此串不在其中）

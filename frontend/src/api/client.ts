@@ -31,6 +31,10 @@ export interface EventWithScore extends HotEvent {
   articlesCount: number;
   /** 事件全量成员的去重来源数（后端 sources_count；缺省时页面回退本地计算） */
   sourcesCount?: number;
+  /** 上升标记：当前事件热度较 6h 前滚动基准涨幅超阈值（event_task 每轮重算） */
+  isRising?: boolean;
+  /** 新事件：first_time 在 event_new_hours 窗口内（后端口径） */
+  isNew?: boolean;
 }
 
 // ———————————————————— 可变数据源（页面直接读取） ————————————————————
@@ -165,6 +169,8 @@ function mapApiEvent(ev: any, articleMap: Map<string, ArticleWithScore>): EventW
     // 窗口时 articles 数组会缩水，直接取 length 会把「12 篇报道」显示成「3 篇」
     articlesCount: typeof ev.articles_count === 'number' ? ev.articles_count : sorted.length,
     sourcesCount: typeof ev.sources_count === 'number' ? ev.sources_count : undefined,
+    isRising: ev.is_rising === true,
+    isNew: ev.is_new === true,
     rawScore: ev.hot_score ?? 0,
     hotScore: ev.hot_score ?? 0,
     // 后端 first_time/last_time 是事件全量成员的时间区间（event_article 全量口径）：

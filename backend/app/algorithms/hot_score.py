@@ -65,6 +65,48 @@ def hot_score(
     return math.log1p(engagement) * decay
 
 
+def event_hot_from_pairs(pairs) -> float:
+    """独立来源口径的事件热度（纯函数参考实现，与 event_service 的 SQL 版逐位对齐）：
+
+    每个 (event, source) 组内取成员最高一篇，再对来源求和——一家媒体发十篇
+    只算一次，重复抓取不重复计分，榜单反映「有多少家在说」（AIHOT 语义）。
+    pairs: iterable of (source, score)。
+    """
+    best: dict[str, float] = {}
+    for source, score in pairs:
+        s = str(source or "")
+        v = float(score or 0.0)
+        if s not in best or v > best[s]:
+            best[s] = v
+    return round(sum(best.values()), 2)
+
+
+def event_rising_state(
+    prev_score: float | None,
+    prev_at: datetime | None,
+    old_score: float,
+    new_score: float,
+    now: datetime,
+    threshold: float = 0.3,
+    rolling_hours: float = 6.0,
+) -> tuple[float, bool]:
+    """事件「上升」滚动脉冲（纯函数）：返回 (应写入的 hot_score_prev, is_rising)。
+
+    滚动基准规则：prev_at 缺失或距 now 超过 rolling_hours（默认 6h，等效
+    AIHOT「和 6 小时前比」）时，基准翻新为 old_score（上一个窗口末的分数），
+    之后各轮保持不变——基准恒滞后当前 6h~6h+一个重算周期。
+    判定：new_score - 基准 > threshold × max(基准, 1.0)——分母下限 1.0 使
+    零基准事件需有正向绝对增量才算上升，避免 0→ε 的噪声脉冲。
+    naive prev_at 按 UTC 解释（库内时间列均 tz-aware，此分支只为防御）。
+    """
+    if prev_at is not None and prev_at.tzinfo is None:
+        prev_at = prev_at.replace(tzinfo=timezone.utc)
+    stale = prev_at is None or (now - prev_at).total_seconds() >= rolling_hours * 3600
+    prev = float(old_score or 0.0) if stale else float(prev_score or 0.0)
+    rising = (float(new_score or 0.0) - prev) > threshold * max(prev, 1.0)
+    return round(prev, 2), bool(rising)
+
+
 def hot_score_expr(model):
     """hot_score() 的 SQL 版本（SQLAlchemy 列表达式），语义逐项对齐：
 

@@ -15,6 +15,9 @@
 # API 按 IP 限流（与 frontend/nginx.conf 同参数）
 limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
 
+# 公开内容出口限流（与 frontend/nginx.conf 同参数；exports 域）
+limit_req_zone $binary_remote_addr zone=feed_limit:10m rate=1r/s;
+
 # 动态解析 upstream（http 级共享给两个 server 块）：backend 容器重建换 IP 后
 # 不重启 nginx 即可自愈，避免旧 IP 缓存导致 502（2026-09-09 运维实录）
 resolver 127.0.0.11 valid=30s ipv6=off;
@@ -62,6 +65,35 @@ server {
         add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
         add_header Cache-Control "public, max-age=31536000, immutable";
         try_files $uri =404;
+    }
+
+    # 公开内容出口（public_exports_enabled 开关总控，默认 404）：独立低速率限流，
+    # 最长前缀匹配优先于下方 /api/ 通配（与 frontend/nginx.conf 同步维护）
+    location /api/v2/feed/ {
+        limit_req zone=feed_limit burst=30 nodelay;
+        limit_req_status 429;
+        proxy_pass $backend_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_read_timeout 30s;
+    }
+
+    location /api/v2/agent/ {
+        limit_req zone=feed_limit burst=30 nodelay;
+        limit_req_status 429;
+        proxy_pass $backend_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+
+    # llms.txt 约定俗成在站点根路径（Agent 按惯例直接请求 /llms.txt）
+    location = /llms.txt {
+        limit_req zone=feed_limit burst=10 nodelay;
+        limit_req_status 429;
+        proxy_pass $backend_upstream/api/v2/agent/llms.txt;
+        proxy_set_header Host $host;
     }
 
     # 后端 API 反向代理

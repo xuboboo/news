@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Newspaper, Clock3, ChevronDown } from 'lucide-react';
+import { Newspaper, Clock3, ChevronDown, TrendingUp } from 'lucide-react';
 import { EVENTS_WITH_SCORE, FRESH_EVENT_IDS, loadMoreEvents } from '../api/client';
 import { activateOnKey, useBootstrapReady, useDataVersion, usePageTitle, useTick } from '../utils/hooks';
 import { EventStatusTag } from '../components/ArticleModal';
@@ -141,6 +141,11 @@ export default function Events() {
                       {e.title}
                     </h3>
                     <EventStatusTag status={e.status} />
+                    {e.isRising && (
+                      <span className="chip inline-flex items-center gap-0.5 text-[10px] bg-orange-500/15 text-orange-300 border border-orange-400/25">
+                        <TrendingUp className="h-3 w-3" /> 上升
+                      </span>
+                    )}
                     {FRESH_EVENT_IDS.has(e.id) && (
                       <span className="chip text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-400/25">
                         NEW

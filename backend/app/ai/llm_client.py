@@ -24,7 +24,7 @@ import re
 
 import httpx
 
-from app.services.usage_service import extract_openai_usage
+from app.services.usage_service import BudgetExceededError, extract_openai_usage
 
 ANTHROPIC_VERSION = "2023-06-01"
 PROTOCOLS = ("openai", "anthropic")
@@ -46,6 +46,15 @@ class LLMTimeoutError(LLMAPIError):
     def __init__(self, msg: str, *, phase: str = "read"):
         super().__init__(msg)
         self.phase = phase
+
+
+class LLMBudgetExceededError(BudgetExceededError, LLMAPIError):
+    """日预算硬熔断触发（usage_service.assert_budget_available 抛出）。
+
+    继承 LLMAPIError 是关键契约：摘要（回退抽取式）、事件综述（跳过）、
+    早报（模板句）、草稿（按既有失败态落账）的 except LLMAPIError 降级链
+    自动接管，无需任何调用方特判熔断。
+    """
 
 
 class LLMFormatError(Exception):
@@ -275,6 +284,25 @@ def parse_response(protocol: str, resp) -> Tuple[str, dict]:
     return str(text or ""), usage
 
 
+def _assert_budget_available_quietly() -> None:
+    """预算硬熔断前置检查（fail-open）：DB 不可用/配置读取失败时放行——
+    熔断器自身故障不得造成全站 LLM 停摆（超限告警通道独立生效）。
+    BudgetExceededError（含 LLMBudgetExceededError）如实上抛。"""
+    from app.core.db import new_session
+    from app.services.usage_service import assert_budget_available
+
+    try:
+        db = new_session()
+        try:
+            assert_budget_available(db)
+        finally:
+            db.close()
+    except BudgetExceededError:
+        raise
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def chat(
     base_url: str,
     api_key: str,
@@ -289,7 +317,13 @@ def chat(
     timeout: float | httpx.Timeout = 60,
     thinking: str | None = None,
 ) -> Tuple[str, dict]:
-    """单轮补全：返回 (文本, usage 四项)；连接/非 200 抛 LLMAPIError，结构不符抛 LLMFormatError。"""
+    """单轮补全：返回 (文本, usage 四项)；连接/非 200 抛 LLMAPIError，结构不符抛 LLMFormatError。
+
+    前置预算硬熔断：ai_daily_cost_budget > 0 且 ai_budget_hard_stop 开启时，
+    当日已计成本超预算直接抛 LLMBudgetExceededError（LLMAPIError 分型），
+    不发请求不计费。
+    """
+    _assert_budget_available_quietly()
     url, headers, body = build_request(
         base_url, api_key, model, protocol, prompt,
         system=system, temperature=temperature, max_tokens=max_tokens, json_mode=json_mode,

@@ -1,0 +1,11 @@
+# 华军软件园资讯雷达
+# 站点主体（SPA）需要登录，不对搜索引擎开放；公开内容出口仅限
+# /api/v2/feed/（RSS 订阅）与 /api/v2/agent/（Agent 说明与只读接口），
+# 出口说明见 /llms.txt（由后端按 public_exports_enabled 开关决定 200/404）。
+User-agent: *
+Allow: /api/v2/feed/
+Allow: /api/v2/agent/
+Disallow: /
+
+# AI 爬虫（GPTBot / ClaudeBot / PerplexityBot / Google-Extended 等）遵循上面的
+# 通配规则：允许读取公开内容出口，禁止抓取登录后的业务页面。

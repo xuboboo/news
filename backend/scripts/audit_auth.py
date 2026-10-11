@@ -113,6 +113,24 @@ call(anon[1], "匿名 admin/status → 401", "/admin/status", expect=401)
 call(anon[1], "匿名用户列表 → 401", "/admin/users", expect=401)
 call(anon[1], "匿名审计 → 401", "/admin/audit-logs", expect=401)
 
+# ———— 1b. 对外内容出口（exports.py；public_exports_enabled 总控）————
+# 默认关闭 = 全部 404（不暴露存在性）；出口部署置 EXPORTS_ENABLED=1 时应为 200
+_EXPORTS_PATHS = [
+    "/feed/latest.xml",
+    "/feed/hot.xml",
+    "/feed/events.xml",
+    "/feed/report.xml",
+    "/agent/llms.txt",
+    "/agent/sitemap.xml",
+    "/agent/openapi.json",
+]
+_exports_expect = (200, 304) if os.environ.get("EXPORTS_ENABLED") else 404
+for _p in _EXPORTS_PATHS:
+    call(anon[1], f"匿名内容出口 {_p} → {_exports_expect}", _p, expect=_exports_expect)
+# 出口开放时业务端点仍必须 401（出口开放不放宽业务门禁）
+if os.environ.get("EXPORTS_ENABLED"):
+    call(anon[1], "出口开放时匿名 stats 仍 → 401", "/stats", expect=401)
+
 # ———— 2. CSRF 防线（未携带 X-Requested-With / 非 JSON） ————
 url = BASE + "/auth/login"
 req = urllib.request.Request(url, data=json.dumps({"email": "x@y.z", "password": "p"}).encode(),

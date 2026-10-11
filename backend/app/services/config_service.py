@@ -53,6 +53,7 @@ ALLOWED_KEYS: dict[str, type] = {
     "report_push_feishu_secret": str,
     # —— AI 成本治理（成本看板域） ——
     "ai_daily_cost_budget": float,
+    "ai_budget_hard_stop": bool,
     "ai_usage_retention_days": int,
     # —— 文章生成（草稿域） ——
     "article_gen_enabled": bool,
@@ -60,6 +61,15 @@ ALLOWED_KEYS: dict[str, type] = {
     "article_gen_hourly_limit": int,
     "article_gen_max_sources": int,
     "article_gen_max_source_chars": int,
+    # —— 对外内容出口（exports 域） ——
+    "public_exports_enabled": bool,
+    "public_base_url": str,
+    "mcp_token": str,
+    "feed_max_items": int,
+    # —— 事件热度（2026-10-12 改版） ——
+    "event_hot_mode": str,
+    "event_rising_threshold": float,
+    "event_new_hours": int,
 }
 
 # 数值键的合法区间（min, max）：与前端 NUMERIC_RULES 保持一致。
@@ -88,6 +98,11 @@ CONFIG_RANGES: dict[str, tuple[int | float, int | float]] = {
     "article_gen_hourly_limit": (0, 500),
     "article_gen_max_sources": (1, 10),
     "article_gen_max_source_chars": (1000, 8000),
+    # feed 条目上限：过大会拖慢订阅器解析与响应体积
+    "feed_max_items": (10, 200),
+    # 事件热度：上升判定阈值放宽到 10（关闭上升标记的极端口径）；新事件窗 1h~3d
+    "event_rising_threshold": (0, 10),
+    "event_new_hours": (1, 72),
 }
 
 # 脱敏展示的字段（alert_webhook_url 通常内嵌钉钉/企微机器人 token）
@@ -99,6 +114,7 @@ SENSITIVE_KEYS = {
     "report_push_wecom_webhook_url",
     "report_push_feishu_webhook_url",
     "report_push_feishu_secret",
+    "mcp_token",
 }
 
 _TRUE_SPELLINGS = {"1", "true", "yes", "on"}
@@ -108,6 +124,9 @@ _WEBHOOK_STYLES = {"wecom", "dingtalk", "feishu", "raw"}
 
 # LLM 协议取值（与 llm_client.PROTOCOLS 同口径；此处独立定义避免循环导入）
 LLM_PROTOCOLS = {"openai", "anthropic"}
+
+# 事件热度口径（与 event_service.recompute_event_scores 同口径；独立定义避免循环导入）
+EVENT_HOT_MODES = {"distinct_source", "sum_articles"}
 
 
 def _coerce(key: str, value: str):
@@ -141,6 +160,8 @@ def _validate_str(key: str, value: str) -> None:
         raise ValueError(f"{key} 最多 64 个字符（与用量流水模型字段长度一致）")
     if key == "llm_protocol" and value not in LLM_PROTOCOLS:
         raise ValueError(f"llm_protocol 仅支持 {'/'.join(LLM_PROTOCOLS)}")
+    if key == "event_hot_mode" and value not in EVENT_HOT_MODES:
+        raise ValueError(f"event_hot_mode 仅支持 {'/'.join(sorted(EVENT_HOT_MODES))}")
     if key == "alert_webhook_style" and value not in _WEBHOOK_STYLES:
         raise ValueError(f"alert_webhook_style 仅支持 {'/'.join(sorted(_WEBHOOK_STYLES))}")
     if key == "alert_webhook_url" and not value.lower().startswith(("http://", "https://")):

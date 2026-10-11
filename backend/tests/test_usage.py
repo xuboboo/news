@@ -358,6 +358,132 @@ def test_usage_logs_model_filter(db):
     assert usage_logs(db, model="m-a", task_type="summary", status="success")["total"] == 1
 
 
+# ———————————————————— AI 预算硬熔断（2026-10-12）————————————————————
+
+class _FakePipe:
+    def __init__(self, store):
+        self._store = store
+
+    def incrbyfloat(self, k, v):
+        self._store[k] = self._store.get(k, 0.0) + float(v)
+        return self
+
+    def expire(self, k, t):
+        return self
+
+    def execute(self):
+        return None
+
+
+class _FakeRedis:
+    def __init__(self):
+        self.store = {}
+
+    def pipeline(self):
+        return _FakePipe(self.store)
+
+    def get(self, k):
+        return self.store.get(k)
+
+
+def _patch_config(monkeypatch, budget, hard):
+    from app.services import config_service
+
+    monkeypatch.setattr(
+        config_service,
+        "get_effective",
+        lambda d, k: {"ai_daily_cost_budget": budget, "ai_budget_hard_stop": hard}.get(k),
+    )
+
+
+def test_breaker_budget_zero_never_raises(db, monkeypatch):
+    """预算未配置（0）= 不告警不拦截，与既有语义一致。"""
+    from app.services import infra_status, usage_service
+
+    fake = _FakeRedis()
+    fake.store[usage_service._day_key()] = 99999.0
+    monkeypatch.setattr(infra_status, "redis_client", lambda: fake)
+    _patch_config(monkeypatch, 0.0, True)
+    usage_service.assert_budget_available(db)  # 不抛
+
+
+def test_breaker_alert_only_mode_does_not_raise(db, monkeypatch):
+    """超预算但硬熔断关闭：维持只告警语义，LLM 调用放行。"""
+    from app.services import infra_status, usage_service
+
+    fake = _FakeRedis()
+    fake.store[usage_service._day_key()] = 10.0
+    monkeypatch.setattr(infra_status, "redis_client", lambda: fake)
+    _patch_config(monkeypatch, 5.0, False)
+    usage_service.assert_budget_available(db)  # 不抛
+
+
+def test_breaker_raises_when_over_budget(db, monkeypatch):
+    from app.services import infra_status, usage_service
+    from app.services.usage_service import BudgetExceededError
+
+    fake = _FakeRedis()
+    fake.store[usage_service._day_key()] = 10.0
+    monkeypatch.setattr(infra_status, "redis_client", lambda: fake)
+    _patch_config(monkeypatch, 5.0, True)
+    with pytest.raises(BudgetExceededError) as exc:
+        usage_service.assert_budget_available(db)
+    assert exc.value.spent == pytest.approx(10.0)
+    assert exc.value.budget == pytest.approx(5.0)
+
+
+def test_breaker_passes_under_budget(db, monkeypatch):
+    from app.services import infra_status, usage_service
+
+    fake = _FakeRedis()
+    fake.store[usage_service._day_key()] = 4.99
+    monkeypatch.setattr(infra_status, "redis_client", lambda: fake)
+    _patch_config(monkeypatch, 5.0, True)
+    usage_service.assert_budget_available(db)  # 不抛
+
+
+def test_llm_budget_error_is_api_error_for_degradation_chain():
+    """契约：熔断异常必须落在 LLMAPIError 分型内——摘要/事件综述/早报/草稿的
+    except LLMAPIError 降级链自动接管，无需调用方特判熔断。"""
+    from app.ai.llm_client import LLMAPIError, LLMBudgetExceededError
+    from app.services.usage_service import BudgetExceededError
+
+    err = LLMBudgetExceededError(10.0, 5.0)
+    assert isinstance(err, LLMAPIError)
+    assert isinstance(err, BudgetExceededError)
+    assert "5.00" in str(err) and "10.00" in str(err)
+
+
+def test_record_usage_bumps_fast_counter(db, monkeypatch):
+    """落账成功 → Redis 日累计同步累加（熔断速算的数据源）。"""
+    from app.services import infra_status, usage_service
+
+    upsert_price(db, "m-breaker", price_input=2.0, price_output=0.0)
+    fake = _FakeRedis()
+    monkeypatch.setattr(infra_status, "redis_client", lambda: fake)
+    monkeypatch.setattr(usage_service, "new_session", lambda: db)
+    usage_service.record_usage(task_type="summary", model="m-breaker", prompt_tokens=1_000_000)
+    assert fake.store.get(usage_service._day_key()) == pytest.approx(2.0)
+
+
+def test_today_spend_fast_falls_back_to_sql(db, monkeypatch):
+    """Redis 不可用/键缺失 → 回源 ai_usage_log SQL 汇总（fail-open 口径）。"""
+    from datetime import datetime
+
+    from app.services import infra_status, usage_service
+
+    db.add(AiUsageLog(task_type="summary", model="m", prompt_tokens=0, completion_tokens=0,
+                      total_tokens=0, latency_ms=0, status="success", cost=3.5,
+                      created_at=datetime.now(TZ_BJ)))
+    db.commit()
+
+    def _boom():
+        raise RuntimeError("redis down")
+
+    monkeypatch.setattr(infra_status, "redis_client", _boom)
+    assert usage_service.today_spend_fast(db) == pytest.approx(3.5)
+
+
 # ———————————————————— CSV 防注入 ————————————————————
 
 @pytest.mark.parametrize("raw,expected", [

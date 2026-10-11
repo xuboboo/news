@@ -117,3 +117,79 @@ def test_hot_score_expr_compiles_with_same_semantics():
     assert "exp" in sql.lower()
     # PostgreSQL 的 log() 是 10 底，自然对数必须编译为 ln
     assert " ln(" in f" {sql.lower()} " or "ln(" in sql.lower()
+
+
+# ———— 事件热度改版（2026-10-12，AIHOT「按事件算热度」语义）————
+
+from app.algorithms.hot_score import event_hot_from_pairs, event_rising_state  # noqa: E402
+
+
+class TestEventHotFromPairs:
+    """独立来源口径：每来源计成员最高一篇再求和。"""
+
+    def test_same_source_counts_once(self):
+        # 一家媒体发十篇只算一次（取最高）
+        pairs = [("IT之家", 5.0), ("IT之家", 9.0), ("IT之家", 2.0)]
+        assert event_hot_from_pairs(pairs) == 9.0
+
+    def test_cross_sources_sum(self):
+        pairs = [("IT之家", 5.0), ("快科技", 3.0)]
+        assert event_hot_from_pairs(pairs) == 8.0
+
+    def test_none_source_and_scores_tolerated(self):
+        pairs = [(None, None), ("", 0.0), ("IT之家", 1.5)]
+        assert event_hot_from_pairs(pairs) == 1.5
+
+    def test_rounding_two_decimals(self):
+        assert event_hot_from_pairs([("a", 1.111), ("b", 2.222)]) == 3.33
+
+    def test_empty(self):
+        assert event_hot_from_pairs([]) == 0
+
+
+class TestEventRisingState:
+    """滚动基准：prev 恒滞后 6h~6h+一个重算周期；上升=新分较基准涨幅超阈值。"""
+
+    NOW = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
+
+    def test_first_round_initializes_baseline_from_old_score(self):
+        # 无 prev：基准取 old_score（上一窗口末），本轮上涨即判上升
+        prev, rising = event_rising_state(None, None, old_score=1.0, new_score=5.0, now=self.NOW)
+        assert prev == 1.0
+        assert rising is True  # (5-1) > 0.3*1
+
+    def test_within_window_keeps_prev(self):
+        prev_at = self.NOW - timedelta(minutes=10)
+        prev, rising = event_rising_state(4.0, prev_at, old_score=4.5, new_score=5.0, now=self.NOW)
+        assert prev == 4.0  # 基准不翻新
+        assert rising is False  # (5-4)=1 ≤ 0.3*4=1.2
+
+    def test_stale_prev_refreshes_from_old_score(self):
+        prev_at = self.NOW - timedelta(hours=6, minutes=1)
+        prev, rising = event_rising_state(1.0, prev_at, old_score=8.0, new_score=8.0, now=self.NOW)
+        assert prev == 8.0  # 基准翻新为上一窗口末
+        assert rising is False  # 本轮持平
+
+    def test_stale_prev_rising_across_window(self):
+        prev_at = self.NOW - timedelta(hours=7)
+        prev, rising = event_rising_state(1.0, prev_at, old_score=1.0, new_score=8.0, now=self.NOW)
+        assert prev == 1.0
+        assert rising is True  # 跨窗口大涨
+
+    def test_zero_baseline_needs_positive_gain(self):
+        # 分母下限 1.0：0 基准需正向绝对增量 > 阈值，0→ε 噪声不触发
+        prev, rising = event_rising_state(0.0, self.NOW - timedelta(hours=7), 0.0, 0.1, self.NOW)
+        assert prev == 0.0
+        assert rising is False  # 0.1 ≤ 0.3*1
+        _, rising2 = event_rising_state(0.0, self.NOW - timedelta(hours=7), 0.0, 0.5, self.NOW)
+        assert rising2 is True
+
+    def test_naive_prev_at_treated_as_utc(self):
+        naive = datetime(2026, 10, 12, 6, 0)  # naive
+        prev, _ = event_rising_state(2.0, naive, 2.0, 2.0, self.NOW)
+        assert prev == 2.0  # 不抛异常即可
+
+    def test_threshold_custom(self):
+        prev_at = self.NOW - timedelta(minutes=10)
+        _, rising = event_rising_state(4.0, prev_at, 4.5, 5.0, self.NOW, threshold=0.2)
+        assert rising is True  # (5-4)=1 > 0.2*4=0.8

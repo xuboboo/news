@@ -67,6 +67,96 @@ LOG_STATUSES = ("success", "parse_fail", "api_fail")
 MAX_MODEL_PRICE = 10_000
 
 
+class BudgetExceededError(Exception):
+    """当日 AI 成本已超预算且硬熔断开启（llm_client.LLMBudgetExceededError
+    继承本类并叠加 LLMAPIError，调用方既有降级链自动接管）。"""
+
+    def __init__(self, spent: float, budget: float):
+        super().__init__(
+            f"已达 AI 日预算硬上限：今日已计 ¥{spent:.2f} / 预算 ¥{budget:.2f}（北京时间日界，跨日自动恢复）"
+        )
+        self.spent = spent
+        self.budget = budget
+
+
+# —— 预算硬熔断速算（2026-10-12）：Redis 日累计计数，免每次 LLM 调用前 SUM 全表 ——
+
+_DAY_KEY_TTL_SECONDS = 36 * 3600  # 跨过北京日界自然失效，36h 覆盖最大时区漂移
+
+
+def _day_key(now: datetime | None = None) -> str:
+    return "aicost:" + ((now or bj_now()).date().isoformat())
+
+
+def bump_today_cost(cost_delta: float, now: datetime | None = None) -> None:
+    """落账成功后同步累加 Redis 当日速算值。Redis 不可用静默跳过：
+    熔断判定自动回退 ai_usage_log SQL 汇总（fail-open，与告警口径一致）。"""
+    try:
+        from app.services.infra_status import redis_client
+
+        key = _day_key(now)
+        pipe = redis_client().pipeline()
+        pipe.incrbyfloat(key, float(cost_delta or 0.0))
+        pipe.expire(key, _DAY_KEY_TTL_SECONDS)
+        pipe.execute()
+    except Exception:  # noqa: BLE001
+        logger.debug("bump_today_cost skipped（Redis 不可用，熔断判定回退 SQL 汇总）", exc_info=True)
+
+
+def today_spend_fast(db: Session, now: datetime | None = None) -> float:
+    """当日已计成本速算（元）：Redis 计数优先；键缺失/Redis 不可用时回源
+    ai_usage_log 汇总并回写计数（重建成后续请求的快路径）。"""
+    from app.services.infra_status import redis_client
+
+    key = _day_key(now)
+    try:
+        raw = redis_client().get(key)
+        if raw is not None:
+            return float(raw or 0.0)
+    except Exception:  # noqa: BLE001
+        pass
+    spent = float(usage_day_summary(db, (now or bj_now()).date())["cost"] or 0.0)
+    try:
+        pipe = redis_client().pipeline()
+        pipe.incrbyfloat(key, spent)
+        pipe.expire(key, _DAY_KEY_TTL_SECONDS)
+        pipe.execute()
+    except Exception:  # noqa: BLE001
+        pass
+    return spent
+
+
+def assert_budget_available(db: Session) -> None:
+    """预算硬熔断前置检查（LLM 调用前，llm_client.chat 统一触发）。
+
+    - 预算未配置（0）→ 直接放行（零开销路径，维持既有告警语义）；
+    - 预算已配置但 ai_budget_hard_stop 关闭 → 放行（只告警不拦截）；
+    - 超预算且开启 → 抛 BudgetExceededError（经 llm_client 包装为
+      LLMAPIError 分型，摘要回退抽取式 / 草稿按失败落账）。
+    """
+    from app.services import config_service
+
+    try:
+        budget = float(config_service.get_effective(db, "ai_daily_cost_budget") or 0)
+    except Exception:  # noqa: BLE001
+        budget = 0.0
+    if budget <= 0:
+        return
+    try:
+        hard = bool(config_service.get_effective(db, "ai_budget_hard_stop"))
+    except Exception:  # noqa: BLE001
+        from app.core.config import get_settings
+
+        hard = bool(getattr(get_settings(), "ai_budget_hard_stop", False))
+    if not hard:
+        return
+    spent = today_spend_fast(db)
+    if spent > budget:
+        from app.ai.llm_client import LLMBudgetExceededError
+
+        raise LLMBudgetExceededError(spent, budget)
+
+
 def extract_openai_usage(body: dict) -> dict:
     """从 OpenAI 兼容响应体提取 usage 四项；缺失字段记 0。
 
@@ -139,6 +229,7 @@ def record_usage(
         db = new_session()
         try:
             total = int(total_tokens or 0) or (int(prompt_tokens or 0) + int(completion_tokens or 0))
+            cost = calc_cost(db, model, prompt_tokens, completion_tokens, cached_tokens)
             db.add(AiUsageLog(
                 task_type=task_type,
                 trigger=trigger,
@@ -152,11 +243,13 @@ def record_usage(
                 latency_ms=int(latency_ms or 0),
                 status=status,
                 error=(str(error)[:2000] if error else None),
-                cost=calc_cost(db, model, prompt_tokens, completion_tokens, cached_tokens),
+                cost=cost,
             ))
             db.commit()
         finally:
             db.close()
+        # 预算硬熔断的 Redis 日累计：落账成功才累加；自身失败不影响业务
+        bump_today_cost(cost)
     except Exception:
         logger.exception("record_usage failed (task_type=%s model=%s)", task_type, model)
 

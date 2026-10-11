@@ -67,6 +67,7 @@ class Settings(BaseSettings):
 
     # —— AI 成本治理（面板可热调） ——
     ai_daily_cost_budget: float = 0.0    # 单日（北京时间日界）AI 成本预算（元）；0 = 不告警
+    ai_budget_hard_stop: bool = False    # 硬熔断：超预算后拦截付费 LLM 调用（摘要自动回退抽取式，草稿按失败落账）；false = 仅告警
     ai_usage_retention_days: int = 365   # ai_usage_log 流水保留天数；0 = 永久保留
 
     # —— 文章生成（草稿域；面板可热调） ——
@@ -75,6 +76,19 @@ class Settings(BaseSettings):
     article_gen_hourly_limit: int = 30   # 单用户每小时生成派发上限（按审计派发计数，新旧草稿都算）；0 = 不限
     article_gen_max_sources: int = 6     # 事件生文取成员报道上限（每篇都进 prompt，量大费 token）
     article_gen_max_source_chars: int = 4000  # 每篇素材正文的截断长度
+
+    # —— 对外内容出口（exports 域；面板可热调） ——
+    # 公开 RSS / llms.txt / sitemap / 只读 OpenAPI / MCP 的总开关。关闭（默认）时
+    # 全部出口端点 404（不暴露存在性）。出口只含本系统自有 AI 摘要与元数据，
+    # 不含第三方正文（版权红线，见 docs/对外内容出口说明.md）。
+    public_exports_enabled: bool = False
+    # 站点公开基准 URL（如 https://news.example.com）：feed/llms.txt 内的绝对链接
+    # 基准。留空用请求 Host 推导（生产反代/HTTPS 部署建议显式设置）。
+    public_base_url: str = ""
+    # MCP 端点 Bearer 令牌；留空 = MCP 关闭（端点恒 404）
+    mcp_token: str = ""
+    # 每条 feed 输出的最大条目数
+    feed_max_items: int = 50
 
     # —— 安全 ——
     cors_origins: str = "http://localhost,http://127.0.0.1"  # 允许跨域的前端来源（逗号分隔）
@@ -95,6 +109,13 @@ class Settings(BaseSettings):
     comment_weight: int = 4
     like_weight: int = 2
     share_weight: int = 6
+
+    # —— 事件热度（2026-10-12 改版，AIHOT「按事件算热度」语义；面板可热调） ——
+    # distinct_source=每独立来源计成员最高一篇再求和（一家媒体发十篇只算一次）；
+    # sum_articles=旧口径（成员分求和，可回滚）
+    event_hot_mode: str = "distinct_source"
+    event_rising_threshold: float = 0.3  # 较滚动基准（6h 前）涨幅超过此值标「上升」
+    event_new_hours: int = 6             # first_time 在此窗口内的事件标「新」
 
     # —— 事件聚合（PRD：相似度 > 0.85 + 标题关键词 + 实体 + 发布时间）——
     sim_threshold: float = 0.85

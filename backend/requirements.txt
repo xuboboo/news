@@ -19,4 +19,6 @@ jieba==0.42.1
 numpy==2.2.1
 python-dateutil==2.9.0
 bcrypt==4.2.1
+# MCP 只读服务器（exports 域可选能力）：代码懒加载，SDK 缺失时主应用照常启动
+mcp>=1.0.0,<2
 # pytest 仅供测试（2026-09-18 审计整改 L-2）：拆至 requirements-dev.txt，不进生产镜像

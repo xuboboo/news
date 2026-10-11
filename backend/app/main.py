@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app.api.v2 import audit, drafts, public, site_drafts, users
+from app.api.v2 import audit, drafts, exports, public, site_drafts, users
 from app.api.v2.admin import router as admin_router
 from app.api.v2.auth import router as auth_router
 from app.api.v2.routes import router
@@ -50,6 +50,10 @@ def init_db() -> None:
         # 成本看板（2026-09-09）：价目缓存价（NULL=按输入价全价计）+ 明细按任务×时间复合索引
         conn.execute(text("ALTER TABLE model_price ADD COLUMN IF NOT EXISTS price_cache NUMERIC(12, 4) NULL"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_ai_usage_log_task_created ON ai_usage_log (task_type, created_at)"))
+        # 事件热度改版（2026-10-12）：滚动比较基准 + 上升标记（AIHOT「按事件算热度」语义）
+        conn.execute(text("ALTER TABLE event ADD COLUMN IF NOT EXISTS hot_score_prev FLOAT NOT NULL DEFAULT 0"))
+        conn.execute(text("ALTER TABLE event ADD COLUMN IF NOT EXISTS score_updated_at TIMESTAMPTZ NULL"))
+        conn.execute(text("ALTER TABLE event ADD COLUMN IF NOT EXISTS is_rising BOOLEAN NOT NULL DEFAULT FALSE"))
         from app.services.article_draft_schema import upgrade_article_draft_columns
         upgrade_article_draft_columns(conn)
 
@@ -156,8 +160,11 @@ async def _audit_access_denied(request: Request, exc: HTTPException):
         headers=headers,
     )
 
-# 公开探针（/api/v2/health）——全站门禁的例外，新增公开端点必须放 public.py
+# 公开探针（/api/v2/health）——全站门禁例外域一（新增公开端点放 public.py 或 exports.py）
 app.include_router(public.router)
+# 对外内容出口（公开只读例外域二）：RSS / llms.txt / sitemap / 只读 OpenAPI，
+# public_exports_enabled 开关总控（关闭 = 404 不暴露存在性），见 exports.py 说明
+app.include_router(exports.router)
 # 业务数据接口：全站强制登录（含 stats/热榜/最新/文章/事件/早报 + 运维触发）
 app.include_router(router, dependencies=[Depends(require_user)])
 # 文章草稿：选题 → AI 生成 → 编辑 → 复制发布（全员共享，require_user 即可）
@@ -172,6 +179,15 @@ app.include_router(users.router)
 app.include_router(audit.router)
 # 运维监控面板（require_admin：super 会话 或 X-Admin-Token 后门）
 app.include_router(admin_router)
+
+# MCP 只读服务器（可选依赖 mcp SDK）：未安装 SDK 或初始化失败时自动不挂载，
+# 不影响主应用启动；端点自身受 public_exports_enabled + mcp_token 双重门禁
+try:
+    from app.services.mcp_server import mount_mcp
+
+    mount_mcp(app)
+except Exception:  # noqa: BLE001 可选依赖缺失属正常形态
+    logging.getLogger("uvicorn.error").info("MCP 未启用（未安装 mcp SDK 或初始化失败）")
 
 
 @app.get("/")

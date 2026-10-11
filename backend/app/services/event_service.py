@@ -695,35 +695,90 @@ def run_event_clustering(db: Session) -> dict:
 
 
 def recompute_event_scores(db: Session) -> None:
-    """事件热度 = 成员文章 HotScore 之和（归一化在 API 层做）。
+    """事件热度重算（2026-10-12 改版，AIHOT「按事件算热度」语义）。
 
-    单条 JOIN + GROUP BY 下推 DB（复用 hot_score_expr），替代逐事件逐成员
+    口径由 event_hot_mode 切换（管理面板热调，可回滚）：
+    - distinct_source（默认）：每独立来源计成员最高一篇再求和——一家媒体发
+      十篇只算一次，重复抓取不重复计分，榜单反映「有多少家在说」；
+    - sum_articles：旧口径（成员分求和）。
+    两口径同为单条 SQL 聚合下推 DB（复用 hot_score_expr），替代逐事件逐成员
     的 N+1 查询；无成员的事件记 0（与旧实现一致）。
-    load_only 只取重算涉及的四个列：事件行携带 384 维 centroid 与
+
+    上升标记：hot_score_prev 为滚动比较基准——距上次刷新超过滚动窗（6h，
+    等效 AIHOT「和 6 小时前比」）时翻新为上一窗口末分数，之后各轮保持；
+    is_rising = 新分较基准涨幅超 event_rising_threshold。纯规则见
+    hot_score.event_rising_state（有单测），此处只做列写入。
+
+    load_only 只取重算涉及的列：事件行携带 384 维 centroid 与
     timeline/impacts JSONB 大字段，全表每 10 分钟拖一遍纯属浪费。
     """
     from sqlalchemy import func
     from sqlalchemy.orm import load_only
 
-    from app.algorithms.hot_score import hot_score_expr
+    from app.algorithms.hot_score import event_rising_state, hot_score_expr
+    from app.core.config import get_settings
+    from app.utils.tz import bj_now
 
-    rows = (
-        db.query(
-            EventArticle.event_id,
-            func.sum(hot_score_expr(Article)),
+    s = get_settings()
+    now = bj_now()
+    if (s.event_hot_mode or "distinct_source") == "sum_articles":
+        rows = (
+            db.query(
+                EventArticle.event_id,
+                func.sum(hot_score_expr(Article)),
+            )
+            .join(Article, Article.id == EventArticle.article_id)
+            .group_by(EventArticle.event_id)
+            .all()
         )
-        .join(Article, Article.id == EventArticle.article_id)
-        .group_by(EventArticle.event_id)
-        .all()
-    )
-    scores = {eid: round(float(total or 0.0), 2) for eid, total in rows}
+        scores = {eid: round(float(total or 0.0), 2) for eid, total in rows}
+    else:
+        sub = (
+            db.query(
+                EventArticle.event_id.label("event_id"),
+                Article.source.label("source"),
+                func.max(hot_score_expr(Article)).label("src_score"),
+            )
+            .join(Article, Article.id == EventArticle.article_id)
+            .group_by(EventArticle.event_id, Article.source)
+            .subquery()
+        )
+        rows = (
+            db.query(sub.c.event_id, func.sum(sub.c.src_score))
+            .group_by(sub.c.event_id)
+            .all()
+        )
+        scores = {eid: round(float(total or 0.0), 2) for eid, total in rows}
+
     events = (
         db.query(HotEvent)
-        .options(load_only(HotEvent.id, HotEvent.hot_score, HotEvent.last_time, HotEvent.status))
+        .options(
+            load_only(
+                HotEvent.id,
+                HotEvent.hot_score,
+                HotEvent.hot_score_prev,
+                HotEvent.score_updated_at,
+                HotEvent.last_time,
+                HotEvent.status,
+            )
+        )
         .all()
     )
     for ev in events:
-        ev.hot_score = scores.get(ev.id, 0.0)
+        old = float(ev.hot_score or 0.0)
+        new = scores.get(ev.id, 0.0)
+        prev, rising = event_rising_state(
+            ev.hot_score_prev,
+            ev.score_updated_at,
+            old,
+            new,
+            now,
+            threshold=s.event_rising_threshold,
+        )
+        ev.hot_score_prev = prev
+        ev.is_rising = rising
+        ev.hot_score = new
+        ev.score_updated_at = now
         if ev.last_time:
             # 状态全量刷新：事件状态此前只在被聚类命中时更新，长时间无新报道的
             # 事件会永久冻结在「发酵中/持续关注」——每轮随热度重算一起翻牌
