@@ -11,13 +11,18 @@ SITE_COVER_GUIDANCE_LIMIT = 240
 
 
 def source_refs_from_material(material: list[dict]) -> list[dict[str, str]]:
-    """取生成时实际使用的来源快照，不依赖后续文章/事件是否仍存在。"""
+    """取生成时实际使用的来源快照，不依赖后续文章/事件是否仍存在。
+
+    素材带原文 URL 时一并入快照：参考来源脚注给出原文链接，
+    满足"综合 XX 报道 + 原文链接"的防洗稿与可核验要求。
+    """
     refs: list[dict[str, str]] = []
     for item in material:
         title = re.sub(r"[\r\n]+", " ", str(item.get("title") or "")).strip()
         source = re.sub(r"[\r\n]+", " ", str(item.get("source") or "")).strip()
+        url = str(item.get("url") or "").strip()
         if title:
-            refs.append({"source": source, "title": title})
+            refs.append({"source": source, "title": title, **({"url": url} if url else {})})
     return refs
 
 

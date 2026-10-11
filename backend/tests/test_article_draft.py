@@ -216,8 +216,8 @@ def test_generate_success(db, seeded_content, usage_calls):
     assert "AI 基于公开报道辅助生成" not in row.content_md and "## 声明" not in row.content_md
     assert row.prompt_tokens == 100 and row.completion_tokens == 50
     assert sorted(row.source_refs, key=lambda ref: ref["source"]) == [
-        {"source": "IT之家", "title": "原标题A"},
-        {"source": "快科技", "title": "原标题B"},
+        {"source": "IT之家", "title": "原标题A", "url": "https://ithome.com/x/a"},
+        {"source": "快科技", "title": "原标题B", "url": "https://mydrivers.com/x/b"},
     ]
     # 记账：task_type=article，event 源带 event_id，成功落 success
     assert usage_calls and usage_calls[-1]["task_type"] == "article"

@@ -12,6 +12,7 @@ def upgrade_article_draft_columns(conn) -> None:
     conn.execute(text("ALTER TABLE article_draft ADD COLUMN IF NOT EXISTS site_tags VARCHAR(120) NOT NULL DEFAULT ''"))
     conn.execute(text("ALTER TABLE article_draft ADD COLUMN IF NOT EXISTS cover_guidance VARCHAR(240) NOT NULL DEFAULT ''"))
     conn.execute(text("ALTER TABLE article_draft ADD COLUMN IF NOT EXISTS software_id INTEGER NOT NULL DEFAULT 0"))
+    conn.execute(text("ALTER TABLE article_draft ADD COLUMN IF NOT EXISTS longtail_suggestions JSONB NULL"))
     conn.execute(text("ALTER TABLE article_draft ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN NOT NULL DEFAULT FALSE"))
     conn.execute(text("ALTER TABLE article_draft ADD COLUMN IF NOT EXISTS is_recommended BOOLEAN NOT NULL DEFAULT FALSE"))
     conn.execute(text("ALTER TABLE article_draft ADD COLUMN IF NOT EXISTS is_headline BOOLEAN NOT NULL DEFAULT FALSE"))

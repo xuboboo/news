@@ -93,8 +93,11 @@ def _collect_material(db: Session, row: ArticleDraft) -> tuple[list[dict], str]:
 
     material = [
         {
+            "article_id": a.id,
+            "publish_time": a.publish_time.isoformat() if a.publish_time else "",
             "source": a.source or "",
             "title": a.title or "",
+            "url": (a.url or "").strip(),
             "summary_short": ((a.summary.summary_short if a.summary else "") or "").strip(),
             "content": (a.content or "").strip()[:max_chars],
         }
@@ -217,15 +220,36 @@ def _strip_generated_footer_sections(content_md: str, *, strip_sources: bool = T
     return "\n".join(output).rstrip()
 
 
+_STRAY_SOURCE_MARKER_RE = re.compile(
+    r"(?m)^[ \t]*(?:[-*+][ \t]*)?(?:参考来源|资料来源|本文参考来源|来源)[：:].*$"
+)
+
+
+def _strip_stray_source_markers(content_md: str) -> str:
+    """删除模型自行写在正文里的‘参考来源：…’整行。
+
+    _strip_generated_footer_sections 只识别 Markdown 标题形式的来源小节；模型有时把
+    来源写成普通段落或列表项，那一行会连同后面的媒体名一起进入 CMS 正文。这里只处理
+    以来源标记开头的整行，不触碰正文中的正常归属措辞。
+    """
+    lines = [line for line in (content_md or "").splitlines()
+             if not _STRAY_SOURCE_MARKER_RE.match(line)]
+    return "\n".join(lines).rstrip()
+
+
 def _ensure_source_footer(content_md: str, source_refs: list[dict]) -> str:
     """从不可变来源快照重建参考来源段，不保留模型自行生成的尾注。"""
-    text = _strip_generated_footer_sections(content_md)
+    text = _strip_stray_source_markers(_strip_generated_footer_sections(content_md))
     source_lines = []
     for item in source_refs:
         title = re.sub(r"[\r\n]+", " ", str(item.get("title") or "")).strip()
         source = re.sub(r"[\r\n]+", " ", str(item.get("source") or "")).strip()
+        url = str(item.get("url") or "").strip()
         if title:
-            source_lines.append(f"- {source}丨《{title}》")
+            line = f"- {source}丨《{title}》"
+            if url.startswith(("http://", "https://")):
+                line += f"：{url}"
+            source_lines.append(line)
     if source_lines:
         text += f"\n\n{SOURCES_SECTION_HEADING}\n" + "\n".join(source_lines)
     return text

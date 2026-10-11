@@ -54,8 +54,8 @@ export interface SourceReference {
 const AI_DISCLOSURE_HEADING_RE = /^(?:AI|AIGC|人工智能)\s*(?:辅助)?\s*(?:生成(?:内容)?|创作)?\s*(?:声明|说明)/i;
 const LEGACY_AI_DISCLOSURE_LINE_RE = /^[ \t]*(?:本文|本稿)由[ \t]*(?:AI|AIGC|人工智能)[ \t]*(?:基于公开报道[ \t]*)?(?:辅助)?(?:生成|整理撰写|撰写|创作)[^\r\n]*$/i;
 
-/** 复制/预览时仅依据服务器保存的来源快照重建不可伪造的来源尾注。 */
-export function ensureSourceFooter(contentMd: string, sourceRefs: SourceReference[]): string {
+/** 清理生成内容里的历史来源小节/声明（网站稿正文不再包含任何来源信息）。 */
+export function stripGeneratedSections(contentMd: string): string {
   const lines: string[] = [];
   let skippingLevel = 0;
   let fenceMarker = '';
@@ -91,7 +91,12 @@ export function ensureSourceFooter(contentMd: string, sourceRefs: SourceReferenc
       if (!LEGACY_AI_DISCLOSURE_LINE_RE.test(label) && !labelledDisclosure) lines.push(line);
     }
   }
-  const body = lines.join('\n').trimEnd();
+  return lines.join('\n').trimEnd();
+}
+
+/** 复制/预览时仅依据服务器保存的来源快照重建不可伪造的来源尾注（公众号稿专用；网站稿不再追加来源）。 */
+export function ensureSourceFooter(contentMd: string, sourceRefs: SourceReference[]): string {
+  const body = stripGeneratedSections(contentMd);
   const refs = sourceRefs
     .filter((ref) => ref.title.trim())
     .map((ref) => `- ${ref.source.replace(/[\r\n]+/g, ' ').trim()}丨《${ref.title.replace(/[\r\n]+/g, ' ').trim()}》`);

@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { Link, useBlocker, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ClipboardCopy, Copy, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { deleteSiteDraft, getSiteDraft, regenerateSiteDraft, updateSiteDraft, type SiteDraftItem } from '../api/siteDrafts';
-import { copyPlain, copyRich, ensureSourceFooter, flashCopyState, renderPlain, renderRich, type CopyState } from '../utils/clipboard';
+import { copyPlain, copyRich, stripGeneratedSections, flashCopyState, renderPlain, renderRich, type CopyState } from '../utils/clipboard';
 import { Loading } from '../components/common';
 import { usePageTitle } from '../utils/hooks';
 
@@ -125,7 +125,8 @@ export default function SiteDraftDetail() {
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
 
-  const canonicalContent = useMemo(() => ensureSourceFooter(form.content_md, draft?.source_refs ?? []), [form.content_md, draft?.source_refs]);
+  // 网站稿正文不含任何参考来源：只清理历史来源小节/声明，不再重建来源尾注。
+  const canonicalContent = useMemo(() => stripGeneratedSections(form.content_md), [form.content_md]);
   // CMS有单独标题字段，新闻正文复制不再添加第二个 H1。
   const bodyHtml = useMemo(() => renderRich(canonicalContent), [canonicalContent]);
   const previewHtml = useMemo(() => renderRich(`# ${form.title.trim()}\n\n${canonicalContent}`), [form.title, canonicalContent]);
@@ -250,8 +251,19 @@ export default function SiteDraftDetail() {
       <section className="card p-5 space-y-4" aria-label="网站后台字段">
         <Field label="标题" required disabled={formBusy} value={form.title} onChange={(value) => edit({ title: value })} limit={TEXT_LIMITS.title} onCopy={() => copy(form.title)} hint="准确说明事件，主要实体自然出现；80字是本工具保存上限，并非SEO规则。" />
         {draft.alt_titles.length > 0 && <div className="flex gap-2 flex-wrap text-xs"><span className="text-slate-500">备选标题：</span>{draft.alt_titles.map((title, index) => <button key={index} disabled={formBusy} aria-pressed={form.title === title} onClick={() => edit({ title })} className={buttonClass}>{title}</button>)}</div>}
+        {(draft.longtail_suggestions?.length ?? 0) > 0 && <div className="rounded-md border border-radar-border p-3 text-xs space-y-2" aria-label="长尾选题建议">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-slate-500">长尾承接选题（发布本文后可逐篇另写，互相内链），共 {draft.longtail_suggestions!.length} 条：</span>
+            <button disabled={formBusy} onClick={() => copy(draft.longtail_suggestions!.map((item, index) => `${index + 1}. ${item.keyword}｜意图${item.intent}｜${item.form}｜建议标题：${item.title}`).join('\n'))} className={buttonClass}>复制长尾清单</button>
+          </div>
+          <ol className="list-decimal list-inside space-y-1 text-slate-300">
+            {draft.longtail_suggestions!.map((item, index) => (
+              <li key={index}>{item.keyword}（意图{item.intent}·{item.form}）建议标题：{item.title}</li>
+            ))}
+          </ol>
+        </div>}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <Field label="页面关键字" disabled={formBusy} value={form.seo_keywords} onChange={(value) => edit({ seo_keywords: value })} limit={TEXT_LIMITS.seo_keywords} onCopy={() => copy(form.seo_keywords)} hint="建议3~6个相关短语，英文逗号分隔；Google不使用meta keywords作为排名依据。" />
+          <Field label="页面关键字" disabled={formBusy} value={form.seo_keywords} onChange={(value) => edit({ seo_keywords: value })} limit={TEXT_LIMITS.seo_keywords} onCopy={() => copy(form.seo_keywords)} hint="固定3个相关短语，英文逗号分隔；Google不使用meta keywords作为排名依据。" />
           <Field label="标签" disabled={formBusy} value={form.site_tags} onChange={(value) => edit({ site_tags: value })} limit={TEXT_LIMITS.site_tags} onCopy={() => copy(form.site_tags)} hint="用于栏目归类和相关文章，避免建立大量重复标签。" />
         </div>
         <Field label="内容简介" required disabled={formBusy} multiline value={form.digest} onChange={(value) => edit({ digest: value })} limit={TEXT_LIMITS.digest} onCopy={() => copy(form.digest)} hint="独立、准确概括本文。是否输出为网页meta description需要由网站模板确认。" />

@@ -46,7 +46,7 @@ describe('website CMS fields', () => {
     await waitFor(() => expect(clipboard.copyRich).toHaveBeenCalled());
     const [html, plain] = clipboard.copyRich.mock.calls[0];
     expect(html).not.toContain('<h1'); expect(plain).not.toContain('网站稿标题');
-    expect(plain).toContain('事实报道'); expect(plain).not.toContain('AI 基于公开报道辅助生成');
+    expect(plain).not.toContain('事实报道'); expect(plain).not.toContain('AI 基于公开报道辅助生成');
     expect(plain).not.toMatch(/(^|\n)##|\*\*/);
     expect((await screen.findByLabelText('＊标题') as HTMLInputElement).required).toBe(true);
     expect(screen.getByLabelText('＊内容简介').getAttribute('aria-required')).toBe('true');
@@ -66,7 +66,7 @@ describe('website CMS fields', () => {
     const [html, plain] = clipboard.copyRich.mock.calls[0];
     expect(html).not.toContain('本文由 AI');
     expect(plain).not.toContain('本文由 AI');
-    expect(plain).toContain('事实报道');
+    expect(plain).not.toContain('事实报道');
   });
   it('restores clean state after changing a field back', async () => {
     mount();

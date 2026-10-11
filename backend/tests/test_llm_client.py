@@ -44,6 +44,18 @@ def test_build_request_openai_shape():
     assert "max_tokens" not in body  # 业务调用不传则不带（与既有行为一致）
 
 
+def test_build_request_thinking_flag_only_when_requested():
+    _, _, body = llm_client.build_request(
+        "https://api.example.test/v1/", "sk-k", "m1", "openai", "hi", json_mode=True,
+    )
+    assert "thinking" not in body  # 不传不下发，保持其他调用行为不变
+    _, _, body = llm_client.build_request(
+        "https://api.example.test/v1/", "sk-k", "m1", "openai", "hi", json_mode=True,
+        thinking="disabled",
+    )
+    assert body["thinking"] == {"type": "disabled"}
+
+
 def test_build_request_anthropic_shape():
     url, headers, body = llm_client.build_request(
         "https://api.deepseek.com/anthropic", "sk-k", "m1", "anthropic", "hi",
@@ -230,6 +242,40 @@ def test_chat_connect_error_raises_api_error(monkeypatch):
     monkeypatch.setattr(llm_client.httpx, "post", boom)
     with pytest.raises(llm_client.LLMAPIError):
         llm_client.chat("https://x.test", "k", "m", "openai", "hi")
+
+
+@pytest.mark.parametrize("exception_type,phase", [
+    (httpx.ReadTimeout, "read"), (httpx.ConnectTimeout, "connect"),
+    (httpx.WriteTimeout, "write"), (httpx.PoolTimeout, "pool"),
+])
+def test_chat_timeout_preserves_phase_and_api_error_compatibility(monkeypatch, exception_type, phase):
+    original = exception_type("The read operation timed out")
+
+    def boom(*args, **kwargs):
+        raise original
+
+    monkeypatch.setattr(llm_client.httpx, "post", boom)
+    with pytest.raises(llm_client.LLMTimeoutError) as error:
+        llm_client.chat("https://x.test", "k", "m", "openai", "hi")
+    assert isinstance(error.value, llm_client.LLMAPIError)
+    assert error.value.phase == phase
+    assert error.value.__cause__ is original
+
+
+def test_chat_passes_phase_specific_timeout_and_output_budget(monkeypatch):
+    timeout = httpx.Timeout(connect=20, read=600, write=30, pool=20)
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs)
+        return _resp({"choices": [{"message": {"content": "OK"}}]})
+
+    monkeypatch.setattr(llm_client.httpx, "post", post)
+    assert llm_client.chat("https://x.test", "k", "m", "openai", "hi",
+                           timeout=timeout, max_tokens=12288)[0] == "OK"
+    assert calls[0]["timeout"] is timeout
+    assert calls[0]["json"]["max_tokens"] == 12288
+    assert calls[0]["json"]["stream"] is False
 
 
 def test_chat_anthropic_end_to_end(monkeypatch):

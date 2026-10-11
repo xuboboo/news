@@ -45,6 +45,7 @@ def _site_dict(row: ArticleDraft, with_content: bool = False) -> dict:
         "tier": row.tier,
         "title": row.title or "",
         "alt_titles": row.alt_titles or [],
+        "longtail_suggestions": row.longtail_suggestions or [],
         "digest": row.digest or "",
         "seo_keywords": row.seo_keywords or "",
         "site_tags": row.site_tags or "",

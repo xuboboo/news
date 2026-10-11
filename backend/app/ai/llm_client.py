@@ -40,6 +40,14 @@ class LLMAPIError(Exception):
     """连接失败或 HTTP 非 200（调用方落账 api_fail）。"""
 
 
+class LLMTimeoutError(LLMAPIError):
+    """HTTP 超时；保留阶段，不用匹配英文错误字符串来判断是否应该重试。"""
+
+    def __init__(self, msg: str, *, phase: str = "read"):
+        super().__init__(msg)
+        self.phase = phase
+
+
 class LLMFormatError(Exception):
     """HTTP 200 但响应结构不符（调用方落账 parse_fail，token 已花）。
 
@@ -72,8 +80,14 @@ def build_request(
     temperature: float | None = None,
     max_tokens: int | None = None,
     json_mode: bool = False,
+    thinking: str | None = None,
 ) -> Tuple[str, dict, dict]:
-    """按协议构造 (url, headers, body)。不发送请求。"""
+    """按协议构造 (url, headers, body)。不发送请求。
+
+    thinking 传 "disabled"/"enabled" 时以 body 字段下发给支持该参数的
+    思考型模型（如智谱 GLM 系列）：思考 token 计入 max_tokens，关闭后
+    可把输出预算全部留给正文。
+    """
     if normalize_protocol(protocol) == "anthropic":
         body: dict = {
             "model": model,
@@ -99,6 +113,8 @@ def build_request(
         body["max_tokens"] = max_tokens
     if json_mode:
         body["response_format"] = {"type": "json_object"}
+    if thinking:
+        body["thinking"] = {"type": thinking}
     return (
         f"{base_url.rstrip('/')}/chat/completions",
         {"Authorization": f"Bearer {api_key}"},
@@ -270,15 +286,24 @@ def chat(
     temperature: float | None = None,
     max_tokens: int | None = None,
     json_mode: bool = False,
-    timeout: float = 60,
+    timeout: float | httpx.Timeout = 60,
+    thinking: str | None = None,
 ) -> Tuple[str, dict]:
     """单轮补全：返回 (文本, usage 四项)；连接/非 200 抛 LLMAPIError，结构不符抛 LLMFormatError。"""
     url, headers, body = build_request(
         base_url, api_key, model, protocol, prompt,
         system=system, temperature=temperature, max_tokens=max_tokens, json_mode=json_mode,
+        thinking=thinking,
     )
     try:
         resp = httpx.post(url, headers=headers, json=body, timeout=timeout)
+    except httpx.TimeoutException as exc:
+        phase = (
+            "connect" if isinstance(exc, httpx.ConnectTimeout) else
+            "write" if isinstance(exc, httpx.WriteTimeout) else
+            "pool" if isinstance(exc, httpx.PoolTimeout) else "read"
+        )
+        raise LLMTimeoutError(str(exc), phase=phase) from exc
     except (httpx.HTTPError, httpx.InvalidURL) as exc:
         # InvalidURL 不是 HTTPError 子类（如端口写错 'notaport'），漏接会击穿
         # 异常分型：业务侧误记 parse_fail、管理端测试连通 500 而非 502

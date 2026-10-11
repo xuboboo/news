@@ -36,6 +36,7 @@ class ArticleDraft(Base):
     tier = Column(String(16), nullable=False, default="brief")     # brief=快讯版 / depth=深度版
     title = Column(String(512), default="")                        # 公众号≤30字；网站稿≤80字
     alt_titles = Column(JSON().with_variant(JSONB, "postgresql"), default=list)  # 备选标题
+    longtail_suggestions = Column(JSON().with_variant(JSONB, "postgresql"), default=list)  # 长尾承接选题建议（keyword/intent/form/title）
     digest = Column(String(200), default="")                       # 公众号≤120字；网站简介≤160字
     content_md = Column(Text, default="")                          # Markdown 正文
     source_refs = Column(JSON().with_variant(JSONB, "postgresql"), nullable=False, default=list)  # 生成时的来源快照

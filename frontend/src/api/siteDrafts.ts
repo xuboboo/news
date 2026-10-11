@@ -1,5 +1,12 @@
 import { draftRequest, type DraftItem, type DraftListPage, type DraftSourceType, type DraftTier, type DraftStatus } from './drafts';
 
+export interface LongtailSuggestion {
+  keyword: string;
+  intent: string;
+  form: string;
+  title: string;
+}
+
 export interface SiteDraftItem extends DraftItem {
   channel: 'site';
   seo_keywords: string;
@@ -10,6 +17,7 @@ export interface SiteDraftItem extends DraftItem {
   is_recommended: boolean;
   is_headline: boolean;
   publish_at: string | null;
+  longtail_suggestions?: LongtailSuggestion[];
 }
 
 export interface SiteDraftListPage extends Omit<DraftListPage, 'items'> {

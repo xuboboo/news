@@ -49,6 +49,7 @@ def _draft_dict(r: ArticleDraft, with_content: bool = False) -> dict:
         "tier": r.tier,
         "title": r.title or "",
         "alt_titles": r.alt_titles or [],
+        "longtail_suggestions": getattr(r, "longtail_suggestions", None) or [],
         "digest": r.digest or "",
         "model": r.model or "",
         "prompt_tokens": r.prompt_tokens or 0,
