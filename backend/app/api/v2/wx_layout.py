@@ -53,7 +53,7 @@ def _get_report_or_404(db: Session, day: date_type) -> DailyReport:
     return row
 
 
-def _render(db: Session, report: DailyReport) -> dict:
+def _render(report: DailyReport) -> dict:
     """早报快照 → 排版产物；内容为空（无事件/速览/热榜）时拒绝产稿。"""
     try:
         return build_layout(report.content or {})
@@ -91,7 +91,7 @@ def create_or_regenerate_wx_layout(
     body = payload or {}
     day = _parse_date(body.get("date"))
     report = _get_report_or_404(db, day)
-    rendered = _render(db, report)
+    rendered = _render(report)
 
     user = current_user_of(request)
     existing = db.query(WxLayoutDraft).filter(WxLayoutDraft.report_id == report.id).first()
@@ -173,7 +173,7 @@ def regenerate_wx_layout(
     report = db.get(DailyReport, row.report_id)
     if report is None:
         raise HTTPException(404, "源早报已不存在，无法重新生成")
-    rendered = _render(db, report)
+    rendered = _render(report)
     return _update_existing(db, row, report, rendered, request, current_user_of(request))
 
 

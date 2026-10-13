@@ -127,9 +127,12 @@ _WS_RE = re.compile(r"\s+")
 
 
 def _esc(value: object) -> str:
-    """动态文本 → 正文安全文本：压平空白 + HTML 转义（早报内容含外站标题，不可信）。"""
+    """动态文本 → 正文安全文本：压平空白 + HTML 转义（早报内容含外站标题，不可信）。
+
+    动态文本只允许进入元素内容位，不得拼入属性位；引号一并转义作纵深防御。
+    """
     text = _WS_RE.sub(" ", str(value or "")).strip()
-    return html.escape(text, quote=False)
+    return html.escape(text)
 
 
 def _score_text(raw: object) -> str:
@@ -156,7 +159,7 @@ def render_report_body(content: dict) -> str:
     industry_changes = content.get("industry_changes") or []
     top_articles = content.get("top_articles") or []
     if not (top_events or quick_news or industry_changes or top_articles):
-        raise ValueError("早报内容为空")
+        raise ValueError("内容为空（无任何事件/速览/热榜条目）")
 
     blocks: list[str] = []
     date_text = _esc(content.get("date") or "")
@@ -178,7 +181,7 @@ def render_report_body(content: dict) -> str:
 
     if top_events:
         blocks.append(_section_title("昨夜今晨热点事件"))
-        for i, ev in enumerate(top_events, 1):
+        for i, ev in enumerate((e for e in top_events if _esc(e.get("title"))), 1):
             blocks.append(_P.format(f"<strong>{i}. {_esc(ev.get('title'))}</strong>"))
             summary = _esc(ev.get("summary") or "")
             if summary:

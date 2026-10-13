@@ -154,6 +154,33 @@ def test_regenerate_endpoint_and_missing_source(member_client, db):
     assert resp.status_code == 404
 
 
+def test_event_without_title_is_skipped(member_client, db):
+    """空标题事件整条跳过（与速览/热榜的守卫一致），不渲染空编号行。"""
+    from datetime import date
+
+    from app.models.report import DailyReport
+
+    content = {
+        "date": "2026-10-14", "issue_no": 1, "overview": "综述",
+        "top_events": [
+            {"id": 1, "title": "", "summary": "有摘要无标题"},
+            {"id": 2, "title": "正常事件", "summary": "摘要"},
+        ],
+        "quick_news": [], "industry_changes": [], "top_articles": [],
+    }
+    s = db.factory()
+    s.add(DailyReport(date=date(2026, 10, 14), issue_no=1, content=content))
+    s.commit()
+    s.close()
+
+    created = member_client.post("/api/v2/wx-layouts", json={"date": "2026-10-14"}, headers=H).json()
+    detail = member_client.get(f"/api/v2/wx-layouts/{created['id']}").json()
+    html_text = detail["content_html"]
+    assert "<strong>1. </strong>" not in html_text
+    assert "有摘要无标题" not in html_text
+    assert "<strong>1. 正常事件</strong>" in html_text
+
+
 def test_delete_revision_guard(member_client, db):
     _seed_report(db)
     created = member_client.post("/api/v2/wx-layouts", json={"date": "2026-10-14"}, headers=H).json()
