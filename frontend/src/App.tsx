@@ -11,6 +11,8 @@ import Drafts from './pages/Drafts';
 import DraftDetail from './pages/DraftDetail';
 import SiteDrafts from './pages/SiteDrafts';
 import SiteDraftDetail from './pages/SiteDraftDetail';
+import WxLayouts from './pages/WxLayouts';
+import WxLayoutDetail from './pages/WxLayoutDetail';
 import Admin from './pages/Admin';
 import Usage from './pages/Usage';
 import Login from './pages/Login';
@@ -48,6 +50,8 @@ export default function App() {
           <Route path="/drafts/:id" element={bound('草稿详情', <DraftDetail />)} />
           <Route path="/site-drafts" element={bound('网站资讯稿', <SiteDrafts />)} />
           <Route path="/site-drafts/:id" element={bound('网站资讯稿详情', <SiteDraftDetail />)} />
+          <Route path="/wx-layouts" element={bound('公众号排版', <WxLayouts />)} />
+          <Route path="/wx-layouts/:id" element={bound('公众号排版详情', <WxLayoutDetail />)} />
           <Route path="/account" element={bound('账号设置', <Account />)} />
           <Route path="/users" element={bound('用户与租户', <Users />)} />
           <Route path="/audit" element={bound('审计日志', <Audit />)} />

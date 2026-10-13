@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app.api.v2 import audit, drafts, exports, public, site_drafts, users
+from app.api.v2 import audit, drafts, exports, public, site_drafts, users, wx_layout
 from app.api.v2.admin import router as admin_router
 from app.api.v2.auth import router as auth_router
 from app.api.v2.routes import router
@@ -26,7 +26,7 @@ def init_db() -> None:
     """
     from app.models import (  # noqa: F401 确保模型注册
         article, article_draft, event, report, report_delivery, setting, summary, task_run, usage,
-        tenant, user, user_session, audit_log,
+        tenant, user, user_session, audit_log, wx_layout_draft,
     )
 
     with engine.begin() as conn:
@@ -171,6 +171,8 @@ app.include_router(router, dependencies=[Depends(require_user)])
 app.include_router(drafts.router, dependencies=[Depends(require_user)])
 # 网站资讯草稿：与公众号草稿独立，字段和提示词面向网站 CMS/SEO
 app.include_router(site_drafts.router, dependencies=[Depends(require_user)])
+# 公众号排版草稿：每日早报一键排版（确定性渲染，不经 LLM）
+app.include_router(wx_layout.router, dependencies=[Depends(require_user)])
 # 认证：登录/登出/me/改密/我的会话
 app.include_router(auth_router)
 # 租户与用户管理（内部按角色鉴权）
