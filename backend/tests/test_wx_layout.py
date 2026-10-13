@@ -12,7 +12,7 @@ from conftest import PW, login
 
 H = {"X-Requested-With": "XMLHttpRequest"}
 
-_BANNER = "https://mmbiz.qpic.cn/sz_mmbiz_gif/2UFeAILAzXlqRWpYBvvLKg6pYFz0EqvksQxEMCcoxncrF0JVVsl6l4dpj3crHvWyRTGbkH1GM41nAKeQmw8TSgfLiaKfiaNd7ibf1w0npYaMNM/640"
+_OLD_BANNER_URL = "https://mmbiz.qpic.cn/sz_mmbiz_gif/2UFeAILAzXlqRWpYBvvLKg6pYFz0EqvksQxEMCcoxncrF0JVVsl6l4dpj3crHvWyRTGbkH1GM41nAKeQmw8TSgfLiaKfiaNd7ibf1w0npYaMNM/640"
 
 
 def _seed_report(db, date_str="2026-10-14", *, empty=False, evil_title=None):
@@ -94,8 +94,9 @@ def test_create_and_payload(member_client, db):
 
     detail = member_client.get(f"/api/v2/wx-layouts/{body['id']}").json()
     html_text = detail["content_html"]
-    # 固定开头/结尾：横幅、END 徽章、公众号名片、点赞互动区块逐字在位
-    assert _BANNER in html_text
+    # 固定开头/结尾：品牌分隔线、END 徽章、公众号名片、点赞互动区块逐字在位
+    assert "找软件用软件，就到华军软件园" in html_text
+    assert _OLD_BANNER_URL not in html_text  # 样例文章里别家的 gif 横幅不得带出
     assert "<strong data-brushtype=\"text\">END</strong>" in html_text
     assert 'data-nickname="华军AI产品榜"' in html_text
     assert "点点赞" in html_text and "点分享" in html_text and "点喜欢" in html_text

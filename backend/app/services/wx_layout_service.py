@@ -1,8 +1,10 @@
 """微信公众号早报排版服务：早报内容快照 → 公众号后台可直接粘贴的内联样式 HTML。
 
-固定「开头 gif 横幅 / 结尾 END·名片·互动区块」逐字沿用运营在 135 编辑器定稿的
-模板片段（素材图挂在 mmbiz.qpic.cn，粘贴进公众号后台时由编辑器自动转存）；
-正文按运营定稿风格排版：15px 正文、1.6 行高、加粗小节标题、块间 <p><br/></p> 空行。
+固定的是「开头 / 结尾」两块品牌模板：开头为「找软件用软件，就到华军软件园」
+分隔线，结尾为 END 徽章 + 公众号名片 + 点赞互动区块（运营在 135 编辑器定稿，
+素材图挂 mmbiz.qpic.cn，粘贴进公众号后台时由编辑器自动转存）。
+正文只是内容载体：字体/颜色/间距用站点默认简洁排版（15px、1.6 行高、加粗
+小节标题），不锁定 135 样例格式，运营可在后台随意再调整。
 
 确定性渲染，不经 LLM：早报内容本身已是策展结果（综述/事件/速览/热榜），
 排版只负责组合与样式——零 token 成本、输出可预期、生产未配 LLM 也可用。
@@ -14,14 +16,25 @@
 import html
 import re
 
-# ———————————————————— 固定开头：头图横幅（135 编辑器定稿素材） ————————————————————
-_HEADER_BANNER = (
-    '<p style="margin: 16px 0px;text-align:center;">'
-    '<img src="https://mmbiz.qpic.cn/sz_mmbiz_gif/2UFeAILAzXlqRWpYBvvLKg6pYFz0EqvksQxEMCcoxncrF0JVVsl6l4dpj3crHvWyRTGbkH1GM41nAKeQmw8TSgfLiaKfiaNd7ibf1w0npYaMNM/640?wx_fmt=gif&amp;from=appmsg" '
-    'class="rich_pages wxw-img" data-type="gif" '
-    'style="border: 0px;border-radius: 0px;width: 100%;vertical-align: baseline;box-sizing:border-box;max-width:100% !important;" '
-    'data-ratio="0.125" data-w="640"/>'
-    "</p>"
+# ———————————————————— 固定开头：「找软件用软件」分隔线（左右灰线 + 双竖条 + 蓝字） ————————————————————
+_BAR = (
+    '<section style="width: 3px;height: 14px;background-color: #333333;{margin}box-sizing:border-box;" '
+    'data-ignore-width><p><br/></p></section>'
+)
+_HEADER_TICKS_LEFT = _BAR.format(margin="margin-right: 4px;") + _BAR.format(margin="margin-right: 12px;")
+_HEADER_TICKS_RIGHT = _BAR.format(margin="margin-left: 12px;") + _BAR.format(margin="margin-left: 4px;")
+_HEADER_DIVIDER = (
+    '<section style="margin: 10px auto;display: flex;justify-content: center;align-items: center;">'
+    '<section style="flex: 1 1 0%;height: 1px;background-color: #a6a6a6;" data-ignore-width><p><br/></p></section>'
+    '<section style="flex-shrink: 0;display: flex;align-items: center;margin: 0 10px;">'
+    f"{_HEADER_TICKS_LEFT}"
+    '<section style="font-size: 15px;color: #4a90d9;text-align: center;box-sizing:border-box;">'
+    '<strong data-brushtype="text">找软件用软件，就到华军软件园</strong>'
+    "</section>"
+    f"{_HEADER_TICKS_RIGHT}"
+    "</section>"
+    '<section style="flex: 1 1 0%;height: 1px;background-color: #a6a6a6;" data-ignore-width><p><br/></p></section>'
+    "</section>"
 )
 
 # ———————————————————— 固定结尾：END 徽章（135 编辑器 data-id=178195） ————————————————————
@@ -232,7 +245,8 @@ def build_layout(content: dict) -> dict:
 
     content_html = (
         '<section data-role="outer">'
-        + _HEADER_BANNER
+        + _HEADER_DIVIDER
+        + "<p><br/></p>"
         + '<section data-role="paragraph">'
         + body
         + "</section>"
