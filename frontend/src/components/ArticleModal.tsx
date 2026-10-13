@@ -124,17 +124,15 @@ export default function ArticleModal({
         className="card modal-scroll w-full max-w-2xl max-h-[85vh] overflow-y-auto outline-none"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* 头部 */}
-        <div className="sticky top-0 bg-radar-card/95 backdrop-blur border-b border-radar-border px-6 py-4 flex items-start justify-between gap-4 z-10">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 mb-2">
+        {/* 头部：元信息+操作一行，标题独占整行——避免右侧按钮列把标题挤成每行十余字的窄列 */}
+        <div className="sticky top-0 bg-radar-card/95 backdrop-blur border-b border-radar-border px-6 py-4 z-10">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-2">
+            <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
               <ChannelTag channel={article.channel} />
               <SourceBadge source={article.source} size="sm" />
               <span className="text-xs text-slate-500">{fullTime(article.publishTime)}</span>
             </div>
-            <h2 className="text-lg font-semibold text-slate-100 leading-snug">{article.title}</h2>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap justify-end shrink-0">
+            <div className="flex items-center gap-2 flex-wrap justify-end shrink-0">
             {onOpenDraft && (
               <button
                 onClick={() => void generateArticle()}
@@ -174,7 +172,9 @@ export default function ArticleModal({
             >
               <X className="h-5 w-5" />
             </button>
+            </div>
           </div>
+          <h2 className="text-lg font-semibold text-slate-100 leading-snug">{article.title}</h2>
         </div>
 
         <div className="px-6 py-5 space-y-5">
