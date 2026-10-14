@@ -24,7 +24,6 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - pgdata:/var/lib/postgresql/data
-    mem_limit: 384m
     # 不向宿主机发布端口：仅容器网络内可达；临时调试用
     # docker compose exec postgres psql -U hjradar -d hjradar
     restart: unless-stopped  # 数据层必须自愈：宿主机重启后整栈才能自动拉起
@@ -43,7 +42,6 @@ services:
     # noeviction：broker 满时写入报错而非静默丢任务；64MB 远高于日常 ~12MB
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", "60", "1000",
               "--maxmemory", "64mb", "--maxmemory-policy", "noeviction"]
-    mem_limit: 96m
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -65,7 +63,6 @@ services:
     ports:
       # 仅绑定本机回环：公网入口统一走 nginx(80)，避免管理接口直接暴露
       - "127.0.0.1:18000:8000"
-    mem_limit: 384m
     restart: unless-stopped
     # slim 镜像无 curl，用 python 标准库探活（顺带验证 DB 连路——/health 查库）
     healthcheck:
@@ -97,9 +94,6 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-    # 预热稳态 ~465MB（numpy/jieba/LLM 客户端进子进程私有页）：640m 给大批量
-    # event_task 留余量，避免触限 OOM 连带内嵌 beat 一起重启（2026-10-14 实测）
-    mem_limit: 640m
     restart: unless-stopped
     # worker 名默认为 celery@<容器主机名>；无应答时 celery 以非零码退出
     healthcheck:
@@ -123,8 +117,6 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-    # 预热稳态 ~260MB，摘要批量期尖峰更高：384m 留余量
-    mem_limit: 384m
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping --timeout=10 -d celery@$$HOSTNAME"]
@@ -141,7 +133,6 @@ services:
     environment:
       MALLOC_ARENA_MAX: "2"
     command: python -m app.crawler.loop
-    mem_limit: 320m
     depends_on:
       postgres:
         condition: service_healthy
@@ -171,7 +162,6 @@ services:
       # 需要局域网共享（手机/其他设备访问）时在 docker-compose.override.yml 里
       # 给 nginx 加 ports: ["80:80"] 覆盖，用完移除（见 README 安全须知）
       - "127.0.0.1:80:80"
-    mem_limit: 64m
     restart: unless-stopped
     # 探活走本机反代链路：nginx → backend → /health，代理断了也能暴露
     healthcheck:
