@@ -241,19 +241,20 @@ export default function DailyReport() {
     lines.push(`## 华军软件园 · 今日早报 ${r.date}${wd ? `（${wd}）` : ''} · 第 ${r.issueNo} 期`, '');
     if (r.overview) lines.push(r.overview, '');
     if (r.topEvents.length) {
+      // 复制文案不带热度分（当日归一化相对值，读者无感）；仅保留篇数/来源数（2026-10-14）
       const eventStats = (e: DailyReportView['topEvents'][number], rank: number) => {
-        const stats: string[] = [`热度 ${formatScore(e.hotScore)}`];
+        const stats: string[] = [];
         if (e.reportArticles != null) {
           stats.push(`${e.reportArticles} 篇${e.reportSources ? `/${e.reportSources} 源` : ''}`);
         }
-        return `${rank}. **${e.title}**（${stats.join('，')}）`;
+        return `${rank}. **${e.title}**${stats.length ? `（${stats.join('，')}）` : ''}`;
       };
       const [lead, ...rest] = r.topEvents;
-      lines.push('### 【今日头条】', '', `**${lead.title}**（热度 ${formatScore(lead.hotScore)}${
+      const leadMeta =
         lead.reportArticles != null
-          ? `，${lead.reportArticles} 篇${lead.reportSources ? `/${lead.reportSources} 源` : ''}`
-          : ''
-      }）`, '');
+          ? `（${lead.reportArticles} 篇${lead.reportSources ? `/${lead.reportSources} 源` : ''}）`
+          : '';
+      lines.push('### 【今日头条】', '', `**${lead.title}**${leadMeta}`, '');
       if (lead.summary) lines.push(`> ${clipHeadline(lead.summary, 120)}`, '');
       if (rest.length) {
         lines.push('### 更多热点', '');
@@ -273,9 +274,7 @@ export default function DailyReport() {
     }
     if (r.topArticles.length) {
       lines.push('### 昨夜今晨热榜 TOP 10', '');
-      r.topArticles.forEach((a, i) =>
-        lines.push(`${i + 1}. ${a.title}（热度 ${formatScore(a.hotScore)}）`)
-      );
+      r.topArticles.forEach((a, i) => lines.push(`${i + 1}. ${a.title}`));
       lines.push('');
     }
     // 2026-09-19 按需求移除「重点来源」频道收录统计段（不展示收录篇数）
