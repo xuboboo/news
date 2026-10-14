@@ -17,6 +17,8 @@ services:
       HF_ENDPOINT: https://hf-mirror.com
     volumes:
       - embedding-models:/cache
+    # 模型常驻约 300MB，512m 上限留加载余量（2026-10-14 内存优化）
+    mem_limit: 512m
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:80/health', timeout=3)\""]

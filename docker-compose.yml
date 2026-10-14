@@ -11,6 +11,9 @@ services:
   # ---------- 数据层 ----------
   postgres:
     image: pgvector/pgvector:pg16
+    # 小数据量（双来源、库 <100MB）下 64MB shared_buffers 足够：为 3.5G 内存
+    # 服务器预留余量（2026-10-14 内存优化），默认 128MB 在此规模无收益
+    command: ["postgres", "-c", "shared_buffers=64MB"]
     environment:
       POSTGRES_USER: hjradar
       # 口令从根目录 .env 强制注入（缺失直接报错拒起，2026-09-18 审计整改 F-5：
@@ -21,6 +24,7 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - pgdata:/var/lib/postgresql/data
+    mem_limit: 384m
     # 不向宿主机发布端口：仅容器网络内可达；临时调试用
     # docker compose exec postgres psql -U hjradar -d hjradar
     restart: unless-stopped  # 数据层必须自愈：宿主机重启后整栈才能自动拉起
@@ -36,7 +40,10 @@ services:
     restart: unless-stopped  # 与 postgres 同理：数据层自愈是全栈拉起的前置
     volumes:
       - redisdata:/data
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", "60", "1000"]
+    # noeviction：broker 满时写入报错而非静默丢任务；64MB 远高于日常 ~12MB
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", "60", "1000",
+              "--maxmemory", "64mb", "--maxmemory-policy", "noeviction"]
+    mem_limit: 96m
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -47,6 +54,9 @@ services:
   backend:
     build: ./backend
     env_file: ./backend/.env
+    environment:
+      # glibc 每线程 malloc 竞态区上限（默认 8×核数）：压 Python 常驻服务 RSS
+      MALLOC_ARENA_MAX: "2"
     depends_on:
       postgres:
         condition: service_healthy
@@ -55,6 +65,7 @@ services:
     ports:
       # 仅绑定本机回环：公网入口统一走 nginx(80)，避免管理接口直接暴露
       - "127.0.0.1:18000:8000"
+    mem_limit: 384m
     restart: unless-stopped
     # slim 镜像无 curl，用 python 标准库探活（顺带验证 DB 连路——/health 查库）
     healthcheck:
@@ -66,11 +77,17 @@ services:
     logging: *default-logging
 
   # ---------- 任务队列 ----------
-  worker:        # 默认队列：事件聚合 / 日报
+  worker:        # 默认队列：事件聚合 / 日报 + 内嵌 beat 定时调度
     build: ./backend
     env_file: ./backend/.env
-    # max-tasks-per-child：numpy/jieba 等库的内存碎片随任务数累积，定期回收进程
-    command: celery -A app.tasks.celery_app worker -Q default -c 4 --loglevel=INFO --max-tasks-per-child=100
+    environment:
+      MALLOC_ARENA_MAX: "2"
+    # max-tasks-per-child：numpy/jieba 等库的内存碎片随任务数累积，定期回收进程。
+    # --beat 内嵌调度器（2026-10-14 内存优化）：省掉独立 beat 容器（约 160MB），
+    #   3.5G 内存服务器单 worker 承担调度 + 消费；调度文件落 /tmp（F-2 非 root 只读 /srv）
+    # -c 2：双来源采集量下并发 4 无收益，砍半省 ~100MB
+    command: celery -A app.tasks.celery_app worker -Q default -c 2 --beat --loglevel=INFO
+      --max-tasks-per-child=100 --schedule=/tmp/celerybeat-schedule
     # 依赖 backend healthy：表结构由 backend 启动时的 init_db 建立，
     # 首启窗口任务（event/stats 消费）不再打在空库上
     depends_on:
@@ -80,6 +97,7 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
+    mem_limit: 512m
     restart: unless-stopped
     # worker 名默认为 celery@<容器主机名>；无应答时 celery 以非零码退出
     healthcheck:
@@ -93,6 +111,8 @@ services:
   ai-worker:     # AI 队列：摘要 / Embedding
     build: ./backend
     env_file: ./backend/.env
+    environment:
+      MALLOC_ARENA_MAX: "2"
     command: celery -A app.tasks.celery_app worker -Q ai -c 2 --loglevel=INFO --max-tasks-per-child=100
     depends_on:
       postgres:
@@ -101,6 +121,7 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
+    mem_limit: 320m
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping --timeout=10 -d celery@$$HOSTNAME"]
@@ -110,32 +131,14 @@ services:
       start_period: 30s
     logging: *default-logging
 
-  beat:          # 定时调度：事件聚类 10min / 告警巡检 5min / 日报每日 08:00
-    build: ./backend
-    env_file: ./backend/.env
-    # 非 root 运行（F-2）后 /srv 只读：调度文件显式落 world-writable 的 /tmp
-    command: celery -A app.tasks.celery_app beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
-    depends_on:
-      redis:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
-    restart: unless-stopped
-    # beat 不响应 inspect ping：探测 /proc 里 beat 主进程是否存活（slim 镜像无 pgrep）。
-    # 必须排除探测进程自身——healthcheck 命令行里就带 'beat' 字样，不排除会恒真
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,sys; me=str(os.getpid()); sys.exit(0 if any(b'beat' in open(f'/proc/{p}/cmdline','rb').read() for p in os.listdir('/proc') if p.isdigit() and p != me and os.path.exists(f'/proc/{p}/cmdline')) else 1)\""]
-      interval: 60s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    logging: *default-logging
-
   # ---------- 采集服务 ----------
   crawler:       # 常驻循环：多来源采集（IT之家 / 快科技，crawler/multi.py）→ 入库 → 派发 AI 任务
     build: ./backend
     env_file: ./backend/.env
+    environment:
+      MALLOC_ARENA_MAX: "2"
     command: python -m app.crawler.loop
+    mem_limit: 320m
     depends_on:
       postgres:
         condition: service_healthy
@@ -165,6 +168,7 @@ services:
       # 需要局域网共享（手机/其他设备访问）时在 docker-compose.override.yml 里
       # 给 nginx 加 ports: ["80:80"] 覆盖，用完移除（见 README 安全须知）
       - "127.0.0.1:80:80"
+    mem_limit: 64m
     restart: unless-stopped
     # 探活走本机反代链路：nginx → backend → /health，代理断了也能暴露
     healthcheck:

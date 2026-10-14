@@ -59,7 +59,7 @@ flowchart LR
     RD --> WK[worker<br/>事件聚合 / 早报]
     EMB[embedding<br/>fastembed 语义向量<br/>bge-small-zh-v1.5 · 384 维]
     AI -.->|调用| EMB
-    BT[beat 定时调度<br/>事件聚类 / 互动轮询 / 告警巡检<br/>每日 08:00 早报] --> RD
+    WK -->|内嵌 beat 定时调度<br/>事件聚类 / 互动轮询 / 告警巡检 / 每日 08:00 早报| RD
     AI --> PG
     WK --> PG
     NG[nginx :80<br/>前端静态资源 + API 反代] --> BE[backend FastAPI :8000]
@@ -71,9 +71,8 @@ flowchart LR
 | --- | --- |
 | `backend` | FastAPI REST API（容器内 8000，宿主机映射 `127.0.0.1:18000`） |
 | `crawler` | 常驻循环：多来源采集（IT之家页面即频道真相 / 快科技文章页面包屑即频道真相）→ 入库 → 派发 AI 任务；心跳文件供健康检查 |
-| `worker` | Celery 默认队列：事件聚合 / 早报生成 |
+| `worker` | Celery 默认队列：事件聚合 / 早报生成；`--beat` 内嵌定时调度（2026-10-14 内存优化合并）：事件聚类（10 分钟）、互动数据轮询（15 分钟）、告警巡检（5 分钟）、每日 08:00 生成当日发布期刊、早报补偿（每小时 :45，错过调度的缺失期自动补生成）、每周清理 |
 | `ai-worker` | Celery AI 队列：摘要 / Embedding |
-| `beat` | 定时调度：事件聚类（10 分钟）、互动数据轮询（15 分钟）、告警巡检（5 分钟）、每日 08:00 生成当日发布期刊、早报补偿（每小时 :45，错过调度的缺失期自动补生成）、每周清理 |
 | `embedding` | 本地语义向量服务（docker-compose.override.yml 自动合并）：fastembed(ONNX) + BAAI/bge-small-zh-v1.5，OpenAI 兼容 `/v1/embeddings`，免 GPU、模型经镜像站缓存于卷 |
 | `postgres` | 业务数据 + pgvector 向量检索 |
 | `redis` | 缓存 + Celery 消息队列 |
