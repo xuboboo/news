@@ -97,7 +97,9 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-    mem_limit: 512m
+    # 预热稳态 ~465MB（numpy/jieba/LLM 客户端进子进程私有页）：640m 给大批量
+    # event_task 留余量，避免触限 OOM 连带内嵌 beat 一起重启（2026-10-14 实测）
+    mem_limit: 640m
     restart: unless-stopped
     # worker 名默认为 celery@<容器主机名>；无应答时 celery 以非零码退出
     healthcheck:
@@ -121,7 +123,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-    mem_limit: 320m
+    # 预热稳态 ~260MB，摘要批量期尖峰更高：384m 留余量
+    mem_limit: 384m
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping --timeout=10 -d celery@$$HOSTNAME"]
