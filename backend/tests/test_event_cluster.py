@@ -298,3 +298,40 @@ def test_elect_title_matches_cluster_election_and_single_member():
     kws = [m.kw_set for m in members]
     assert elect_title(titles, kws) == event_title_for(members)
     assert elect_title(["唯一标题"], [{"a"}]) == "唯一标题"
+
+
+# ———— LLM「同一事件」审核：提示词与判定解析（纯函数，2026-10-14 第三批）————
+
+def test_build_relation_prompt_contains_schema_and_context():
+    from app.services.event_service import build_relation_prompt
+
+    prompt = build_relation_prompt(
+        "微软 Win11 五周年",
+        "Win11 发布五周年回顾",
+        ["成员报道一", "成员报道二"],
+        ["同主题另一件事"],
+    )
+    assert "微软 Win11 五周年" in prompt
+    assert "成员报道一" in prompt and "同主题另一件事" in prompt
+    assert '"same_event"' in prompt and '"confidence"' in prompt  # 输出契约内嵌
+    assert "另一件事" in prompt  # 判定口径：同主题≠同事件
+
+
+def test_build_relation_prompt_truncates_long_summary():
+    from app.services.event_service import build_relation_prompt
+
+    prompt = build_relation_prompt("事件", "长" * 500, [], [])
+    assert "长" * 199 in prompt and "长" * 200 not in prompt  # 摘要截断在 200 字内（truncate 尾带省略号）
+
+
+def test_parse_relation_verdict_valid_and_coercions():
+    from app.services.event_service import parse_relation_verdict
+
+    assert parse_relation_verdict({"same_event": False, "confidence": 0.9, "reason": "x"}) == (False, 0.9)
+    assert parse_relation_verdict({"same_event": True}) == (True, 0.5)  # 缺置信度按 0.5
+    assert parse_relation_verdict({"same_event": False, "confidence": "0.8"}) == (False, 0.8)
+    assert parse_relation_verdict({"same_event": False, "confidence": 5}) == (False, 1.0)  # 上界截断
+    assert parse_relation_verdict({"same_event": False, "confidence": -1}) == (False, 0.5)  # 非法回落
+    assert parse_relation_verdict({"same_event": "no"}) is None  # 类型无效
+    assert parse_relation_verdict("not a dict") is None
+    assert parse_relation_verdict(None) is None

@@ -49,6 +49,12 @@ REPORT_WINDOW_END_HOUR = 8
 # 热度归一化后前 N 篇文章；「热点速览」取池起点随之同步后移，两栏目同页不重复
 REPORT_TOP_ARTICLES = 10
 
+# 早报「热点事件」重复抑制回看期（2026-10-14 改版，对标 AIHOT 日报 MEMORY_DAYS=7）：
+# 最近 N 期上过事件栏目的事件今日降级为 follow_up 垫底补位，新鲜事件优先占位——
+# 与「排序分改窗口内口径」两侧同时掐断同一事件连续多日霸榜头条（2026-10-14
+# 实测「Win11 五周年」事件连续三日霸榜）的症状根因
+REPORT_MEMORY_DAYS = 7
+
 
 # 转述句式「（科技媒体 X 发布博文，）报道称/指出/表示…」——变化本体在连接词之后
 # （导语壳正则已提取至 utils/text.strip_media_lede，供早报速览说明复用）
@@ -91,6 +97,27 @@ def _dedupe_texts(items: list[str]) -> list[str]:
             seen.add(key)
             out.append(it)
     return out
+
+
+def _featured_event_ids(db: Session, day: date_type, days: int = REPORT_MEMORY_DAYS) -> set[int]:
+    """最近 N 期早报上过「热点事件」栏目的事件 id（重复抑制的记忆面）。
+
+    按日历日回看 day-1 … day-N，缺刊日期直接跳过；content 非 dict / 条目异常
+    （id 缺失或非整数）一律忽略——记忆读取失败只削弱抑制强度，不阻断生成。
+    """
+    ids: set[int] = set()
+    for offset in range(1, days + 1):
+        row = db.query(DailyReport).filter_by(date=day - timedelta(days=offset)).first()
+        if row is None or not isinstance(row.content, dict):
+            continue
+        for e in row.content.get("top_events") or []:
+            if not isinstance(e, dict):
+                continue
+            try:
+                ids.add(int(e.get("id")))
+            except (TypeError, ValueError):
+                continue
+    return ids
 
 
 def _compose_overview(
@@ -274,22 +301,48 @@ def build_report(db: Session, day: date_type) -> dict:
                         win_sources_by_ev[eid].add(src)
             events = db.query(HotEvent).filter(HotEvent.id.in_(candidate_ids)).all()
 
+    # 事件排序分改「窗口内独立来源口径」（2026-10-14 改版，AIHOT「按事件算热度」
+    # + 硬窗口语义的对齐版）：每来源取窗口内最高一篇成员分再求和，只统计窗口
+    # 成员；事件全生命周期存量 hot_score 退出早报排序——存量口径让常青大事件
+    # 凭历史成员长期碾压当日新热点（实测「Win11 五周年」事件窗口内仅 1 篇报道
+    # 仍以 93 篇存量连续三日霸榜头条）。归一化基准随之取窗口内事件最高分。
+    art_by_id = {a.id: a for a in win_articles}
+    art_win_score = {a.id: hs for a, hs in scored}
+    win_best_by_ev: dict[int, dict[str, float]] = defaultdict(dict)
+    for eid, aids in win_member_ids_by_ev.items():
+        best = win_best_by_ev[eid]
+        for aid in aids:
+            a = art_by_id.get(aid)
+            if a is None:  # 防御：成员 id 不在窗口集合时不计分
+                continue
+            s = art_win_score.get(aid, 0.0)
+            if a.source not in best or s > best[a.source]:
+                best[a.source] = s
+    win_score_by_ev = {eid: round(sum(d.values()), 2) for eid, d in win_best_by_ev.items()}
+    max_ev_raw = max(win_score_by_ev.values(), default=0)
     top_events = []
-    max_ev_raw = max((e.hot_score for e in events), default=0)
     for ev in events:
         win_member_ids = win_member_ids_by_ev.get(ev.id, [])
+        raw = win_score_by_ev.get(ev.id, 0.0)
         top_events.append({
             "id": ev.id,
             "title": ev.title,
             "summary": ev.summary,
             "status": ev.status,
-            "hot_score": round((ev.hot_score / max_ev_raw) * 100, 1) if max_ev_raw > 0 else round(ev.hot_score, 1),
+            "hot_score": round((raw / max_ev_raw) * 100, 1) if max_ev_raw > 0 else round(raw, 1),
             "articles_count": len(win_member_ids),
             "sources_count": len(win_sources_by_ev.get(ev.id, set())),
             "lifecycle_articles_count": len(member_ids_by_ev.get(ev.id, [])),
             "lifecycle_sources_count": len(sources_by_ev.get(ev.id, set())),
         })
-    top_events = sorted(top_events, key=lambda e: e["hot_score"], reverse=True)[:5]
+    top_events = sorted(top_events, key=lambda e: e["hot_score"], reverse=True)
+    # —— 重复抑制：最近 N 期上过事件栏目的事件今日打 follow_up 标垫底补位，
+    #     新鲜事件优先——回访事件仍按窗口分排序、如实标注（ quiet day 全为
+    #     回访时照常展示，只降级不隐藏）——
+    seen_ids = _featured_event_ids(db, day)
+    fresh = [e for e in top_events if e["id"] not in seen_ids]
+    revisits = [dict(e, follow_up=True) for e in top_events if e["id"] in seen_ids]
+    top_events = (fresh + revisits)[:5]
 
     # —— 热点速览 / 昨夜今晨热榜 TOP10：热度口径与全站对齐（榜单页均为 0-100
     #     归一化），基准取当日最大原始分 ——

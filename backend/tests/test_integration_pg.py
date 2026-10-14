@@ -209,6 +209,171 @@ def test_clustering_groups_cross_source_same_event(pg):
         db.close()
 
 
+def test_clustering_skips_overaged_events(pg):
+    """吸纳年龄上限（2026-10-14 审计新增，防大杂烩滚雪球）：候选资格除 last_time
+    新鲜外还要求 first_time 在 EVENT_MAX_AGE_DAYS 内——常青杂烩事件（每天有新
+    成员、last_time 恒新鲜）不得再吞新文章（主用例），也不得经事件级合并卷入
+    新事件；同龄事件照常并入（对照组）。"""
+    from app.services.event_service import EVENT_MAX_AGE_DAYS, run_event_clustering
+
+    db = pg()
+    try:
+        # 超龄杂烩：first_time 在上限外 7 天，last_time 1 小时前（昨天刚吞过新成员）
+        aged_first = NOW - timedelta(days=EVENT_MAX_AGE_DAYS + 7)
+        v_win = _vec([1.0, 0.2])
+        m_aged = _mk_article(db, title="Win11 五周年旧文", source="IT之家", vec=v_win,
+                             published=aged_first)
+        db.add(HotEvent(title="微软 Win11 五周年（超龄事件）", summary="", impacts=[],
+                        first_time=aged_first, last_time=NOW - timedelta(hours=1),
+                        status="发酵中", centroid=v_win, timeline=[]))
+        db.flush()
+        e_aged = db.query(HotEvent).filter_by(title="微软 Win11 五周年（超龄事件）").one()
+        db.add(EventArticle(event_id=e_aged.id, article_id=m_aged.id))
+        db.commit()
+
+        # 新文章：与超龄事件成员近同题同向量（旧口径必过三段式门槛被吸入）
+        _mk_article(db, title="Win11 五周年：全球超 10 亿用户背后", source="快科技",
+                    vec=_offset(v_win, _vec([0.0, 0.0, 1.0, 0.3]), 0.95),
+                    published=NOW - timedelta(hours=2))
+        # 对照组：同龄事件 + 高相似跨来源新文章，应照常并入
+        v_fresh = _vec([0.0, 1.0, 0.3])
+        m_fresh = _mk_article(db, title="某新品正式发布", source="IT之家", vec=v_fresh,
+                              published=NOW - timedelta(hours=6))
+        db.add(HotEvent(title="某新品正式发布", summary="", impacts=[],
+                        first_time=m_fresh.publish_time, last_time=m_fresh.publish_time,
+                        status="发酵中", centroid=v_fresh, timeline=[]))
+        db.flush()
+        e_fresh = db.query(HotEvent).filter_by(title="某新品正式发布").one()
+        db.add(EventArticle(event_id=e_fresh.id, article_id=m_fresh.id))
+        db.commit()
+        _mk_article(db, title="某新品正式发布售罄", source="快科技",
+                    vec=_offset(v_fresh, _vec([1.0, 0.0, 0.0, 0.0, 0.5]), 0.95),
+                    published=NOW - timedelta(hours=1))
+        db.commit()
+
+        stats = run_event_clustering(db)
+        aged_links = [lnk.article_id for lnk in db.query(EventArticle).filter_by(event_id=e_aged.id)]
+        assert aged_links == [m_aged.id], f"超龄事件不得吞新成员: {stats} {aged_links}"
+        fresh_links = db.query(EventArticle).filter_by(event_id=e_fresh.id).count()
+        assert fresh_links == 2, f"同龄事件对照组应照常并入: {stats}"
+    finally:
+        db.close()
+
+
+def test_clustering_llm_review_blocks_unrelated_merge(pg, monkeypatch):
+    """LLM「同一事件」审核（2026-10-14 第三批）：大事件（成员 ≥ 门槛）并入前交
+    判定，判「另一件事」则拒绝并入、新文章另立事件；小事件不触发审核照常并入
+    （对照组，且判定函数只被调用一次）。LLM 配置用回环地址让 URL 守卫就地拒绝，
+    全程无外部调用。"""
+    from app.services import event_service
+    from app.services.event_service import LLM_REVIEW_EVENT_MEMBERS, run_event_clustering
+
+    db = pg()
+    try:
+        # 大事件：5 篇跨来源成员（恰达审核门槛）
+        v_big = _vec([1.0, 0.2])
+        big = HotEvent(title="大事件主题", summary="", impacts=[],
+                       first_time=NOW - timedelta(hours=30), last_time=NOW - timedelta(hours=2),
+                       status="发酵中", centroid=v_big, timeline=[])
+        db.add(big)
+        db.flush()
+        for i in range(LLM_REVIEW_EVENT_MEMBERS):
+            m = _mk_article(db, title=f"大事件成员报道第{i}篇",
+                            source="IT之家" if i % 2 == 0 else "快科技",
+                            vec=v_big, published=NOW - timedelta(hours=20 - i * 3))
+            db.add(EventArticle(event_id=big.id, article_id=m.id))
+        # 小事件：1 篇成员（低于门槛，不触发审核）
+        v_small = _vec([0.0, 1.0, 0.3])
+        m_s = _mk_article(db, title="小事件唯一报道", source="IT之家", vec=v_small,
+                          published=NOW - timedelta(hours=10))
+        small = HotEvent(title="小事件主题", summary="", impacts=[],
+                         first_time=m_s.publish_time, last_time=m_s.publish_time,
+                         status="发酵中", centroid=v_small, timeline=[])
+        db.add(small)
+        db.flush()
+        db.add(EventArticle(event_id=small.id, article_id=m_s.id))
+        db.commit()
+
+        calls: list[str] = []
+
+        def fake_review(event_title, _summary, _members, _news, _llm, event_id=None):
+            calls.append(str(event_id))
+            return False  # 一律判「另一件事」
+
+        monkeypatch.setattr(event_service, "_llm_same_event", fake_review)
+        # 回环 base_url：钩子视为已配置，而摘要链路的真实调用被 URL 守卫就地拒绝
+        monkeypatch.setattr(
+            event_service.config_service, "effective_llm",
+            lambda _db: ("http://127.0.0.1:9/v1", "k", "m", "openai"),
+        )
+
+        _mk_article(db, title="大事件主题下的另一件事", source="快科技",
+                    vec=_offset(v_big, _vec([0.0, 0.0, 1.0, 0.3]), 0.97),
+                    published=NOW - timedelta(hours=1))
+        _mk_article(db, title="小事件主题后续报道", source="快科技",
+                    vec=_offset(v_small, _vec([1.0, 0.0, 0.0, 0.0, 0.5]), 0.95),
+                    published=NOW - timedelta(hours=1))
+        db.commit()
+
+        run_event_clustering(db)
+        assert db.query(EventArticle).filter_by(event_id=big.id).count() == LLM_REVIEW_EVENT_MEMBERS, \
+            "LLM 判「另一件事」后大事件成员数不得增长"
+        assert db.query(EventArticle).filter_by(event_id=small.id).count() == 2, \
+            "小事件低于审核门槛应照常并入"
+        # 恰一次判定（step 4 采纳收口点，目标=大事件）；小事件从未触发
+        assert len(calls) == 1 and set(calls) == {str(big.id)}, f"判定调用应恰为大事件一次: {calls}"
+    finally:
+        db.close()
+
+
+def test_merge_recent_events_llm_refusal_terminates_without_merge(pg, monkeypatch):
+    """二阶段合并的 LLM 审核：两个达标大事件可合并时，判「另事件」则跳过该对
+    且循环正常终止（refused_pairs 防重扫死循环）；直接调 _merge_recent_events，
+    两事件同标题保证关键词门槛必过，排除 jieba 分词不确定性。"""
+    from app.services import event_service
+    from app.services.event_service import LLM_REVIEW_EVENT_MEMBERS, _merge_recent_events
+
+    db = pg()
+    try:
+        v = _vec([1.0, 0.2])
+        v2 = _offset(v, _vec([0.0, 0.0, 1.0, 0.3]), 0.95)
+        events = []
+        for k, vec in (("甲", v), ("乙", v2)):
+            ev = HotEvent(title="同标题审核事件", summary="", impacts=[],
+                          first_time=NOW - timedelta(days=2), last_time=NOW - timedelta(hours=2),
+                          status="发酵中", centroid=vec, timeline=[])
+            db.add(ev)
+            db.flush()
+            for i in range(LLM_REVIEW_EVENT_MEMBERS):
+                m = _mk_article(db, title=f"同标题审核事件成员{k}{i}",
+                                source="IT之家" if i % 2 == 0 else "快科技",
+                                vec=vec, published=NOW - timedelta(days=8) + timedelta(hours=i))
+                db.add(EventArticle(event_id=ev.id, article_id=m.id))
+            events.append(ev)
+        # 一篇窗口内新文章撑起聚类轮（否则 run 级早退；本测试直调合并函数无此约束，
+        # 但保持数据形态贴近真实）
+        db.commit()
+
+        calls: list[str] = []
+
+        def fake_review(event_title, _summary, _members, _news, _llm, event_id=None):
+            calls.append(str(event_id))
+            return False
+
+        monkeypatch.setattr(event_service, "_llm_same_event", fake_review)
+        merged = _merge_recent_events(
+            db, since=NOW - timedelta(hours=4), sim_threshold=0.85,
+            keyword_threshold=0.2, window_hours=48,
+            llm=("http://127.0.0.1:9/v1", "k", "m", "openai"),
+        )
+        assert merged == 0, "被判「另一件事」的事件对不得合并"
+        assert db.query(EventArticle).filter_by(event_id=events[0].id).count() == LLM_REVIEW_EVENT_MEMBERS
+        assert db.query(EventArticle).filter_by(event_id=events[1].id).count() == LLM_REVIEW_EVENT_MEMBERS
+        assert len(calls) == 1, f"被拒对只审一次（refused_pairs 防重扫）: {calls}"
+    finally:
+        db.close()
+
+
 # ———— 标题重选举 / 事件合并 / 热度重算（2026-09-10 审计补齐）————
 
 def test_event_title_reelected_as_members_grow(pg):
@@ -305,21 +470,25 @@ def test_merge_recent_events_shared_member_absorbs(pg):
 
 
 def test_recompute_event_scores_sums_members_and_flips_status(pg):
-    """热度重算 = 成员文章 HotScore 之和（DB 内聚合，容许 python/DB 时钟微差）；
-    无成员事件归 0；长时间无新报道的事件状态随每轮重算翻牌（旧实现会永久
-    冻结在「发酵中」）。"""
+    """热度重算 = 窗口内成员文章 HotScore 之和（DB 内聚合，容许 python/DB 时钟
+    微差）；无成员事件归 0；长时间无新报道的事件状态随每轮重算翻牌（旧实现会
+    永久冻结在「发酵中」）。成员聚合限 EVENT_SCORE_WINDOW_HOURS 窗口（2026-10-14
+    对齐 AIHOT 48h 硬窗口）：窗口外成员不再计入，事件随窗口滑出归零沉底。"""
     import math
 
     from app.algorithms.hot_score import hot_score
-    from app.services.event_service import recompute_event_scores
+    from app.services.event_service import EVENT_SCORE_WINDOW_HOURS, recompute_event_scores
 
     db = pg()
     try:
         v = _vec([1.0, 0.1])
         m1 = _mk_article(db, title="有互动的热点文章", source="IT之家", vec=v,
-                         published=NOW - timedelta(hours=48), views=100)
+                         published=NOW - timedelta(hours=10), views=100)
+        m_stale = _mk_article(db, title="窗口外的高互动旧文", source="快科技", vec=v,
+                              published=NOW - timedelta(hours=EVENT_SCORE_WINDOW_HOURS + 12),
+                              views=5000)
         e1 = HotEvent(title="热点事件", summary="", impacts=[], centroid=v,
-                      first_time=m1.publish_time, last_time=m1.publish_time,
+                      first_time=m_stale.publish_time, last_time=m1.publish_time,
                       status="发酵中", hot_score=0.0, timeline=[])
         e2 = HotEvent(title="无成员事件", summary="", impacts=[],
                       first_time=NOW - timedelta(hours=48),
@@ -327,13 +496,18 @@ def test_recompute_event_scores_sums_members_and_flips_status(pg):
                       status="发酵中", hot_score=999.0, timeline=[])
         db.add_all([e1, e2])
         db.flush()
-        db.add(EventArticle(event_id=e1.id, article_id=m1.id))
+        db.add_all([
+            EventArticle(event_id=e1.id, article_id=m1.id),
+            EventArticle(event_id=e1.id, article_id=m_stale.id),
+        ])
         db.commit()
 
         recompute_event_scores(db)
         expected = hot_score(100, 0, 0, 0, m1.publish_time)
+        # 严格等于窗口内成员之和：窗口外 5000 阅读的旧文若泄漏进聚合，
+        # 分数必然高于 expected（ln(5001) 量纲远大于 ln(101)），isclose 即翻车
         assert math.isclose(e1.hot_score, round(expected, 2), rel_tol=0.01)
-        assert e1.status == "已平息"  # 48h > 24h
+        assert e1.status == "持续关注"  # last_time 在 6~24h 内
         assert e2.hot_score == 0.0
         assert e2.status == "已平息"
     finally:
@@ -407,6 +581,104 @@ def test_build_report_event_stats_window_scoped(pg):
         assert top[ev.id]["lifecycle_sources_count"] == 2
         # AI 成本窗口随早报窗口：含昨日午夜后、不含今晨 08:00 整点
         assert report["ai_cost"] == {"calls": 2, "tokens": 400, "cost": 2.25}
+    finally:
+        db.close()
+
+
+def test_build_report_event_ranking_window_scoped(pg):
+    """事件排序分改窗口内独立来源口径（2026-10-14）：全生命周期存量 hot_score
+    退出早报排序——常青大事件窗口内仅 1 篇零互动弱文时，不得再凭历史成员
+    碾压当日新热点（回归探针：存量 hot_score=9999 若回流排序即翻车）。"""
+    from app.services.report_service import build_report
+
+    db = pg()
+    try:
+        day = (NOW - timedelta(days=1)).date()  # 发布日
+        win_start = datetime(day.year, day.month, day.day, tzinfo=TZ_BJ) - timedelta(days=1)
+        v = _vec([1.0, 0.1])
+        # 常青大事件：21 天前建簇、存量 2 篇旧文、窗口内仅 1 篇零互动弱文
+        m_hist1 = _mk_article(db, title="常青事件历史报道一", source="IT之家", vec=v,
+                              published=NOW - timedelta(days=21))
+        m_hist2 = _mk_article(db, title="常青事件历史报道二", source="快科技", vec=v,
+                              published=NOW - timedelta(days=21) + timedelta(hours=2))
+        m_weak = _mk_article(db, title="常青事件窗口内弱报道", source="IT之家", vec=v,
+                             published=win_start + timedelta(hours=2))
+        db.add(HotEvent(title="常青大事件旧标题", summary="", impacts=[],
+                        first_time=m_hist1.publish_time, last_time=m_weak.publish_time,
+                        status="发酵中", centroid=v, timeline=[], hot_score=9999.0))
+        db.flush()
+        e_old = db.query(HotEvent).one()
+        db.add_all([
+            EventArticle(event_id=e_old.id, article_id=m_hist1.id),
+            EventArticle(event_id=e_old.id, article_id=m_hist2.id),
+            EventArticle(event_id=e_old.id, article_id=m_weak.id),
+        ])
+        # 当日新事件：窗口内 1 篇带阅读量的报道（更新、互动更高 → 窗口分必胜）
+        v_new = _vec([0.0, 1.0, 0.2])
+        m_new = _mk_article(db, title="当日新热点报道", source="IT之家", vec=v_new,
+                            published=win_start + timedelta(hours=20), views=800)
+        db.add(HotEvent(title="当日新热点", summary="", impacts=[],
+                        first_time=m_new.publish_time, last_time=m_new.publish_time,
+                        status="发酵中", centroid=v_new, timeline=[], hot_score=1.0))
+        db.flush()
+        e_new = db.query(HotEvent).filter_by(title="当日新热点").one()
+        db.add(EventArticle(event_id=e_new.id, article_id=m_new.id))
+        db.commit()
+
+        report = build_report(db, day)
+        order = [e["id"] for e in report["top_events"]]
+        assert order[0] == e_new.id, f"当日新热点应居首（窗口口径）: {order}"
+        old = next(e for e in report["top_events"] if e["id"] == e_old.id)
+        assert old["articles_count"] == 1 and old["lifecycle_articles_count"] == 3
+        assert old["hot_score"] < report["top_events"][0]["hot_score"] <= 100.0
+    finally:
+        db.close()
+
+
+def test_build_report_suppresses_previously_featured_events(pg):
+    """重复抑制（2026-10-14，AIHOT 日报 MEMORY_DAYS 同款）：最近 7 期上过事件
+    栏目的事件今日打 follow_up 标垫底补位，新鲜事件优先占位——即使回访事件
+    窗口分更高（回归探针：无抑制时它按分会排第一）；8 天前的记忆过期不抑制。"""
+    from app.services.report_service import build_report
+
+    db = pg()
+    try:
+        day = (NOW - timedelta(days=1)).date()  # 发布日
+        win_start = datetime(day.year, day.month, day.day, tzinfo=TZ_BJ) - timedelta(days=1)
+        v = _vec([1.0, 0.1])
+        # 回访事件：昨日头条，今日窗口分更高（成员更新、互动更高）
+        m_rep = _mk_article(db, title="回访事件今日报道", source="IT之家", vec=v,
+                            published=win_start + timedelta(hours=20), views=800)
+        db.add(HotEvent(title="回访事件", summary="", impacts=[],
+                        first_time=win_start - timedelta(days=2),
+                        last_time=m_rep.publish_time, status="发酵中", centroid=v, timeline=[]))
+        db.flush()
+        e_rep = db.query(HotEvent).filter_by(title="回访事件").one()
+        db.add(EventArticle(event_id=e_rep.id, article_id=m_rep.id))
+        # 新鲜事件：今日窗口分较低
+        v_fresh = _vec([0.0, 1.0, 0.2])
+        m_fresh = _mk_article(db, title="新鲜事件今日报道", source="快科技", vec=v_fresh,
+                              published=win_start + timedelta(hours=4), views=100)
+        db.add(HotEvent(title="新鲜事件", summary="", impacts=[],
+                        first_time=m_fresh.publish_time, last_time=m_fresh.publish_time,
+                        status="发酵中", centroid=v_fresh, timeline=[]))
+        db.flush()
+        e_fresh = db.query(HotEvent).filter_by(title="新鲜事件").one()
+        db.add(EventArticle(event_id=e_fresh.id, article_id=m_fresh.id))
+        # 记忆面：昨日早报头条 = 回访事件；8 天前早报 = 新鲜事件（超出回看期）
+        db.add(DailyReport(date=day - timedelta(days=1), issue_no=1,
+                           content={"top_events": [{"id": e_rep.id, "title": "回访事件"}]}))
+        db.add(DailyReport(date=day - timedelta(days=8), issue_no=1,
+                           content={"top_events": [{"id": e_fresh.id, "title": "新鲜事件"}]}))
+        db.commit()
+
+        report = build_report(db, day)
+        order = [e["id"] for e in report["top_events"]]
+        assert order[0] == e_fresh.id, f"新鲜事件应优先占位: {order}"
+        rep_entry = next(e for e in report["top_events"] if e["id"] == e_rep.id)
+        assert rep_entry.get("follow_up") is True
+        fresh_entry = next(e for e in report["top_events"] if e["id"] == e_fresh.id)
+        assert "follow_up" not in fresh_entry
     finally:
         db.close()
 

@@ -40,6 +40,31 @@ def _tz(t: datetime) -> datetime:
 # 仅识别"致谢行"类无效摘要（窄口径：正常导语如「IT之家 9 月 6 日消息」不算脏数据）
 _DIRTY_SUMMARY = re.compile(r"线索投递|^(感谢|题图|配图|图片来源)")
 
+# 事件吸纳年龄上限（天，2026-10-14 审计新增）：事件首个成员发布早于
+# now - N 天即不再吸纳新簇、不参与事件级合并，冻结为存量展示。候选资格此前
+# 只看 last_time 新鲜度，常青事件每天有新成员就永不结案，质心随成员增长泛化
+# 成主题向量，同域文章全过门槛被吸入（实测 9/23「Win11 五周年」事件 21 天吞
+# 93 篇混题成员、旧标题连续三日霸占早报头条）。窗口取 14 天对标 AIHOT 召回窗：
+# 超龄后新文章另立新事件，标题随新文。存量超龄事件不删不改，榜单分随衰减自落。
+EVENT_MAX_AGE_DAYS = 14
+
+# 事件热度统计窗口（小时，2026-10-14 对齐 AIHOT 热榜「48h 硬窗口」口径）：
+# recompute_event_scores 只聚合窗口内发布的成员文章，窗口滑出即归零沉底——
+# 榜单反映「此刻谁在被讨论」，而非全生命周期衰减和（旧口径下冻结的杂烩事件
+# 凭近期成员在热点事件榜长期占位）。与 EVENT_MAX_AGE_DAYS 分工：一个管榜单
+# 新鲜度，一个管事件生长寿命。归一化展示基准取窗口内最高事件分，自适应。
+EVENT_SCORE_WINDOW_HOURS = 48
+
+# LLM「同一事件」审核门槛（2026-10-14 第三批，对标 AIHOT relate 四分类的简化版）：
+# 目标事件成员数达到该值后，新簇并入前须过 LLM 判定——小事件自由成长零成本，
+# 大事件成长须审核，掐断「质心吸得多 → 更糊 → 吸得更多」的雪球放大器
+# （Win11 同域基线相似度 0.90+ 落在高位带，单一 embedding 门槛无法分离
+# 同事件与同主题另一件事）。未配 LLM 或判定失败时不拦截（fail-open，与
+# AIHOT「拿不准则合并」同取向，聚类不因 LLM 故障停摆）。
+LLM_REVIEW_EVENT_MEMBERS = 5
+# 仅「判定为另一件事且置信度不低于该值」才拦截并入；低置信度放行，防误杀拆散真同事件
+LLM_REVIEW_MIN_CONFIDENCE = 0.7
+
 
 def _summary_dirty(text: str | None) -> bool:
     return bool(text) and bool(_DIRTY_SUMMARY.search(text.strip()))
@@ -174,6 +199,128 @@ def _llm_event_summary(
     )
 
 
+def build_relation_prompt(
+    event_title: str,
+    event_summary: str | None,
+    member_titles: list[str],
+    new_titles: list[str],
+) -> str:
+    """LLM「同一事件」判定提示词（纯函数，与 parse_relation_verdict 配对）。"""
+    members = "\n".join(f"- {t}" for t in member_titles[:8]) or "-（无）"
+    fresh = "\n".join(f"- {t}" for t in new_titles[:4]) or "-（无）"
+    return (
+        "判定新闻事件归属。【新报道】描述的是否就是【已有事件】本身（含其直接后续进展，"
+        "如官方回应、评测、细节披露）？\n"
+        "判定口径：同一事件 = 同一次现实发生（同一发布 / 同一更新 / 同一判决 / 同一事故）；\n"
+        "另一件事 = 同一公司、产品或主题下的其他新闻——例如都关于 Win11，一件是五周年回顾、"
+        "另一件是补丁修复，即为另一件事。拿不准时判同一事件。\n"
+        "输出严格 JSON：{\"same_event\": true或false, \"confidence\": 0到1, \"reason\": \"一句话理由\"}\n\n"
+        f"【已有事件】{event_title}\n"
+        f"事件摘要：{truncate(str(event_summary or ''), 200) or '（无）'}\n"
+        f"近期成员报道：\n{members}\n\n"
+        f"【新报道】\n{fresh}"
+    )
+
+
+def parse_relation_verdict(raw: object) -> tuple[bool, float] | None:
+    """解析 LLM 判定 JSON（纯函数）：返回 (same_event, confidence)；结构无效返回 None。
+
+    宽松口径：confidence 缺失或非数值按 0.5 处理（低于拦截线 → 放行，fail-open）。
+    """
+    if not isinstance(raw, dict):
+        return None
+    same = raw.get("same_event")
+    if not isinstance(same, bool):
+        return None
+    try:
+        conf = float(raw.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        conf = 0.5
+    if conf != conf or conf < 0:  # NaN / 负数防御
+        conf = 0.5
+    return same, min(conf, 1.0)
+
+
+def _llm_same_event(
+    event_title: str,
+    event_summary: str | None,
+    member_titles: list[str],
+    new_titles: list[str],
+    llm: tuple[str, str, str, str],
+    event_id: int | None = None,
+) -> bool | None:
+    """LLM「同一事件」判定：True=同一事件可并；False=另一件事应拦；
+    None=失败（调用方放行，fail-open）。
+
+    用量记账（task_type=event_group）：与 _llm_event_summary 同款「落账 + 降级」
+    模式——成功记 success；JSON 提取失败记 parse_fail 并带纠错反馈重试一次；
+    连接/非 200/URL 守卫拦截记 api_fail 不重试。
+    """
+    base_url, api_key, model, protocol = llm
+    start = time.monotonic()
+
+    def _record(status: str, error: str | None, **tokens) -> None:
+        record_usage(
+            task_type="event_group",
+            model=model,
+            status=status,
+            error=error,
+            latency_ms=int((time.monotonic() - start) * 1000),
+            event_id=event_id,
+            **tokens,
+        )
+
+    try:
+        base_url = assert_public_http_url(base_url)
+    except UrlNotAllowed as exc:
+        _record("api_fail", str(exc))
+        return None
+
+    prompt = build_relation_prompt(event_title, event_summary, member_titles, new_titles)
+    data = None
+    usage: dict = {}
+    feedback = ""
+    for attempt in range(2):
+        try:
+            raw, usage = llm_client.chat(
+                base_url, api_key, model, protocol, prompt + feedback,
+                temperature=0, json_mode=True,
+            )
+            data = llm_client.extract_json_object(raw)
+            break
+        except llm_client.LLMAPIError as exc:
+            _record("api_fail", str(exc), **usage)
+            return None
+        except (ValueError, llm_client.LLMFormatError) as exc:
+            usage = getattr(exc, "usage", None) or usage
+            _record("parse_fail", str(exc), **usage)
+            feedback = llm_client.JSON_RETRY_HINT.format(error=exc)
+    if data is None:
+        return None
+    verdict = parse_relation_verdict(data)
+    if verdict is None:
+        _record("parse_fail", "invalid relation verdict", **usage)
+        return None
+    _record("success", None, **usage)
+    same, conf = verdict
+    if not same and conf < LLM_REVIEW_MIN_CONFIDENCE:
+        return None  # 低置信度的「另一件事」不放拦，放行并入
+    return same
+
+
+def _event_member_titles(db: Session, event_id: int, limit: int = 8) -> list[str]:
+    """事件最近成员的标题（LLM 审核上下文用，新→旧截前 limit 条）。"""
+    rows = (
+        db.query(Article.title)
+        .join(EventArticle, EventArticle.article_id == Article.id)
+        .filter(EventArticle.event_id == event_id)
+        .order_by(Article.publish_time.desc())
+        .limit(limit)
+        .all()
+    )
+    return [str(t) for (t,) in rows if t]
+
+
 def _recompute_centroid(db: Session, event_id: int) -> list[float] | None:
     """事件质心 = 全量成员向量的归一化均值。增删成员后重算，不做增量近似
     （近似会把质心偏向最近并入的少数文章，累积漂移后相似度判定失真）。"""
@@ -305,14 +452,28 @@ def _merge_recent_events(
     keyword_threshold: float,
     window_hours: int,
     high_band_kw_floor: float = HIGH_BAND_KW_FLOOR,
+    llm: tuple[str, str, str, str] = ("", "", "", ""),
 ) -> int:
     """事件级二阶段合并：先做共享成员去重（确定性同事件，不依赖相似度），
     再对剩余事件两两做同门槛判定（质心相似度 + 标题关键词 + 来源交叉 + 时间
     跨度相邻），命中则成员多者吞并少者。循环至不再有可合并对（上限 50 轮，
-    防病态数据死循环）。返回合并次数。"""
+    防病态数据死循环）。返回合并次数。
+
+    超龄事件（首个成员早于 EVENT_MAX_AGE_DAYS）不参与合并：防止「老事件吞并
+    新事件」把新文章卷回旧杂烩——合并后 first_time 取 min，结果仍是超龄事件，
+    与吸纳年龄上限同一语义（见 run_event_clustering 内注释）。
+
+    ② 相似度合并受 LLM「同一事件」审核（2026-10-14 第三批）：任一方成员数达
+    LLM_REVIEW_EVENT_MEMBERS 即交判定，判「另一件事」则跳过该对——与 step 4 的
+    成员采纳审核同一语义：两个各自长大的事件合并成更大的事件，同样须过审。
+    ① 共享成员去重不受审（一篇文章挂两事件是确定性同事件证据，幂等修复）。
+    被拒对记入 refused_pairs 防重扫死循环。"""
     events = (
         db.query(HotEvent)
-        .filter(HotEvent.last_time >= since - timedelta(hours=24))
+        .filter(
+            HotEvent.last_time >= since - timedelta(hours=24),
+            HotEvent.first_time >= datetime.now(timezone.utc) - timedelta(days=EVENT_MAX_AGE_DAYS),
+        )
         .all()
     )
     if len(events) < 2:
@@ -389,11 +550,12 @@ def _merge_recent_events(
         )
 
     # ② 相似度合并：50 轮上限覆盖 ①+② 的总合并数，防病态数据死循环
+    refused_pairs: set[tuple[int, int]] = set()
     while merged < 50:
         pair = None
         for i, a in enumerate(events):
             for b in events[i + 1:]:
-                if _mergeable(a, b):
+                if _mergeable(a, b) and (a.id, b.id) not in refused_pairs:
                     pair = (a, b)
                     break
             if pair:
@@ -407,6 +569,21 @@ def _merge_recent_events(
             if (sizes.get(a.id, 0), -a.id) >= (sizes.get(b.id, 0), -b.id)
             else (b, a)
         )
+        # LLM「同一事件」审核（大事件吞并前）：判「另一件事」则跳过该对
+        if llm[0] and llm[1] and llm[2] and max(
+            sizes.get(winner.id, 0), sizes.get(loser.id, 0)
+        ) >= LLM_REVIEW_EVENT_MEMBERS:
+            ok = _llm_same_event(
+                winner.title or "",
+                winner.summary,
+                _event_member_titles(db, winner.id),
+                [loser.title] if loser.title else [],
+                llm,
+                event_id=winner.id,
+            )
+            if ok is False:
+                refused_pairs.add((a.id, b.id))
+                continue
         _absorb_event(db, winner, loser)
         kw_map[winner.id] = set(extract_keywords(winner.title or "", 10))
         sizes[winner.id] = sizes.get(winner.id, 0) + sizes.get(loser.id, 0)
@@ -470,8 +647,19 @@ def run_event_clustering(db: Session) -> dict:
     # 候选事件及其来源/关键词映射一轮构建一次（旧实现在簇循环内每簇重查重算：
     # O(簇数) 次重复查询 + 每簇对全部候选事件重跑 jieba）。当轮新建/更新的事件
     # 在下方原地维护这三个结构，保持与逐簇重查完全相同的可见性。
+    # 吸纳年龄上限（2026-10-14 审计新增，对标 AIHOT 14 天召回窗）：候选资格除
+    # last_time 新鲜外，还要求 first_time 在 EVENT_MAX_AGE_DAYS 内——否则常青
+    # 事件每天有新成员就永不结案，质心随成员增长泛化成主题向量，同域文章
+    # （Win11 系列同域基线 0.90+ 全过门槛）持续被吸入：实测 9/23「Win11 五周年」
+    # 事件 21 天吞 93 篇混题成员、旧标题连续三日霸占早报头条。超龄事件冻结为
+    # 存量展示，新文章另立新事件、标题随新文。
     horizon = since - timedelta(hours=24)
-    candidate_events = db.query(HotEvent).filter(HotEvent.last_time >= horizon).all()
+    age_horizon = datetime.now(timezone.utc) - timedelta(days=EVENT_MAX_AGE_DAYS)
+    candidate_events = (
+        db.query(HotEvent)
+        .filter(HotEvent.last_time >= horizon, HotEvent.first_time >= age_horizon)
+        .all()
+    )
     sources_by_ev: dict[int, set[str]] = {}
     if candidate_events:
         for eid, src in (
@@ -485,6 +673,9 @@ def run_event_clustering(db: Session) -> dict:
     kw_by_ev = {
         ev.id: set(extract_keywords(ev.title or "", 10)) for ev in candidate_events
     }
+
+    # LLM「同一事件」审核用：生效配置每轮取一次（未配置为空串四元组，钩子自关）
+    llm = config_service.effective_llm(db)
 
     updated = created = 0
     window = timedelta(hours=window_hours)
@@ -609,6 +800,32 @@ def run_event_clustering(db: Session) -> dict:
             for lnk in db.query(EventArticle).filter_by(event_id=target_event.id).all()
         }
         new_links = member_ids - linked
+        # LLM「同一事件」审核（2026-10-14 第三批，唯一的成员采纳收口点）：
+        # embedding 门槛无法分离同事件与同主题另一件事（Win11 同域基线 0.90+ 落在
+        # 高位带），事件存量成员达 LLM_REVIEW_EVENT_MEMBERS 后，新增成员并入前交
+        # LLM 判定——判「另一件事」且置信度达标则拒绝本轮新增（存量成员照旧归位，
+        # 幂等；被拒文章保持未聚类，下轮重聚类复审）。审核放收口点而非 step 1：
+        # 新文章会与事件的旧成员聚成同一簇、经救援分支「认领回家」绕过准入审核，
+        # 只有这里能同时拦住 step 1 与救援两条并入路径。未配 LLM 或判定失败一律
+        # 放行（fail-open，聚类不因 LLM 故障停摆）；小事件不审核零成本。
+        if (
+            new_links
+            and llm[0] and llm[1] and llm[2]
+            and len(linked) >= LLM_REVIEW_EVENT_MEMBERS
+        ):
+            fresh_titles = [
+                a.title for a in member_articles if a.id in new_links and a.title
+            ]
+            ok = _llm_same_event(
+                target_event.title or "",
+                target_event.summary,
+                _event_member_titles(db, target_event.id),
+                fresh_titles,
+                llm,
+                event_id=target_event.id,
+            )
+            if ok is False:
+                new_links = set()
         for aid in new_links:
             db.add(EventArticle(event_id=target_event.id, article_id=aid))
         if new_links or target_event.centroid is None:
@@ -683,6 +900,7 @@ def run_event_clustering(db: Session) -> dict:
         keyword_threshold=keyword_threshold,
         window_hours=window_hours,
         high_band_kw_floor=high_band_kw_floor,
+        llm=llm,
     )
 
     db.commit()
@@ -702,7 +920,9 @@ def recompute_event_scores(db: Session) -> None:
       十篇只算一次，重复抓取不重复计分，榜单反映「有多少家在说」；
     - sum_articles：旧口径（成员分求和）。
     两口径同为单条 SQL 聚合下推 DB（复用 hot_score_expr），替代逐事件逐成员
-    的 N+1 查询；无成员的事件记 0（与旧实现一致）。
+    的 N+1 查询；无成员的事件记 0（与旧实现一致）。成员聚合限
+    EVENT_SCORE_WINDOW_HOURS 窗口内发布的文章（2026-10-14 改版，对标 AIHOT
+    48h 硬窗口）：窗口外成员不再计入，老事件随窗口滑出自然归零沉底。
 
     上升标记：hot_score_prev 为滚动比较基准——距上次刷新超过滚动窗（6h，
     等效 AIHOT「和 6 小时前比」）时翻新为上一窗口末分数，之后各轮保持；
@@ -721,6 +941,7 @@ def recompute_event_scores(db: Session) -> None:
 
     s = get_settings()
     now = bj_now()
+    window_start = now - timedelta(hours=EVENT_SCORE_WINDOW_HOURS)
     if (s.event_hot_mode or "distinct_source") == "sum_articles":
         rows = (
             db.query(
@@ -728,6 +949,7 @@ def recompute_event_scores(db: Session) -> None:
                 func.sum(hot_score_expr(Article)),
             )
             .join(Article, Article.id == EventArticle.article_id)
+            .filter(Article.publish_time >= window_start)
             .group_by(EventArticle.event_id)
             .all()
         )
@@ -740,6 +962,7 @@ def recompute_event_scores(db: Session) -> None:
                 func.max(hot_score_expr(Article)).label("src_score"),
             )
             .join(Article, Article.id == EventArticle.article_id)
+            .filter(Article.publish_time >= window_start)
             .group_by(EventArticle.event_id, Article.source)
             .subquery()
         )
