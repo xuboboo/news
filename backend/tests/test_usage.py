@@ -472,16 +472,19 @@ def test_today_spend_fast_falls_back_to_sql(db, monkeypatch):
 
     from app.services import infra_status, usage_service
 
+    # SQLite 测试表将 DateTime 保存为 UTC naive；固定在当天中午以避免
+    # 时区转换导致测试依赖运行时刻（北京时间 16:00 后尤其明显）。
+    now = datetime(2026, 10, 15, 12, tzinfo=TZ_BJ)
     db.add(AiUsageLog(task_type="summary", model="m", prompt_tokens=0, completion_tokens=0,
                       total_tokens=0, latency_ms=0, status="success", cost=3.5,
-                      created_at=datetime.now(TZ_BJ)))
+                      created_at=datetime(2026, 10, 15, 4)))
     db.commit()
 
     def _boom():
         raise RuntimeError("redis down")
 
     monkeypatch.setattr(infra_status, "redis_client", _boom)
-    assert usage_service.today_spend_fast(db) == pytest.approx(3.5)
+    assert usage_service.today_spend_fast(db, now=now) == pytest.approx(3.5)
 
 
 # ———————————————————— CSV 防注入 ————————————————————

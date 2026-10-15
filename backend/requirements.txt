@@ -10,7 +10,7 @@ psycopg[binary]==3.2.3
 pgvector==0.3.6
 celery[redis]==5.4.0
 redis==5.2.1
-pydantic==2.10.4
+pydantic==2.11.10
 pydantic-settings==2.7.0
 httpx==0.28.1
 feedparser==6.0.11
@@ -19,6 +19,7 @@ jieba==0.42.1
 numpy==2.2.1
 python-dateutil==2.9.0
 bcrypt==4.2.1
-# MCP 只读服务器（exports 域可选能力）：代码懒加载，SDK 缺失时主应用照常启动
-mcp>=1.0.0,<2
+# MCP 只读服务器（exports 域可选能力）：代码懒加载，SDK 缺失时主应用照常启动。
+# PYSEC-2026-1617 / 3482 / 3483 的修复版本至少为 1.28.1。
+mcp>=1.28.1,<2
 # pytest 仅供测试（2026-09-18 审计整改 L-2）：拆至 requirements-dev.txt，不进生产镜像

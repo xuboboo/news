@@ -3,7 +3,7 @@
  * 复制走 copyRich（text/html + text/plain 双 MIME）——公众号后台编辑器
  * 粘贴时读 text/html 保留全部排版；模板图片由公众号后台自动转存。
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Copy, FileText, RefreshCw, Trash2 } from 'lucide-react';
 import { deleteWxLayout, getWxLayout, regenerateWxLayout, type WxLayoutItem } from '../api/wxLayouts';
@@ -45,7 +45,12 @@ export default function WxLayoutDetail() {
   const id = Number(idParam);
   const idValid = Number.isSafeInteger(id) && id > 0;
   const activeId = useRef<number | null>(idValid ? id : null);
-  activeId.current = idValid ? id : null;
+  useLayoutEffect(() => {
+    activeId.current = idValid ? id : null;
+    return () => {
+      activeId.current = null;
+    };
+  }, [id, idValid]);
   const [layout, setLayout] = useState<WxLayoutItem | null>(null);
   const [loadError, setLoadError] = useState('');
   const [actionError, setActionError] = useState('');

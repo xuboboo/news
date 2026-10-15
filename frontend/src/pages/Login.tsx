@@ -4,6 +4,7 @@ import { AlertCircle, Eye, EyeOff, Loader2, Radar } from 'lucide-react';
 import { ApiError, login } from '../api/auth';
 import { setAuthed, useAuth, type AuthUser } from '../auth';
 import { ThemeToggle } from '../components/Layout';
+import { safeReturnPath } from '../utils/returnPath';
 
 /**
  * 登录页 · 「雷达站」设计
@@ -174,6 +175,7 @@ export default function Login() {
   const { status, user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation() as { state?: { from?: string } };
+  const returnTo = safeReturnPath(location.state?.from);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -184,7 +186,7 @@ export default function Login() {
 
   // 已登录直接回业务页（会话有效时手动访问 /login 的场景）
   if (status === 'authed' && user && !user.must_change_password) {
-    return <Navigate to={location.state?.from ?? '/hot'} replace />;
+    return <Navigate to={returnTo} replace />;
   }
 
   const onSubmit = async (e: FormEvent) => {
@@ -195,7 +197,7 @@ export default function Login() {
     try {
       const me: AuthUser = await login(email.trim(), password);
       setAuthed(me);
-      navigate(location.state?.from ?? '/hot', { replace: true });
+      navigate(returnTo, { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '登录失败，请稍后重试');
     } finally {
