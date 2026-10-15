@@ -390,7 +390,7 @@ def _site_prompt(row: ArticleDraft, material: list[dict], event_summary: str, br
         f"- content_intro 是当前页面的独立摘要，60~100 字（上限 {SITE_DIGEST_LIMIT} 字），核心词自然出现在前半句；"
         "写明具体变化、受影响对象和读者能得到什么；不要复读标题、不要关键词堆砌、不要写‘本文介绍’，"
         "也不要直接摘抄正文第一段。\n"
-        f"- cover_guidance 只写与事实相关的 1:1 标题图构图建议，不超过 {SITE_COVER_GUIDANCE_LIMIT} 字。\n"
+        f"- cover_guidance 只写与事实相关的 4:3 标题图构图建议，不超过 {SITE_COVER_GUIDANCE_LIMIT} 字。\n"
         "- 不输出一级标题、HTML、外链、图片 URL、参考来源小节或写作过程；正文从头到尾不出现任何来源信息。\n"
         "- 正文严禁出现 R 编号、‘参考来源：’‘据多家媒体’这类尾注或来源清单，出现即视为不合格。\n"
         "- longtail_suggestions：给出 5~8 个从本文素材拆出的长尾承接选题，供后续单独成篇；"

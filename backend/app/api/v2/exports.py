@@ -96,6 +96,17 @@ def _article_items(articles: list[Article]) -> list[str]:
     return items
 
 
+def _article_feed_last_build(articles: list[Article]) -> datetime:
+    """Stable feed build time based on source and summary creation timestamps."""
+    dates = []
+    for article in articles:
+        dates.extend((article.created_at, article.publish_time))
+        if article.summary is not None:
+            dates.append(article.summary.created_at)
+    aware = [d if d.tzinfo else d.replace(tzinfo=timezone.utc) for d in dates if d]
+    return max(aware, default=datetime(1970, 1, 1, tzinfo=timezone.utc))
+
+
 def _event_note(summary: str | None, n_articles: int, n_sources: int) -> str:
     """事件综述 → feed 描述。事件 summary 常为「围绕「…」共有 N 篇…」模板句
     （标题复读、无事实增量），退化为结构化计数（口径同 report_push 的降级）。"""
@@ -159,6 +170,7 @@ def feed_latest(request: Request, db: Session = Depends(get_db)):
         description="最新科技资讯（AI 摘要版）：标题与摘要为本系统生成，正文请点击原文链接",
         items=_article_items(articles),
         self_url=base + "/api/v2/feed/latest.xml",
+        last_build=_article_feed_last_build(articles),
     )
     return _xml_response(request, xml)
 
@@ -187,6 +199,7 @@ def feed_hot(request: Request, db: Session = Depends(get_db)):
         description="近 24 小时按热度排序的科技资讯（AI 摘要版）",
         items=_article_items(articles),
         self_url=base + "/api/v2/feed/hot.xml",
+        last_build=_article_feed_last_build(articles),
     )
     return _xml_response(request, xml)
 
@@ -219,6 +232,15 @@ def feed_events(request: Request, db: Session = Depends(get_db)):
         description="多来源报道聚合的热点事件（含事件综述与来源聚合计数）",
         items=items,
         self_url=base + "/api/v2/feed/events.xml",
+        last_build=max(
+            (
+                value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+                for e in events
+                for value in (e.last_time or e.created_at,)
+                if value
+            ),
+            default=datetime(1970, 1, 1, tzinfo=timezone.utc),
+        ),
     )
     return _xml_response(request, xml)
 
@@ -255,6 +277,10 @@ def feed_report(request: Request, db: Session = Depends(get_db)):
         description="每日 08:00（北京时间）自动生成的热点事件早报",
         items=items,
         self_url=base + "/api/v2/feed/report.xml",
+        last_build=(
+            datetime(rows[0].date.year, rows[0].date.month, rows[0].date.day, 8, 0, tzinfo=TZ_BJ)
+            if rows else datetime(1970, 1, 1, tzinfo=timezone.utc)
+        ),
     )
     return _xml_response(request, xml)
 
@@ -281,6 +307,7 @@ def feed_channel(channel_name: str, request: Request, db: Session = Depends(get_
         description=channel_name + " 频道最新资讯（AI 摘要版）",
         items=_article_items(articles),
         self_url=base + "/api/v2/feed/channel/" + channel_name + ".xml",
+        last_build=_article_feed_last_build(articles),
     )
     return _xml_response(request, xml)
 

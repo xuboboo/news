@@ -13,7 +13,7 @@ vi.mock('../utils/clipboard', async (original) => ({ ...(await original<typeof i
 const draft: SiteDraftItem = {
   id: 71, channel: 'site', status: 'ready', source_type: 'article', source_id: 1, source_title: '网站选题', tier: 'brief',
   title: '网站稿标题', alt_titles: ['备选标题'], digest: '网站内容简介', seo_keywords: '软件,更新', site_tags: '软件',
-  cover_guidance: '清晰的1:1产品方图', software_id: 0, is_pinned: false, is_recommended: false, is_headline: false,
+  cover_guidance: '清晰的4:3产品图', software_id: 0, is_pinned: false, is_recommended: false, is_headline: false,
   publish_at: null, content_md: '事实正文', source_refs: [{ source: '可信媒体', title: '事实报道' }],
   model: 'mock', prompt_tokens: 0, completion_tokens: 0, duration_ms: 1, error: '', gen_count: 1, revision: 1,
   created_by: null, created_at: null, updated_at: null,
@@ -50,7 +50,7 @@ describe('website CMS fields', () => {
     expect(plain).not.toMatch(/(^|\n)##|\*\*/);
     expect((await screen.findByLabelText('＊标题') as HTMLInputElement).required).toBe(true);
     expect(screen.getByLabelText('＊内容简介').getAttribute('aria-required')).toBe('true');
-    expect(screen.getByText(/人工上传1:1方图/)).toBeTruthy();
+    expect(screen.getByText(/人工上传4:3标题图/)).toBeTruthy();
   });
   it('removes legacy AI declarations from website preview and clipboard output', async () => {
     api.getSiteDraft.mockResolvedValueOnce({

@@ -9,7 +9,7 @@
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -88,6 +88,10 @@ def _target_for(actor: User, db: Session, user_id: int) -> User:
 def _guard_last_super(db: Session, target: User, *, demoting: bool, disabling: bool) -> None:
     if target.role != ROLE_SUPER_ADMIN or not (demoting or disabling):
         return
+    # Serialize demotions/disables across processes. The lock is transaction-scoped,
+    # so the count and the subsequent user update form one protected operation.
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": 731904218})
     active_supers = (
         db.query(func.count(User.id))
         .filter(User.role == ROLE_SUPER_ADMIN, User.status == "active", User.id != target.id)
@@ -196,6 +200,8 @@ def update_tenant(
             raise HTTPException(400, "status 只能是 active / disabled")
         if status != tenant.status:
             if status == "disabled":
+                if db.get_bind().dialect.name == "postgresql":
+                    db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": 731904218})
                 # 平台自锁护栏：租户内还有启用的超管时禁止停用——否则唯一超管
                 # 会把自己连人带管理面一起锁在门外（只能 CLI/token 应急恢复）
                 supers_here = (

@@ -3,7 +3,7 @@
  * 复制走 copyRich（text/html + text/plain 双 MIME）——公众号后台编辑器
  * 粘贴时读 text/html 保留全部排版；模板图片由公众号后台自动转存。
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Copy, FileText, RefreshCw, Trash2 } from 'lucide-react';
 import { deleteWxLayout, getWxLayout, regenerateWxLayout, type WxLayoutItem } from '../api/wxLayouts';
@@ -44,6 +44,8 @@ export default function WxLayoutDetail() {
   const idParam = useParams().id;
   const id = Number(idParam);
   const idValid = Number.isSafeInteger(id) && id > 0;
+  const activeId = useRef<number | null>(idValid ? id : null);
+  activeId.current = idValid ? id : null;
   const [layout, setLayout] = useState<WxLayoutItem | null>(null);
   const [loadError, setLoadError] = useState('');
   const [actionError, setActionError] = useState('');
@@ -57,6 +59,8 @@ export default function WxLayoutDetail() {
     setPrevId(idValid ? id : null);
     setLayout(null);
     setLoadError('');
+    setActionError('');
+    setBusy(null);
   }
 
   useEffect(() => {
@@ -132,11 +136,12 @@ export default function WxLayoutDetail() {
     setBusy('regen');
     setActionError('');
     try {
-      setLayout(await regenerateWxLayout(layout.id));
+      const updated = await regenerateWxLayout(layout.id);
+      if (activeId.current === id) setLayout(updated);
     } catch (e) {
-      setActionError((e as Error).message || String(e));
+      if (activeId.current === id) setActionError((e as Error).message || String(e));
     } finally {
-      setBusy(null);
+      if (activeId.current === id) setBusy(null);
     }
   };
   const onDelete = async () => {
@@ -146,10 +151,12 @@ export default function WxLayoutDetail() {
     setActionError('');
     try {
       await deleteWxLayout(layout.id, layout.revision);
-      navigate('/wx-layouts');
+      if (activeId.current === id) navigate('/wx-layouts');
     } catch (e) {
-      setActionError((e as Error).message || String(e));
-      setBusy(null);
+      if (activeId.current === id) {
+        setActionError((e as Error).message || String(e));
+        setBusy(null);
+      }
     }
   };
 

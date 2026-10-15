@@ -46,7 +46,7 @@ beforeEach(() => {
 
 describe('Drafts regression scenarios', () => {
   it('uses the independent website list endpoint and page copy', async () => {
-    const siteDraft = { ...draft(701, '网站稿件'), channel: 'site' as const, seo_keywords: '软件,更新', site_tags: '软件', cover_guidance: '方图', software_id: 0, is_pinned: false, is_recommended: false, is_headline: false, publish_at: null };
+    const siteDraft = { ...draft(701, '网站稿件'), channel: 'site' as const, seo_keywords: '软件,更新', site_tags: '软件', cover_guidance: '4:3图', software_id: 0, is_pinned: false, is_recommended: false, is_headline: false, publish_at: null };
     siteApi.listSiteDrafts.mockResolvedValue({ items: [siteDraft], total: 1 });
     mount('site');
     expect(await screen.findByRole('heading', { name: '网站资讯稿' })).toBeTruthy();

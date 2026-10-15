@@ -277,8 +277,8 @@ export default function SiteDraftDetail() {
           <Toggle label="头条" disabled={formBusy} value={form.is_headline} onChange={(value) => edit({ is_headline: value })} />
         </div></div>
         <div className="border-t border-radar-border pt-4">
-          <p className="text-sm text-amber-300 mb-2">标题图片：发布前必须在网站后台人工上传1:1方图</p>
-          <Field label="标题图片构图建议" disabled={formBusy} multiline value={form.cover_guidance} onChange={(value) => edit({ cover_guidance: value })} limit={TEXT_LIMITS.cover_guidance} onCopy={() => copy(form.cover_guidance)} hint="本栏只是建议，不是图片文件。使用有授权、与报道相关的清晰图片，按你截图的后台要求裁成1:1。" />
+          <p className="text-sm text-amber-300 mb-2">标题图片：发布前必须在网站后台人工上传4:3标题图</p>
+          <Field label="标题图片构图建议" disabled={formBusy} multiline value={form.cover_guidance} onChange={(value) => edit({ cover_guidance: value })} limit={TEXT_LIMITS.cover_guidance} onCopy={() => copy(form.cover_guidance)} hint="本栏只是建议，不是图片文件。使用有授权、与报道相关的清晰图片，按你截图的后台要求裁成4:3。" />
         </div>
       </section>
       <section className="card p-5">

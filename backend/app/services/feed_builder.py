@@ -60,7 +60,10 @@ def channel(
     ttl_minutes: int = 10,
 ) -> str:
     """完整 RSS 2.0 文档：atom:link self 供订阅器回链校验，ttl 提示建议轮询间隔。"""
-    lb = last_build or datetime.now(timezone.utc)
+    # The build timestamp is part of the XML and therefore of its ETag. Use a
+    # deterministic epoch for empty feeds; callers with data should pass the
+    # newest known source/update timestamp.
+    lb = last_build or datetime(1970, 1, 1, tzinfo=timezone.utc)
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">'

@@ -7,6 +7,7 @@ article_gen_enabled / 每小时生成预算约束——零 token 成本的操作
 from datetime import date as date_type, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -127,19 +128,29 @@ def _update_existing(
     db: Session, row: WxLayoutDraft, report: DailyReport, rendered: dict,
     request: Request, user,
 ) -> dict:
-    row.title = rendered["title"]
-    row.digest = rendered["digest"]
-    row.content_html = rendered["content_html"]
-    row.issue_no = report.issue_no or row.issue_no or 1
-    row.gen_count = (row.gen_count or 1) + 1
-    row.revision = (row.revision or 1) + 1
+    # Increment counters in SQL so concurrent regenerations cannot overwrite each
+    # other's generation/revision increments. The newest rendered content wins.
+    updated = db.query(WxLayoutDraft).filter(WxLayoutDraft.id == row.id).update(
+        {
+            WxLayoutDraft.title: rendered["title"],
+            WxLayoutDraft.digest: rendered["digest"],
+            WxLayoutDraft.content_html: rendered["content_html"],
+            WxLayoutDraft.issue_no: report.issue_no or row.issue_no or 1,
+            WxLayoutDraft.gen_count: func.coalesce(WxLayoutDraft.gen_count, 1) + 1,
+            WxLayoutDraft.revision: func.coalesce(WxLayoutDraft.revision, 1) + 1,
+        },
+        synchronize_session=False,
+    )
+    if not updated:
+        db.rollback()
+        raise HTTPException(409, "草稿已被删除，请刷新后重试")
     db.commit()
     db.refresh(row)
     audit_service.record(
         db, "wx_layout.regenerated", request=request, user=user,
         detail={"draft_id": row.id, "report_id": report.id, "gen_count": row.gen_count},
     )
-    return {"regenerated": True, **_draft_dict(row)}
+    return {"regenerated": True, **_draft_dict(row, with_content=True)}
 
 
 @router.get("/wx-layouts")
